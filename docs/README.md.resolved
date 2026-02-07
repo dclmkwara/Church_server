@@ -75,7 +75,7 @@
 ### Backend Setup
 ```bash
 # Clone repository
-git clone https://github.com/your-org/dclm-backend.git
+git clone https://github.com/dclmkwara/Church_server.git
 cd dclm-backend
 
 # Create virtual environment
@@ -191,7 +191,6 @@ The **Deeper Life Church Management (DCLM) System** is a comprehensive church ma
 - Cannot be bypassed at application level
 
 ### Table Partitioning
-- Yearly partitions for [counts](file:///C:/Users/Meshell/Desktop/Backends/dclm/app/api/v1/routes/counts.py#36-52), `offerings`, [attendance](file:///C:/Users/Meshell/Desktop/Backends/utility/app_package/routers/fellowship.py#166-235)
 - Automatic partition creation
 - Improved query performance on historical data
 
@@ -225,8 +224,8 @@ Score 9:   Global Admin     → Entire organization
 - **Testing:** pytest + pytest-asyncio
 
 ### Frontend (Planned)
-- **Usher App:** KivyMD / Flutter
-- **Fellowship App:** KivyMD / Flutter
+- **Usher App:** KivyMD
+- **Fellowship App:** KivyMD
 - **Admin App:** FastStrap (FastHTML)
 - **Public Website:** FastStrap / FastHTML
 

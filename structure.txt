@@ -1,0 +1,99 @@
+church_app_backend/
+├── alembic/                 # Database migration folder (created by Alembic)
+│   ├── env.py
+│   ├── versions/            # Each migration script lives here
+│
+├── app/                     # Main application package
+│   ├── api/
+│   │   ├── v1/              # API version 1 (scoped here for versioning)
+│   │   │   ├── routes/      # All endpoint routers grouped by feature
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── auth.py          # Authentication routes (login, signup, etc.)
+│   │   │   │   ├── users.py         # User management routes
+│   │   │   │   ├── counts.py        # Population count endpoints
+│   │   │   │   ├── offerings.py     # Tithes and offering endpoints
+│   │   │   │   ├── newcomers.py     # Newcomer registration routes
+│   │   │   │   ├── converts.py      # New converts registration routes
+│   │   │   │   ├── workers.py       # Worker registration endpoints
+│   │   │   │   ├── locations.py     # Church location management endpoints
+│   │   │   │   ├── programs.py      # Special programs (revival, retreats, etc.)
+│   │   │   ├── __init__.py
+│   │   │   ├── deps.py              # Dependency injection (e.g., auth guards)
+│   │   ├── __init__.py
+│   │   ├── router.py                # Central API router, includes v1, v2 etc.
+│   │
+│   ├── core/
+│   │   ├── config.py                # App config (settings, environment variables)
+│   │   ├── security.py              # JWT, password hashing, role-based perms
+│   │   ├── logging_config.py        # Logging setup
+│   │   ├── __init__.py
+│   │
+│   ├── db/
+│   │   ├── base.py                  # Base class for all models
+│   │   ├── session.py               # DB session handling
+│   │   ├── __init__.py
+│   │
+│   ├── models/                      # SQLAlchemy ORM models
+│   │   ├── __init__.py
+│   │   ├── user.py
+│   │   ├── count.py
+│   │   ├── offering.py
+│   │   ├── newcomer.py
+│   │   ├── convert.py
+│   │   ├── worker.py
+│   │   ├── location.py
+│   │   ├── program.py
+│   │
+│   ├── schemas/                     # Pydantic models (request/response validation)
+│   │   ├── __init__.py
+│   │   ├── user_schemas.py
+│   │   ├── count_schemas.py
+│   │   ├── offering_schemas.py
+│   │   ├── newcomer_schemas.py
+│   │   ├── convert_schemas.py
+│   │   ├── worker_schemas.py
+│   │   ├── location_schemas.py
+│   │   ├── program_schemas.py
+│   │
+│   ├── crud/                        # CRUD abstractions for DB ops
+│   │   ├── __init__.py
+│   │   ├── user_crud.py
+│   │   ├── count_crud.py
+│   │   ├── offering_crud.py
+│   │   ├── newcomer_crud.py
+│   │   ├── convert_crud.py
+│   │   ├── worker_crud.py
+│   │   ├── location_crud.py
+│   │   ├── program_crud.py
+│   │
+│   ├── services/                    # Business logic (non-DB)
+│   │   ├── __init__.py
+│   │   ├── email_service.py         # Notifications, invites, etc.
+│   │   ├── report_service.py        # Generating attendance / finance reports
+│   │   ├── auth_service.py          # Login, JWT creation, refresh tokens
+│   │
+│   ├── utils/                       # Helper utilities
+│   │   ├── __init__.py
+│   │   ├── common.py                # Common reusable funcs
+│   │   ├── time_utils.py            # Time/date helpers
+│   │   ├── file_utils.py            # File handling (if needed)
+│   │
+│   ├── main.py                      # FastAPI entry point
+│   ├── __init__.py
+│
+├── tests/                           # Pytest test cases
+│   ├── __init__.py
+│   ├── test_auth.py
+│   ├── test_counts.py
+│   ├── test_offerings.py
+│   ├── test_newcomers.py
+│   ├── test_converts.py
+│   ├── test_workers.py
+│   ├── test_locations.py
+│   ├── test_programs.py
+│
+├── .env                             # Environment variables (db url, secrets, etc.)
+├── .gitignore
+├── pyproject.toml / requirements.txt # Dependencies
+├── README.md
+├── run_server.py
