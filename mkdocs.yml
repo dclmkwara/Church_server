@@ -1,0 +1,107 @@
+site_name: DCLM Church Management System
+site_description: Complete documentation for the Deeper Life Church Management System backend API
+site_author: DCLM Development Team
+site_url: https://docs.dclm.org
+
+repo_name: dclm/backend
+repo_url: https://github.com/your-org/dclm-backend
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.tabs.link
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - admonition
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - tables
+  - attr_list
+  - md_in_html
+
+nav:
+  - Home: README.md
+  - Getting Started:
+      - Quick Start: QUICK_START.md
+      - Setup Guide: SETUP.md
+      - Deployment: DEPLOYMENT.md
+  - Architecture:
+      - System Overview: COMPREHENSIVE_ANALYSIS.md
+      - Architecture: ARCHITECTURE.md
+      - Database Schema: DATABASE_SCHEMA.md
+      - Security & Access Control: SECURITY.md
+      - Data Flow: DATA_FLOW.md
+  - API Reference:
+      - Complete API Docs: API_DOCUMENTATION.md
+      - Authentication: AUTHENTICATION.md
+      - Route Catalog: ROUTE_CATALOG.md
+      - Missing Routes: MISSING_ROUTES_ANALYSIS.md
+  - Development:
+      - Tech Stack: TECH_STACK.md
+      - Testing Guide: TESTING.md
+      - Cleanup Guide: CLEANUP_GUIDE.md
+  - Features:
+      - User Management: features/USER_MANAGEMENT.md
+      - Hierarchy System: features/HIERARCHY.md
+      - Data Collection: features/DATA_COLLECTION.md
+      - Fellowship: features/FELLOWSHIP.md
+      - Media Management: features/MEDIA.md
+      - Public API: features/PUBLIC_API.md
+      - Reports & Analytics: features/REPORTS.md
+  - Mobile Apps:
+      - Usher App: mobile/USHER_APP.md
+      - Fellowship App: mobile/FELLOWSHIP_APP.md
+      - Admin App: mobile/ADMIN_APP.md
+  - Public Website:
+      - Website Features: website/PUBLIC_SITE.md
+      - Design System: website/DESIGN_SYSTEM.md
+  - Reference:
+      - Migration Guide: MIGRATION_GUIDE.md
+      - Feature Comparison: FEATURE_COMPARISON.md
+      - Glossary: GLOSSARY.md
+      - FAQ: FAQ.md
+      - Troubleshooting: TROUBLESHOOTING.md
+
+plugins:
+  - search
+  - tags
+
+extra:
+  version:
+    provider: mike
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/your-org/dclm-backend
+    - icon: fontawesome/solid/envelope
+      link: mailto:support@dclm.org
+
+copyright: Copyright &copy; 2026 Deeper Life Church Management System

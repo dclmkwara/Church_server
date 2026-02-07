@@ -1,0 +1,82 @@
+# ================================
+# BACKEND (Python/FastAPI)
+# ================================
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Alembic
+alembic/versions/*.py
+!alembic/versions/__init__.py
+
+# Logs
+*.log
+logs/
+app/logs/*.log
+!app/logs/.gitkeep
+
+# Temporary files
+*.tmp
+*.temp
+
+ # Others
+ api_routes.py
+ planned_routes_list.txt
+ planning_chat.txt
+ structure.txt
+ COMPREHENSIVE_PROJECT_REVIEW.md
+ PROGRESS.md
