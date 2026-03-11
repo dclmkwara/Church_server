@@ -28,5 +28,4 @@ jobs:
           pip install mkdocs mkdocs-material
 
       - name: Deploy
-        working-directory: Church_server
         run: mkdocs gh-deploy --force
