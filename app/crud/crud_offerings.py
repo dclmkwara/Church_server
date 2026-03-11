@@ -2,6 +2,7 @@
 CRUD operations for Offering records.
 """
 from typing import List, Optional
+from datetime import date
 from uuid import UUID
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,6 +40,7 @@ class CRUDOffering(CRUDBase[Offering, OfferingCreate, OfferingUpdate]):
             client_id=obj_in.client_id,
             amount=obj_in.amount,
             payment_method=obj_in.payment_method,
+            fund_type=obj_in.fund_type or "offering",
             # Removed separate payer fields per user request
             note=obj_in.note,
             entered_by_id=user_id,
@@ -60,14 +62,31 @@ class CRUDOffering(CRUDBase[Offering, OfferingCreate, OfferingUpdate]):
         self, 
         db: AsyncSession, 
         *, 
-        scope_path: str, 
+        scope_path: str,
+        fund_type: Optional[str] = None,
+        location_id: Optional[str] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        amount: Optional[float] = None,
         skip: int = 0, 
         limit: int = 100
     ) -> List[Offering]:
         """Get offerings within scope."""
         query = select(Offering).where(
             text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
-        ).offset(skip).limit(limit).order_by(Offering.created_at.desc())
+        )
+        if fund_type:
+            query = query.where(Offering.fund_type == fund_type)
+        if location_id:
+            query = query.where(Offering.location_id == location_id)
+        if start_date:
+            query = query.where(Offering.date >= start_date)
+        if end_date:
+            query = query.where(Offering.date <= end_date)
+        if amount is not None:
+            query = query.where(Offering.amount == amount)
+
+        query = query.offset(skip).limit(limit).order_by(Offering.created_at.desc())
         
         result = await db.execute(query)
         return result.scalars().all()

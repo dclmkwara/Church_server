@@ -2,6 +2,7 @@
 Application configuration settings.
 """
 from pydantic_settings import BaseSettings
+from pydantic import field_validator
 from typing import Optional
 
 
@@ -50,6 +51,20 @@ class Settings(BaseSettings):
     MAX_UPLOAD_SIZE_MB: int = 10
     ALLOWED_IMAGE_TYPES: list[str] = ["image/jpeg", "image/png", "image/webp"]
     ALLOWED_VIDEO_TYPES: list[str] = ["video/mp4", "video/webm"]
+
+    @field_validator("DEBUG", mode="before")
+    @classmethod
+    def parse_debug(cls, v):
+        if isinstance(v, bool):
+            return v
+        if v is None:
+            return False
+        value = str(v).strip().lower()
+        if value in {"true", "1", "yes", "y", "debug"}:
+            return True
+        if value in {"false", "0", "no", "n", "release", "prod", "production"}:
+            return False
+        return bool(value)
     
     class Config:
         env_file = ".env"

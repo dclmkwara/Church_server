@@ -141,6 +141,11 @@ class UserResponse(UserBase):
         return str(v) if v is not None else None
 
 
+class UserFullResponse(UserResponse):
+    """User response with embedded worker details."""
+    worker: Optional[WorkerResponse] = None
+
+
 # --- Approval Workflow Schemas ---
 
 class UserApprovalRequest(BaseModel):
@@ -151,6 +156,17 @@ class UserApprovalRequest(BaseModel):
 class BulkApprovalRequest(BaseModel):
     """Schema for bulk user approval operations."""
     user_ids: List[str]
+
+
+class PasswordVerifyRequest(BaseModel):
+    """Schema for verifying a user's password."""
+    password: str
+
+
+class AutoCreateUserResponse(BaseModel):
+    """Response for auto-created user accounts."""
+    user: UserResponse
+    temporary_password: str
 
 
 # --- Auth Schemas ---

@@ -1,37 +1,41 @@
 # DCLM Church Management System - Documentation
 
-**Version:** 1.0.0  
-**Last Updated:** January 24, 2026  
-**Status:** Production Ready
+**Version:** 1.3.0  
+**Last Updated:** February 10, 2026  
+**Status:** Production Ready — 124 API Endpoints
 
 ---
 
 ## 📚 Documentation Navigation
 
 ### Getting Started
+
 - [🚀 Quick Start Guide](#quick-start)
 - [📋 System Overview](#system-overview)
 - [🎯 Project Goals](#project-goals)
 
 ### Architecture & Design
+
 - [🏗️ System Architecture](./ARCHITECTURE.md)
 - [🗄️ Database Schema](./DATABASE_SCHEMA.md)
 - [🔐 Security & Access Control](./SECURITY.md)
 - [📊 Data Flow](./DATA_FLOW.md)
 
 ### API Documentation
+
 - [📖 Complete API Reference](./API_DOCUMENTATION.md)
 - [🔑 Authentication Guide](./AUTHENTICATION.md)
-- [🛣️ Route Catalog (111 endpoints)](./ROUTE_CATALOG.md)
-- [❌ Missing Routes Analysis](./MISSING_ROUTES_ANALYSIS.md)
+- [🛣️ Route Catalog (124 endpoints)](./ROUTE_CATALOG.md)
 
 ### Development Guides
+
 - [⚙️ Setup & Installation](./SETUP.md)
 - [🛠️ Tools & Technologies](./TECH_STACK.md)
 - [🧪 Testing Guide](./TESTING.md)
 - [🚀 Deployment Guide](./DEPLOYMENT.md)
 
 ### Features & Modules
+
 - [👥 User Management](./features/USER_MANAGEMENT.md)
 - [🏢 Hierarchy System](./features/HIERARCHY.md)
 - [📝 Data Collection](./features/DATA_COLLECTION.md)
@@ -41,20 +45,24 @@
 - [📊 Reports & Analytics](./features/REPORTS.md)
 
 ### Mobile Applications
+
 - [📱 Usher Mobile App](./mobile/USHER_APP.md) *(Coming Soon)*
 - [📱 Fellowship Leaders App](./mobile/FELLOWSHIP_APP.md) *(Coming Soon)*
 - [💻 Admin/Pastors App](./mobile/ADMIN_APP.md) *(Coming Soon)*
 
 ### Public Website
+
 - [🌐 Public Website Features](./website/PUBLIC_SITE.md) *(Coming Soon)*
 - [🎨 Design System](./website/DESIGN_SYSTEM.md) *(Coming Soon)*
 
 ### Migration & Upgrade
+
 - [🔄 Migration from Old System](./MIGRATION_GUIDE.md)
 - [📈 Feature Comparison](./FEATURE_COMPARISON.md)
 - [⚠️ Breaking Changes](./BREAKING_CHANGES.md)
 
 ### Reference
+
 - [📚 Glossary](./GLOSSARY.md)
 - [❓ FAQ](./FAQ.md)
 - [🐛 Troubleshooting](./TROUBLESHOOTING.md)
@@ -65,6 +73,7 @@
 ## 🚀 Quick Start
 
 ### Prerequisites
+
 ```bash
 - Python 3.11+
 - PostgreSQL 16+
@@ -72,6 +81,7 @@
 ```
 
 ### Backend Setup
+
 ```bash
 # Clone repository
 git clone https://github.com/your-org/dclm-backend.git
@@ -96,6 +106,7 @@ uvicorn app.main:app --reload
 ```
 
 ### Access API Documentation
+
 ```
 Swagger UI: http://localhost:8000/docs
 ReDoc: http://localhost:8000/redoc
@@ -160,7 +171,7 @@ The **Deeper Life Church Management (DCLM) System** is a comprehensive church ma
 
 | Metric | Value |
 |--------|-------|
-| **Total API Endpoints** | 111 |
+| **Total API Endpoints** | 124 |
 | **Database Tables** | 30+ |
 | **Supported Hierarchy Levels** | 6 |
 | **Role Score Levels** | 9 |
@@ -175,26 +186,31 @@ The **Deeper Life Church Management (DCLM) System** is a comprehensive church ma
 ## 🏗️ Architecture Highlights
 
 ### Async-First Design
+
 - Non-blocking I/O for 10x+ concurrency
 - asyncpg driver for PostgreSQL
 - Async SQLAlchemy ORM
 
 ### ltree Hierarchy
+
 - O(log n) ancestor/descendant queries
 - GIST indexing for performance
 - Path-based scoping (e.g., `org.234.kw.iln.ile.001`)
 
 ### Row-Level Security (RLS)
+
 - Database-enforced access control
 - Scope injection via session variables
 - Cannot be bypassed at application level
 
 ### Table Partitioning
+
 - Yearly partitions for `counts`, `offerings`, `attendance`
 - Automatic partition creation
 - Improved query performance on historical data
 
 ### Score-Based Access Control
+
 ```
 Score 1-2: Worker/Usher     → Location only
 Score 3:   Location Pastor  → Location only
@@ -211,6 +227,7 @@ Score 9:   Global Admin     → Entire organization
 ## 🛠️ Technology Stack
 
 ### Backend
+
 - **Language:** Python 3.11+
 - **Framework:** FastAPI
 - **ORM:** SQLAlchemy 2.x (async)
@@ -224,15 +241,17 @@ Score 9:   Global Admin     → Entire organization
 - **Testing:** pytest + pytest-asyncio
 
 ### Frontend (Planned)
+
 - **Usher App:** KivyMD / Flutter
 - **Fellowship App:** KivyMD / Flutter
 - **Admin App:** FastStrap (FastHTML)
 - **Public Website:** FastStrap / FastHTML
 
 ### Infrastructure
+
 - **Database:** Supabase (PostgreSQL + Storage)
 - **File Storage:** Supabase Storage
-- **Deployment:** VPS / Cloud (containerized)
+- **Deployment:** Render (free tier) / VPS
 - **Background Jobs:** APScheduler
 
 ---
@@ -258,18 +277,13 @@ Score 9:   Global Admin     → Entire organization
 - [x] Table Partitioning
 - [x] Audit Logging
 
-### 🚧 In Progress
+### 🚧 Next Steps
 
+- [ ] Deploy to Render (via `render.yaml`)
 - [ ] Mobile Applications (Usher, Fellowship, Admin)
 - [ ] Public Website
-- [ ] Advanced Analytics
 - [ ] Worker Transfer Workflows
-
-### 📋 Planned
-
 - [ ] Real-time Notifications (WebSocket)
-- [ ] Excel/PDF Export
-- [ ] Geocoded Location Search
 - [ ] Caching Layer (Redis)
 
 ---
@@ -297,13 +311,17 @@ Score 9:   Global Admin     → Entire organization
 ## 📞 Support
 
 ### Documentation Issues
+
 If you find errors or gaps in documentation, please:
+
 1. Check [FAQ](./FAQ.md) and [Troubleshooting](./TROUBLESHOOTING.md)
 2. Search existing issues
 3. Create a new issue with details
 
 ### Technical Support
-- **Email:** support@dclm.org
+
+- **Email:** <meshelleva@gmail.com>
+- **WhatsApp:** +234 902 995 2120
 - **Slack:** Coming Soon (#dclm-dev)
 - **GitHub Issues:** [Report Bug](https://github.com/dclmkwara/Church_server/issues)
 
@@ -317,6 +335,7 @@ All rights reserved.
 ---
 
 **Next Steps:**
+
 - [📖 Read API Documentation](./docs/API_DOCUMENTATION.md)
 - [🏗️ Understand Architecture](./docs/QUICK_START.md)
 - [⚙️ Set Up Development Environment](./docs/SETUP.md)

@@ -138,3 +138,37 @@ class ReportService:
             
         headers = list(rows[0].keys())
         return ReportService.generate_csv_buffer(rows, headers)
+
+    @staticmethod
+    async def export_financial_csv(
+        db: AsyncSession,
+        scope_path: str,
+        start_date: date,
+        end_date: date
+    ):
+        """
+        Export financial summary to CSV.
+        """
+        data = await ReportService.get_financial_summary(db, scope_path, start_date, end_date)
+        rows = [item.model_dump() for item in data]
+        if not rows:
+            return ReportService.generate_csv_buffer([], [])
+        headers = list(rows[0].keys())
+        return ReportService.generate_csv_buffer(rows, headers)
+
+    @staticmethod
+    async def export_attendance_csv(
+        db: AsyncSession,
+        scope_path: str,
+        start_date: date,
+        end_date: date
+    ):
+        """
+        Export attendance trends to CSV.
+        """
+        data = await ReportService.get_attendance_trends(db, scope_path, start_date, end_date)
+        rows = [item.model_dump() for item in data]
+        if not rows:
+            return ReportService.generate_csv_buffer([], [])
+        headers = list(rows[0].keys())
+        return ReportService.generate_csv_buffer(rows, headers)

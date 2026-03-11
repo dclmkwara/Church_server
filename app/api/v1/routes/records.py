@@ -2,20 +2,26 @@
 Record (newcomer/convert) submission and retrieval routes.
 """
 from typing import Any, List
+from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.crud.crud_records import record as crud_record
 from app.schemas.records import RecordCreate, RecordResponse, RecordUpdate
+from app.schemas.sync import SyncResult
 from app.models.user import User
 
 router = APIRouter()
 
 
-@router.post("/", response_model=RecordResponse)
+@router.post(
+    "/",
+    response_model=RecordResponse,
+    dependencies=[Depends(deps.PermissionChecker("records:create"))],
+)
 async def create_record(
     *,
     db: AsyncSession = Depends(deps.get_db),
@@ -26,7 +32,11 @@ async def create_record(
     return await crud_record.create(db, obj_in=record_in, user_id=current_user.user_id)
 
 
-@router.get("/", response_model=List[RecordResponse])
+@router.get(
+    "/",
+    response_model=List[RecordResponse],
+    dependencies=[Depends(deps.PermissionChecker("records:read"))],
+)
 async def read_records(
     db: AsyncSession = Depends(deps.get_db),
     skip: int = 0,
@@ -41,7 +51,11 @@ async def read_records(
     )
 
 
-@router.get("/{record_id}", response_model=RecordResponse)
+@router.get(
+    "/{record_id}",
+    response_model=RecordResponse,
+    dependencies=[Depends(deps.PermissionChecker("records:read"))],
+)
 async def read_record(
     *,
     db: AsyncSession = Depends(deps.get_db),
@@ -55,7 +69,11 @@ async def read_record(
     return record
 
 
-@router.put("/{record_id}", response_model=RecordResponse)
+@router.put(
+    "/{record_id}",
+    response_model=RecordResponse,
+    dependencies=[Depends(deps.PermissionChecker("records:update"))],
+)
 async def update_record(
     *,
     db: AsyncSession = Depends(deps.get_db),
@@ -69,3 +87,60 @@ async def update_record(
         raise HTTPException(status_code=404, detail="Record not found")
     
     return await crud_record.update(db, db_obj=record, obj_in=record_in)
+
+
+@router.post(
+    "/batch",
+    response_model=SyncResult,
+    dependencies=[Depends(deps.PermissionChecker("records:create"))],
+)
+async def batch_create_records(
+    *,
+    db: AsyncSession = Depends(deps.get_db),
+    items: List[RecordCreate],
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Batch submit records (offline sync convenience)."""
+    result = SyncResult()
+    details = []
+    for item in items:
+        try:
+            existing = None
+            if item.client_id:
+                existing = await crud_record.get_by_client_id(db, client_id=item.client_id)
+            if existing:
+                result.duplicates += 1
+                details.append({"client_id": item.client_id, "id": existing.id, "status": "duplicate"})
+                continue
+            created = await crud_record.create(db, obj_in=item, user_id=current_user.user_id)
+            result.synced += 1
+            details.append({"client_id": item.client_id, "id": created.id, "status": "synced"})
+        except Exception as e:
+            result.errors += 1
+            details.append({"client_id": item.client_id, "error": str(e), "status": "error"})
+    result.details = details
+    return result
+
+
+@router.delete(
+    "/{record_id}",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(deps.PermissionChecker("records:delete"))],
+)
+async def delete_record(
+    *,
+    db: AsyncSession = Depends(deps.get_db),
+    record_id: UUID,
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Soft delete a record."""
+    record = await crud_record.get(db, id=record_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Record not found")
+    
+    await crud_record.update(
+        db,
+        db_obj=record,
+        obj_in={"is_deleted": True, "operation": "DELETE", "last_modify": datetime.utcnow()}
+    )
+    return None

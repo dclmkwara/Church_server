@@ -51,8 +51,13 @@ app.include_router(counts.router, prefix=f"{settings.API_V1_PREFIX}/counts", tag
 from app.api.v1.routes import offerings
 app.include_router(offerings.router, prefix=f"{settings.API_V1_PREFIX}/offerings", tags=["Offerings"])
 
-from app.api.v1.routes import records
+from app.api.v1.routes import tithes
+app.include_router(tithes.router, prefix=f"{settings.API_V1_PREFIX}/tithes", tags=["Tithes"])
+
+from app.api.v1.routes import records, newcomers, converts
 app.include_router(records.router, prefix=f"{settings.API_V1_PREFIX}/records", tags=["Records"])
+app.include_router(newcomers.router, prefix=f"{settings.API_V1_PREFIX}/newcomers", tags=["Newcomers"])
+app.include_router(converts.router, prefix=f"{settings.API_V1_PREFIX}/converts", tags=["Converts"])
 
 from app.api.v1.routes import attendance
 app.include_router(attendance.router, prefix=f"{settings.API_V1_PREFIX}/attendance", tags=["Worker Attendance"])
@@ -65,6 +70,9 @@ app.include_router(reports.router, prefix=f"{settings.API_V1_PREFIX}/reports", t
 
 from app.api.v1.routes import announcements
 app.include_router(announcements.router, prefix=f"{settings.API_V1_PREFIX}/announcements", tags=["Announcements"])
+
+from app.api.v1.routes import information
+app.include_router(information.router, prefix=f"{settings.API_V1_PREFIX}/information", tags=["Information"])
 
 from app.api.v1.routes import system
 app.include_router(system.router, prefix=f"{settings.API_V1_PREFIX}/system", tags=["System"])
@@ -81,11 +89,20 @@ app.include_router(notifications.router, prefix=f"{settings.API_V1_PREFIX}/notif
 from app.api.v1.routes import rbac
 app.include_router(rbac.router, prefix=f"{settings.API_V1_PREFIX}/rbac", tags=["RBAC"])
 
+from app.api.v1.routes import approvals
+app.include_router(approvals.router, prefix=f"{settings.API_V1_PREFIX}/approvals", tags=["Approvals"])
+
+from app.api.v1.routes import app_version
+app.include_router(app_version.router, prefix=f"{settings.API_V1_PREFIX}/app-versions", tags=["App Versions"])
+
 from app.api.v1.routes import media
 app.include_router(media.router, prefix=f"{settings.API_V1_PREFIX}/media", tags=["Media"])
 
 from app.api.v1.routes import public
 app.include_router(public.router, prefix=f"{settings.API_V1_PREFIX}/public", tags=["Public"])
+
+from app.api.v1.routes import websocket as websocket_routes
+app.include_router(websocket_routes.router, tags=["WebSocket"])
 
 
 

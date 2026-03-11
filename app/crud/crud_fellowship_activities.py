@@ -14,14 +14,17 @@ from app.models.fellowship_activities import (
 )
 from app.schemas.fellowship_activities import (
     FellowshipMemberCreate, FellowshipMemberResponse,
+    FellowshipMemberUpdate,
     FellowshipAttendanceCreate, FellowshipAttendanceResponse,
+    FellowshipAttendanceUpdate,
     FellowshipOfferingCreate, FellowshipOfferingResponse,
+    FellowshipOfferingUpdate,
     TestimonyCreate, PrayerRequestCreate, AttendanceSummaryCreate,
     TestimonyUpdate, PrayerRequestUpdate, AttendanceSummaryUpdate
 )
 
 
-class CRUDFellowshipMember(CRUDBase[FellowshipMember, FellowshipMemberCreate, FellowshipMemberCreate]):
+class CRUDFellowshipMember(CRUDBase[FellowshipMember, FellowshipMemberCreate, FellowshipMemberUpdate]):
     """CRUD for Fellowship Members."""
     
     async def create(self, db: AsyncSession, *, obj_in: FellowshipMemberCreate) -> FellowshipMember:
@@ -62,7 +65,7 @@ class CRUDFellowshipMember(CRUDBase[FellowshipMember, FellowshipMemberCreate, Fe
         return (await db.execute(query)).scalars().all()
 
 
-class CRUDFellowshipAttendance(CRUDBase[FellowshipAttendance, FellowshipAttendanceCreate, FellowshipAttendanceCreate]):
+class CRUDFellowshipAttendance(CRUDBase[FellowshipAttendance, FellowshipAttendanceCreate, FellowshipAttendanceUpdate]):
     """CRUD for Fellowship Attendance."""
     
     async def create(self, db: AsyncSession, *, obj_in: FellowshipAttendanceCreate, user_id: UUID) -> FellowshipAttendance:
@@ -101,7 +104,7 @@ class CRUDFellowshipAttendance(CRUDBase[FellowshipAttendance, FellowshipAttendan
         return db_obj
 
 
-class CRUDFellowshipOffering(CRUDBase[FellowshipOffering, FellowshipOfferingCreate, FellowshipOfferingCreate]):
+class CRUDFellowshipOffering(CRUDBase[FellowshipOffering, FellowshipOfferingCreate, FellowshipOfferingUpdate]):
     """CRUD for Fellowship Offering."""
     
     async def create(self, db: AsyncSession, *, obj_in: FellowshipOfferingCreate, user_id: UUID) -> FellowshipOffering:

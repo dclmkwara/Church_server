@@ -8,6 +8,7 @@ from sqlalchemy import select, func, and_, extract, cast, Integer
 from app.models.counts import Count
 from app.models.location import Location, Group, Region
 from app.models.user import User
+from app.models.programs import ProgramEvent, ProgramType, ProgramDomain
 
 class StatisticsService:
     @staticmethod
@@ -33,10 +34,11 @@ class StatisticsService:
             Count.is_deleted == False
         ]
         
+        join_programs = False
         if program_domain:
-            filters.append(Count.program_domain == program_domain)
+            join_programs = True
         if program_type:
-            filters.append(Count.program_type == program_type)
+            join_programs = True
         if location_id:
             filters.append(Count.location_id == location_id)
         if date_filter:
@@ -60,7 +62,26 @@ class StatisticsService:
             func.coalesce(func.sum(Count.girls), 0).label("girls"),
             func.coalesce(func.sum(Count.total), 0).label("total"),
             func.count().label("program_count")
-        ).where(and_(*filters))
+        )
+
+        if join_programs:
+            stmt = stmt.select_from(Count).join(
+                ProgramEvent, Count.event_id == ProgramEvent.id
+            ).join(
+                ProgramType, ProgramEvent.program_type_id == ProgramType.id
+            ).join(
+                ProgramDomain, ProgramType.domain_id == ProgramDomain.id
+            )
+            if program_domain:
+                stmt = stmt.where(
+                    (ProgramDomain.slug == program_domain) | (ProgramDomain.name == program_domain)
+                )
+            if program_type:
+                stmt = stmt.where(
+                    (ProgramType.slug == program_type) | (ProgramType.name == program_type)
+                )
+        
+        stmt = stmt.where(and_(*filters))
         
         result = await db.execute(stmt)
         row = result.one_or_none()

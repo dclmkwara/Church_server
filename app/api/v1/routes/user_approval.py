@@ -105,7 +105,11 @@ async def request_user_account(
     return new_user
 
 
-@router.get("/pending", response_model=List[UserResponse])
+@router.get(
+    "/pending",
+    response_model=List[UserResponse],
+    dependencies=[Depends(deps.PermissionChecker("users:approve"))],
+)
 async def list_pending_users(
     *,
     db: AsyncSession = Depends(deps.get_db),
@@ -141,7 +145,7 @@ async def list_pending_users(
         - Only shows pending requests from current admin's scope
         - Ordered by created_at (oldest first)
     """
-    # TODO: Add permission check for admin role
+    # Permission enforced via PermissionChecker ("users:approve")
     # For now, any authenticated user can view pending requests in their location
     
     # Filter by location scope using ltree path
@@ -158,7 +162,11 @@ async def list_pending_users(
     return result.scalars().all()
 
 
-@router.post("/{user_id}/approve", response_model=UserResponse)
+@router.post(
+    "/{user_id}/approve",
+    response_model=UserResponse,
+    dependencies=[Depends(deps.PermissionChecker("users:approve"))],
+)
 async def approve_user(
     *,
     db: AsyncSession = Depends(deps.get_db),
@@ -208,12 +216,17 @@ async def approve_user(
         )
     
     # Check if user is within admin's scope
-    # TODO: Implement proper ltree path checking
-    # For now, simple location_id check
-    if user.location_id != current_user.location_id:
+    # Enforce scope with ltree path
+    from sqlalchemy import select, text
+    scope_stmt = select(User.user_id).where(
+        User.user_id == user.user_id,
+        text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=str(current_user.path))
+    )
+    scope_result = await db.execute(scope_stmt)
+    if scope_result.scalar_one_or_none() is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="You can only approve users in your location"
+            detail="You can only approve users within your scope"
         )
     
     # Check if already processed
@@ -235,7 +248,11 @@ async def approve_user(
     return user
 
 
-@router.post("/{user_id}/reject", response_model=UserResponse)
+@router.post(
+    "/{user_id}/reject",
+    response_model=UserResponse,
+    dependencies=[Depends(deps.PermissionChecker("users:approve"))],
+)
 async def reject_user(
     *,
     db: AsyncSession = Depends(deps.get_db),
@@ -322,7 +339,11 @@ async def reject_user(
     return user
 
 
-@router.post("/bulk-approve", response_model=dict)
+@router.post(
+    "/bulk-approve",
+    response_model=dict,
+    dependencies=[Depends(deps.PermissionChecker("users:approve"))],
+)
 async def bulk_approve_users(
     *,
     db: AsyncSession = Depends(deps.get_db),
@@ -421,7 +442,11 @@ async def bulk_approve_users(
     }
 
 
-@router.post("/{user_id}/deactivate", response_model=UserResponse)
+@router.post(
+    "/{user_id}/deactivate",
+    response_model=UserResponse,
+    dependencies=[Depends(deps.PermissionChecker("users:deactivate"))],
+)
 async def deactivate_user(
     *,
     db: AsyncSession = Depends(deps.get_db),
@@ -504,7 +529,11 @@ async def deactivate_user(
     return user
 
 
-@router.post("/{user_id}/reactivate", response_model=UserResponse)
+@router.post(
+    "/{user_id}/reactivate",
+    response_model=UserResponse,
+    dependencies=[Depends(deps.PermissionChecker("users:deactivate"))],
+)
 async def reactivate_user(
     *,
     db: AsyncSession = Depends(deps.get_db),

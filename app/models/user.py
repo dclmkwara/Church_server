@@ -194,6 +194,12 @@ class User(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     approved_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True)  # Admin who approved
     approved_at = Column(DateTime(timezone=True), nullable=True)  # When approved
     rejection_reason = Column(String, nullable=True)  # If rejected, why?
+
+    # Recovery questions (optional legacy support)
+    recovery_question_one = Column(String, nullable=True)
+    recovery_question_two = Column(String, nullable=True)
+    recovery_answer_one = Column(String, nullable=True)  # Hashed
+    recovery_answer_two = Column(String, nullable=True)  # Hashed
     
     # Inherited from worker (denormalized for quick access)
     location_id = Column(String, nullable=False, index=True)

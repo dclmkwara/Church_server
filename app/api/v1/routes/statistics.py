@@ -53,7 +53,11 @@ class UserStatistics(BaseModel):
     inactive_user: int
     registered_user: int
 
-@router.get("/read-population/", response_model=PopulationResponse)
+@router.get(
+    "/read-population/",
+    response_model=PopulationResponse,
+    dependencies=[Depends(deps.PermissionChecker("statistics:read"))],
+)
 async def get_population_statistics(
     program_domain: Optional[str] = Query(None),
     program_type: Optional[str] = Query(None),
@@ -82,7 +86,11 @@ async def get_population_statistics(
     
     return stats
 
-@router.get("/church-statistics/", response_model=ChurchStatistics)
+@router.get(
+    "/church-statistics/",
+    response_model=ChurchStatistics,
+    dependencies=[Depends(deps.PermissionChecker("statistics:read"))],
+)
 async def get_church_statistics(
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_user),
@@ -94,7 +102,11 @@ async def get_church_statistics(
     stats = await StatisticsService.get_church_statistics(db, scope_path)
     return stats
 
-@router.get("/get-user-statistics/", response_model=UserStatistics)
+@router.get(
+    "/get-user-statistics/",
+    response_model=UserStatistics,
+    dependencies=[Depends(deps.PermissionChecker("statistics:read"))],
+)
 async def get_user_statistics(
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_user),

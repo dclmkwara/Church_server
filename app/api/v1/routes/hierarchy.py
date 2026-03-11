@@ -23,7 +23,7 @@ Example hierarchy path:
                         └── Fellowship: F001
 """
 from typing import List, Any
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -31,6 +31,7 @@ from app.api import deps
 from app.crud import crud_location
 from app.schemas import location as schemas
 from app.models.user import User
+from app.models.location import Location, Group, Region, State
 
 router = APIRouter()
 
@@ -39,7 +40,11 @@ router = APIRouter()
 # NATION ROUTES (Root Level)
 # =============================================================================
 
-@router.post("/nations/", response_model=schemas.NationResponse)
+@router.post(
+    "/nations/",
+    response_model=schemas.NationResponse,
+    dependencies=[Depends(deps.PermissionChecker("hierarchy:create_nation"))],
+)
 async def create_nation(
     *,
     db: AsyncSession = Depends(deps.get_db),
@@ -87,7 +92,7 @@ async def create_nation(
     Notes:
         - Path is auto-generated (do NOT provide in request)
         - Nation ID should be unique (e.g., country code)
-        - Only high-level admins should create nations (TODO: add permission check)
+        - Permission enforced via PermissionChecker ("hierarchy:create_nation")
     """
     return await crud_location.nation.create(db=db, obj_in=nation_in)
 
@@ -155,11 +160,45 @@ async def read_nation(
     return node
 
 
+@router.put("/nations/{nation_id}", response_model=schemas.NationResponse)
+async def update_nation(
+    *,
+    db: AsyncSession = Depends(deps.get_db),
+    nation_id: str,
+    nation_in: schemas.NationUpdate,
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Update a nation."""
+    node = await crud_location.nation.get(db=db, id=nation_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Nation not found")
+    return await crud_location.nation.update(db, db_obj=node, obj_in=nation_in)
+
+
+@router.delete("/nations/{nation_id}", status_code=status.HTTP_200_OK)
+async def delete_nation(
+    *,
+    db: AsyncSession = Depends(deps.get_db),
+    nation_id: str,
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Delete a nation."""
+    node = await crud_location.nation.get(db=db, id=nation_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Nation not found")
+    await crud_location.nation.remove(db, id=nation_id)
+    return None
+
+
 # =============================================================================
 # STATE ROUTES
 # =============================================================================
 
-@router.post("/states/", response_model=schemas.StateResponse)
+@router.post(
+    "/states/",
+    response_model=schemas.StateResponse,
+    dependencies=[Depends(deps.PermissionChecker("hierarchy:create_state"))],
+)
 async def create_state(
     *,
     db: AsyncSession = Depends(deps.get_db),
@@ -270,11 +309,53 @@ async def read_state(
     return node
 
 
+@router.put(
+    "/states/{state_id}",
+    response_model=schemas.StateResponse,
+    dependencies=[Depends(deps.PermissionChecker("hierarchy:update_state"))],
+)
+async def update_state(
+    *,
+    db: AsyncSession = Depends(deps.get_db),
+    state_id: str,
+    state_in: schemas.StateUpdate,
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Update a state."""
+    node = await crud_location.state.get(db=db, id=state_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="State not found")
+    return await crud_location.state.update(db, db_obj=node, obj_in=state_in)
+
+
+@router.delete(
+    "/states/{state_id}",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(deps.PermissionChecker("hierarchy:delete_state"))],
+)
+async def delete_state(
+    *,
+    db: AsyncSession = Depends(deps.get_db),
+    state_id: str,
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Delete a state."""
+    node = await crud_location.state.get(db=db, id=state_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="State not found")
+    await crud_location.state.remove(db, id=state_id)
+    return None
+
+
 # =============================================================================
 # REGION ROUTES
 # =============================================================================
 
-@router.post("/regions/", response_model=schemas.RegionResponse)
+@router.post(
+    "/regions/",
+    response_model=schemas.RegionResponse,
+    dependencies=[Depends(deps.PermissionChecker("hierarchy:create_region"))],
+)
 async def create_region(
     *,
     db: AsyncSession = Depends(deps.get_db),
@@ -369,11 +450,53 @@ async def read_region(
     return node
 
 
+@router.put(
+    "/regions/{region_id}",
+    response_model=schemas.RegionResponse,
+    dependencies=[Depends(deps.PermissionChecker("hierarchy:update_region"))],
+)
+async def update_region(
+    *,
+    db: AsyncSession = Depends(deps.get_db),
+    region_id: str,
+    region_in: schemas.RegionUpdate,
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Update a region."""
+    node = await crud_location.region.get(db=db, id=region_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Region not found")
+    return await crud_location.region.update(db, db_obj=node, obj_in=region_in)
+
+
+@router.delete(
+    "/regions/{region_id}",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(deps.PermissionChecker("hierarchy:delete_region"))],
+)
+async def delete_region(
+    *,
+    db: AsyncSession = Depends(deps.get_db),
+    region_id: str,
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Delete a region."""
+    node = await crud_location.region.get(db=db, id=region_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Region not found")
+    await crud_location.region.remove(db, id=region_id)
+    return None
+
+
 # =============================================================================
 # GROUP ROUTES
 # =============================================================================
 
-@router.post("/groups/", response_model=schemas.GroupResponse)
+@router.post(
+    "/groups/",
+    response_model=schemas.GroupResponse,
+    dependencies=[Depends(deps.PermissionChecker("hierarchy:create_group"))],
+)
 async def create_group(
     *,
     db: AsyncSession = Depends(deps.get_db),
@@ -468,11 +591,53 @@ async def read_group(
     return node
 
 
+@router.put(
+    "/groups/{group_id}",
+    response_model=schemas.GroupResponse,
+    dependencies=[Depends(deps.PermissionChecker("hierarchy:update_group"))],
+)
+async def update_group(
+    *,
+    db: AsyncSession = Depends(deps.get_db),
+    group_id: str,
+    group_in: schemas.GroupUpdate,
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Update a group."""
+    node = await crud_location.group.get(db=db, id=group_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Group not found")
+    return await crud_location.group.update(db, db_obj=node, obj_in=group_in)
+
+
+@router.delete(
+    "/groups/{group_id}",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(deps.PermissionChecker("hierarchy:delete_group"))],
+)
+async def delete_group(
+    *,
+    db: AsyncSession = Depends(deps.get_db),
+    group_id: str,
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Delete a group."""
+    node = await crud_location.group.get(db=db, id=group_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Group not found")
+    await crud_location.group.remove(db, id=group_id)
+    return None
+
+
 # =============================================================================
 # LOCATION ROUTES
 # =============================================================================
 
-@router.post("/locations/", response_model=schemas.LocationResponse)
+@router.post(
+    "/locations/",
+    response_model=schemas.LocationResponse,
+    dependencies=[Depends(deps.PermissionChecker("hierarchy:create_location"))],
+)
 async def create_location(
     *,
     db: AsyncSession = Depends(deps.get_db),
@@ -588,11 +753,85 @@ async def read_location(
     return loc
 
 
+@router.put(
+    "/locations/{location_id}",
+    response_model=schemas.LocationResponse,
+    dependencies=[Depends(deps.PermissionChecker("hierarchy:update_location"))],
+)
+async def update_location(
+    *,
+    db: AsyncSession = Depends(deps.get_db),
+    location_id: str,
+    location_in: schemas.LocationUpdate,
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Update a location."""
+    loc = await crud_location.location.get(db=db, id=location_id)
+    if not loc:
+        raise HTTPException(status_code=404, detail="Location not found")
+    return await crud_location.location.update(db, db_obj=loc, obj_in=location_in)
+
+
+@router.delete(
+    "/locations/{location_id}",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(deps.PermissionChecker("hierarchy:delete_location"))],
+)
+async def delete_location(
+    *,
+    db: AsyncSession = Depends(deps.get_db),
+    location_id: str,
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Delete a location."""
+    loc = await crud_location.location.get(db=db, id=location_id)
+    if not loc:
+        raise HTTPException(status_code=404, detail="Location not found")
+    await crud_location.location.remove(db, id=location_id)
+    return None
+
+
+@router.get("/locations/{location_id}/details", response_model=schemas.LocationDetailResponse)
+async def get_location_details(
+    *,
+    db: AsyncSession = Depends(deps.get_db),
+    location_id: str,
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Get location details with state/region/group names."""
+    stmt = (
+        select(
+            Location.location_id,
+            Location.location_name,
+            Location.church_type,
+            Group.group_id,
+            Group.group_name,
+            Region.region_id,
+            Region.region_name,
+            State.state_id,
+            State.state_name,
+        )
+        .join(Group, Group.group_id == Location.group_id)
+        .join(Region, Region.region_id == Group.region_id)
+        .join(State, State.state_id == Region.state_id)
+        .where(Location.location_id == location_id)
+    )
+    result = await db.execute(stmt)
+    row = result.first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Location not found")
+    return schemas.LocationDetailResponse(**row._mapping)
+
+
 # =============================================================================
 # FELLOWSHIP ROUTES (Leaf Level)
 # =============================================================================
 
-@router.post("/fellowships/", response_model=schemas.FellowshipResponse)
+@router.post(
+    "/fellowships/",
+    response_model=schemas.FellowshipResponse,
+    dependencies=[Depends(deps.PermissionChecker("hierarchy:create_fellowship"))],
+)
 async def create_fellowship(
     *,
     db: AsyncSession = Depends(deps.get_db),
@@ -706,6 +945,44 @@ async def read_fellowship(
     if not node:
         raise HTTPException(status_code=404, detail="Fellowship not found")
     return node
+
+
+@router.put(
+    "/fellowships/{fellowship_id}",
+    response_model=schemas.FellowshipResponse,
+    dependencies=[Depends(deps.PermissionChecker("hierarchy:update_fellowship"))],
+)
+async def update_fellowship(
+    *,
+    db: AsyncSession = Depends(deps.get_db),
+    fellowship_id: str,
+    fellowship_in: schemas.FellowshipUpdate,
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Update a fellowship."""
+    node = await crud_location.fellowship.get(db=db, id=fellowship_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Fellowship not found")
+    return await crud_location.fellowship.update(db, db_obj=node, obj_in=fellowship_in)
+
+
+@router.delete(
+    "/fellowships/{fellowship_id}",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(deps.PermissionChecker("hierarchy:delete_fellowship"))],
+)
+async def delete_fellowship(
+    *,
+    db: AsyncSession = Depends(deps.get_db),
+    fellowship_id: str,
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Delete a fellowship."""
+    node = await crud_location.fellowship.get(db=db, id=fellowship_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Fellowship not found")
+    await crud_location.fellowship.remove(db, id=fellowship_id)
+    return None
 
 
 # =============================================================================

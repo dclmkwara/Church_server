@@ -12,12 +12,13 @@ Key concepts:
 
 All operations respect hierarchical scope based on the current user's role.
 """
-from typing import Any, List
+from typing import Any, List, Optional
+from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.api import deps
 from app.crud.crud_worker import worker as crud_worker
@@ -27,7 +28,11 @@ from app.models.user import Worker, User
 router = APIRouter()
 
 
-@router.get("/", response_model=List[WorkerResponse])
+@router.get(
+    "/",
+    response_model=List[WorkerResponse],
+    dependencies=[Depends(deps.PermissionChecker("workers:read"))],
+)
 async def read_workers(
     db: AsyncSession = Depends(deps.get_db),
     skip: int = 0,
@@ -77,7 +82,58 @@ async def read_workers(
     return workers
 
 
-@router.post("/", response_model=WorkerResponse)
+@router.get(
+    "/search",
+    response_model=List[WorkerResponse],
+    dependencies=[Depends(deps.PermissionChecker("workers:read"))],
+)
+async def search_workers(
+    db: AsyncSession = Depends(deps.get_db),
+    skip: int = 0,
+    limit: int = 100,
+    current_user: User = Depends(deps.get_current_active_user),
+    scope_path: str = Query(None, description="Filter by scope path"),
+    user_id: Optional[str] = None,
+    phone: Optional[str] = None,
+    email: Optional[str] = None,
+    name: Optional[str] = None,
+    unit: Optional[str] = None,
+    gender: Optional[str] = None,
+    status: Optional[str] = None,
+    location_id: Optional[str] = None,
+) -> Any:
+    """Search workers with optional filters."""
+    search_scope = scope_path if scope_path else str(current_user.path)
+    query = select(Worker).where(
+        text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=search_scope)
+    )
+    if user_id:
+        query = query.where(Worker.user_id == user_id)
+    if phone:
+        query = query.where(Worker.phone == phone)
+    if email:
+        query = query.where(Worker.email == email)
+    if name:
+        query = query.where(Worker.name.ilike(f"%{name}%"))
+    if unit:
+        query = query.where(Worker.unit.ilike(f"%{unit}%"))
+    if gender:
+        query = query.where(Worker.gender == gender)
+    if status:
+        query = query.where(Worker.status == status)
+    if location_id:
+        query = query.where(Worker.location_id == location_id)
+
+    query = query.offset(skip).limit(limit)
+    result = await db.execute(query)
+    return result.scalars().all()
+
+
+@router.post(
+    "/",
+    response_model=WorkerResponse,
+    dependencies=[Depends(deps.PermissionChecker("workers:create"))],
+)
 async def create_worker(
     *,
     db: AsyncSession = Depends(deps.get_db),
@@ -148,7 +204,11 @@ async def create_worker(
     return worker
 
 
-@router.get("/{worker_id}", response_model=WorkerResponse)
+@router.get(
+    "/{worker_id}",
+    response_model=WorkerResponse,
+    dependencies=[Depends(deps.PermissionChecker("workers:read"))],
+)
 async def read_worker_by_id(
     worker_id: UUID,
     db: AsyncSession = Depends(deps.get_db),
@@ -185,14 +245,25 @@ async def read_worker_by_id(
     if not worker:
         raise HTTPException(status_code=404, detail="Worker not found")
     
-    # TODO: Add scope validation
+    if str(worker.path) and str(current_user.path):
+        scope_stmt = select(Worker.worker_id).where(
+            Worker.worker_id == worker_id,
+            text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=str(current_user.path))
+        )
+        scope_result = await db.execute(scope_stmt)
+        if scope_result.scalar_one_or_none() is None:
+            raise HTTPException(status_code=403, detail="Worker outside your scope")
     # if not worker.path.descendant_of(current_user.path):
     #     raise HTTPException(status_code=403, detail="Worker outside your scope")
         
     return worker
 
 
-@router.put("/{worker_id}", response_model=WorkerResponse)
+@router.put(
+    "/{worker_id}",
+    response_model=WorkerResponse,
+    dependencies=[Depends(deps.PermissionChecker("workers:update"))],
+)
 async def update_worker(
     *,
     db: AsyncSession = Depends(deps.get_db),
@@ -244,7 +315,48 @@ async def update_worker(
     if not worker:
         raise HTTPException(status_code=404, detail="Worker not found")
     
-    # TODO: Add scope validation
+    if str(worker.path) and str(current_user.path):
+        scope_stmt = select(Worker.worker_id).where(
+            Worker.worker_id == worker_id,
+            text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=str(current_user.path))
+        )
+        scope_result = await db.execute(scope_stmt)
+        if scope_result.scalar_one_or_none() is None:
+            raise HTTPException(status_code=403, detail="Worker outside your scope")
         
     worker = await crud_worker.update(db, db_obj=worker, obj_in=worker_in)
     return worker
+
+
+@router.delete(
+    "/{worker_id}",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(deps.PermissionChecker("workers:delete"))],
+)
+async def delete_worker(
+    *,
+    db: AsyncSession = Depends(deps.get_db),
+    worker_id: UUID,
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Soft delete a worker."""
+    query = select(Worker).where(Worker.worker_id == worker_id)
+    result = await db.execute(query)
+    worker = result.scalars().first()
+    
+    if not worker:
+        raise HTTPException(status_code=404, detail="Worker not found")
+    
+    await crud_worker.update(
+        db,
+        db_obj=worker,
+        obj_in={"is_deleted": True, "operation": "DELETE", "last_modify": datetime.utcnow()}
+    )
+    if worker.user:
+        from app.crud.crud_user import user as crud_user
+        await crud_user.update(
+            db,
+            db_obj=worker.user,
+            obj_in={"is_deleted": True, "operation": "DELETE", "last_modify": datetime.utcnow()}
+        )
+    return None

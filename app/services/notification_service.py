@@ -24,7 +24,14 @@ class NotificationService:
         )
         counts = (await db.execute(stmt)).scalars().all()
         if counts:
-            results["counts"] = [{"id": str(c.id), "program_type": c.program_type, "created_at": c.created_at} for c in counts]
+            results["counts"] = [
+                {
+                    "id": str(c.id),
+                    "event_id": str(c.event_id) if c.event_id else None,
+                    "date": c.date,
+                    "created_at": c.created_at
+                } for c in counts
+            ]
             
         # 2. Offerings
         stmt = select(Offering).where(
@@ -35,7 +42,14 @@ class NotificationService:
         )
         offerings = (await db.execute(stmt)).scalars().all()
         if offerings:
-            results["offerings"] = [{"id": str(o.id), "amount": str(o.amount), "created_at": o.created_at} for o in offerings]
+            results["offerings"] = [
+                {
+                    "id": str(o.id),
+                    "amount": str(o.amount),
+                    "event_id": str(o.event_id),
+                    "created_at": o.created_at
+                } for o in offerings
+            ]
             
         # 3. Fellowship Attendance
         stmt = select(FellowshipAttendance).where(

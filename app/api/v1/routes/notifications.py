@@ -9,7 +9,11 @@ from app.services.notification_service import NotificationService
 
 router = APIRouter()
 
-@router.get("/poll", response_model=Dict[str, List[Any]])
+@router.get(
+    "/poll",
+    response_model=Dict[str, List[Any]],
+    dependencies=[Depends(deps.PermissionChecker("notifications:read"))],
+)
 async def poll_notifications(
     since: datetime = Query(..., description="Timestamp to check for new data since"),
     db: AsyncSession = Depends(deps.get_db),

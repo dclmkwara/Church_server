@@ -45,9 +45,18 @@ class CRUDWorker(CRUDBase[Worker, WorkerCreate, WorkerUpdate]):
             worker = await crud_worker.create(db, obj_in=worker_data)
             ```
         """
-        # Generate temporary user_id from phone (last 4 digits)
-        # TODO: Implement robust ID generation sequence
-        generated_user_id = f"W{obj_in.phone[-4:]}"
+        # Generate unique user_id from phone (last 4 digits + random)
+        base = obj_in.phone[-4:] if obj_in.phone else "0000"
+        generated_user_id = None
+        import random
+        for _ in range(10):
+            candidate = f"W{base}{random.randint(100,999)}"
+            exists = (await db.execute(select(Worker).where(Worker.user_id == candidate))).scalars().first()
+            if not exists:
+                generated_user_id = candidate
+                break
+        if not generated_user_id:
+            raise HTTPException(status_code=500, detail="Failed to generate unique worker ID")
         
         # Derive ltree path from location_id
         # Assumes parse_display_id returns correct ltree string or look up location

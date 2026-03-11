@@ -1,1625 +1,468 @@
-# DCLM API Documentation
+﻿# API Documentation
+
+Route-by-route details with request/response fields, errors, and diagnosis guidance.
+
+## Base
+- Base URL: `/api/v1`
+- Auth: Bearer JWT (except `/public/*`, `/health`, `/`)
+- Content-Type: `application/json`
+
+## Common Errors
+- `400` invalid input or business rule
+- `401` missing/invalid token
+- `403` permission or scope violation
+- `404` not found
+- `409` conflict
+- `422` validation error
+
+---
+
+## Schemas (Fields Summary)
+- **UserCreate**: `worker_id, email, password, roles[]`
+- **UserResponse**: `user_id, worker_id, location_id, name, phone, email, is_active, roles[], path, approval_status`
+- **WorkerCreate/Response**: `location_id, name, phone, email, unit, status, path, worker_id`
+- **ProgramDomain/Type/Event**: `name, slug, domain_id, date, path, title`
+- **CountCreate/Response**: demographics + `event_id, location_id, total, status`
+- **OfferingCreate/Response**: `event_id, location_id, amount, payment_method, fund_type, status`
+- **AttendanceCreate/Response**: `event_id, location_id, worker_id, status, reason`
+- **RecordCreate/Response**: `event_id, location_id, record_type, name, gender, phone, details`
+- **AnnouncementCreate/Response**: region fields + items[]
+- **MediaGallery/MediaItem**: gallery meta + item file fields
+- **SyncBatchRequest**: lists of counts/offerings/records/attendance/fellowship
+
+---
+
+## Authentication (`/auth`)
+
+### POST `/auth/login`
+- Purpose: Authenticate by email/password.
+- Request: `{ email, password }`
+- Response: `{ access_token, refresh_token, token_type }`
+- Errors: `401` invalid credentials; `403` inactive/approval pending.
+- Diagnosis: check approval status and role assignment.
+
+### POST `/auth/refresh`
+- Purpose: Refresh JWT.
+- Request: `{ refresh_token }`
+- Response: `{ access_token, refresh_token, token_type }`
+- Errors: `401` invalid/expired refresh token.
+
+### GET `/auth/me`
+- Purpose: Current user profile.
+- Response: `UserResponse`
+- Errors: `401` missing token.
+
+---
+
+## Users (`/users`)
+
+### GET `/users/`
+- Purpose: List users in scope.
+- Request: Query `skip, limit, scope_path`.
+- Response: `List[UserResponse]`
+- Errors: `403` scope violation.
+- Diagnosis: scope_path must be descendant of current user path.
 
-**Version:** 1.0.0  
-**Base URL:** `/api/v1`  
-**Total Endpoints:** 111  
-**Authentication:** JWT Bearer Token
+### POST `/users/`
+- Purpose: Create user linked to worker.
+- Request: `UserCreate`.
+- Response: `UserResponse`.
+- Errors: `400` email exists; `404` worker not found.
+- Diagnosis: create worker first, use worker UUID.
+
+### POST `/users/auto-create`
+- Purpose: Auto-create user from worker email.
+- Request: `{ email }`.
+- Response: `{ user: UserResponse, temporary_password }`.
+- Errors: `404` worker not found; `400` user already exists.
+
+### GET `/users/state-region`
+- Purpose: Return state/region from user path.
+- Response: `{ state, region }`.
 
----
-
-## Table of Contents
-
-1. [Authentication](#1-authentication)
-2. [Users & Workers](#2-users--workers)
-3. [RBAC (Roles, Permissions, Scores)](#3-rbac)
-4. [Hierarchy](#4-hierarchy)
-5. [Data Collection](#5-data-collection)
-6. [Programs & Events](#6-programs--events)
-7. [Fellowship Activities](#7-fellowship-activities)
-8. [Media Management](#8-media-management)
-9. [Public API](#9-public-api)
-10. [Reports & Analytics](#10-reports--analytics)
-11. [System & Utilities](#11-system--utilities)
-12. [Error Handling](#12-error-handling)
-13. [Authentication Guide](#13-authentication-guide)
-
----
-
-## 1. Authentication
-
-### 1.1 Login
-
-**Endpoint:** `POST /auth/login`  
-**Authentication:** None (public)  
-**Description:** Authenticate user and receive JWT tokens
-
-**Request Body:**
-```json
-Content-Type: application/x-www-form-urlencoded
-
-username=+2349012345678&password=SecurePass123!
-```
-
-**Response:** `200 OK`
-```json
-{
-  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "token_type": "bearer"
-}
-```
-
-**Token Claims:**
-```json
-{
-  "sub": "550e8400-e29b-41d4-a716-446655440000",
-  "phone": "+2349012345678",
-  "role": "GroupPastor",
-  "score": 4,
-  "home_path": "org.234.kw.iln.ile.001",
-  "scope_path": "org.234.kw.iln.ile",
-  "exp": 1706025600,
-  "iat": 1706022000
-}
-```
-
-**Errors:**
-- `400` - Invalid credentials
-- `401` - Account pending approval / rejected
-
----
-
-### 1.2 Refresh Token
-
-**Endpoint:** `POST /auth/refresh`  
-**Authentication:** None  
-**Description:** Get new access token using refresh token
-
-**Request Body:**
-```json
-{
-  "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-}
-```
-
-**Response:** `200 OK`
-```json
-{
-  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "token_type": "bearer"
-}
-```
-
-**Errors:**
-- `401` - Invalid/expired refresh token
-- `404` - User not found
-
----
-
-### 1.3 Get Current User
-
-**Endpoint:** `GET /auth/me`  
-**Authentication:** Required  
-**Description:** Get authenticated user's profile
-
-**Headers:**
-```
-Authorization: Bearer {access_token}
-```
-
-**Response:** `200 OK`
-```json
-{
-  "user_id": "550e8400-e29b-41d4-a716-446655440000",
-  "worker_id": "660e8400-e29b-41d4-a716-446655440001",
-  "name": "John Doe",
-  "email": "john@example.com",
-  "phone": "+2349012345678",
-  "location_id": "001",
-  "is_active": true,
-  "approval_status": "approved",
-  "roles": [
-    {
-      "id": 1,
-      "role_name": "GroupPastor",
-      "score_value": 4,
-      "permissions": [...]
-    }
-  ],
-  "path": "org.234.kw.iln.ile.001",
-  "created_at": "2026-01-20T10:30:00Z"
-}
-```
-
----
-
-## 2. Users & Workers
-
-### 2.1 List Users
-
-**Endpoint:** `GET /users/`  
-**Authentication:** Required  
-**Description:** List users within scope (filtered by role score)
-
-**Query Parameters:**
-- `skip` (int, default: 0) - Pagination offset
-- `limit` (int, default: 100) - Max results
-
-**Response:** `200 OK`
-```json
-[
-  {
-    "user_id": "...",
-    "name": "John Doe",
-    "phone": "+2349012345678",
-    "location_id": "001",
-    "is_active": true,
-    "approval_status": "approved",
-    "roles": [...]
-  }
-]
-```
-
----
-
-### 2.2 Create User
-
-**Endpoint:** `POST /users/`  
-**Authentication:** Required  
-**Permission:** `users:create`  
-**Description:** Create new user (admin only)
-
-**Request Body:**
-```json
-{
-  "worker_id": "660e8400-e29b-41d4-a716-446655440001",
-  "password": "SecurePass123!",
-  "role_ids": [1, 2]
-}
-```
-
-**Response:** `201 Created`
-```json
-{
-  "user_id": "...",
-  "worker_id": "...",
-  "name": "John Doe",
-  "phone": "+2349012345678",
-  "is_active": true,
-  "approval_status": "pending"
-}
-```
-
----
-
-### 2.3 Worker Self-Registration
-
-**Endpoint:** `POST /users/register`  
-**Authentication:** None (public)  
-**Description:** Worker registers for user account (requires approval)
-
-**Request Body:**
-```json
-{
-  "phone": "+2349012345678",
-  "password": "SecurePass123!",
-  "email": "worker@example.com"
-}
-```
-
-**Response:** `201 Created`
-```json
-{
-  "user_id": "...",
-  "approval_status": "pending",
-  "message": "Account created. Awaiting admin approval."
-}
-```
-
----
-
-### 2.4 List Pending Approvals
-
-**Endpoint:** `GET /users/pending`  
-**Authentication:** Required  
-**Permission:** `users:approve`  
-**Description:** List users awaiting approval
-
-**Response:** `200 OK`
-```json
-[
-  {
-    "user_id": "...",
-    "name": "John Doe",
-    "phone": "+2349012345678",
-    "created_at": "2026-01-20T10:30:00Z",
-    "approval_status": "pending"
-  }
-]
-```
-
----
-
-### 2.5 Approve User
-
-**Endpoint:** `POST /users/{user_id}/approve`  
-**Authentication:** Required  
-**Permission:** `users:approve`  
-**Description:** Approve pending user account
-
-**Response:** `200 OK`
-```json
-{
-  "user_id": "...",
-  "approval_status": "approved",
-  "approved_by": "...",
-  "approved_at": "2026-01-20T11:00:00Z"
-}
-```
-
----
-
-### 2.6 Reject User
-
-**Endpoint:** `POST /users/{user_id}/reject`  
-**Authentication:** Required  
-**Permission:** `users:approve`
-
-**Request Body:**
-```json
-{
-  "reason": "Incomplete worker registration"
-}
-```
-
-**Response:** `200 OK`
-
----
-
-### 2.7 Bulk Approve
-
-**Endpoint:** `POST /users/bulk-approve`  
-**Authentication:** Required  
-**Permission:** `users:approve`
-
-**Request Body:**
-```json
-{
-  "user_ids": ["uuid1", "uuid2", "uuid3"]
-}
-```
-
-**Response:** `200 OK`
-```json
-{
-  "approved": 3,
-  "failed": 0
-}
-```
-
----
-
-### 2.8 List Workers
-
-**Endpoint:** `GET /workers`  
-**Authentication:** Required  
-**Description:** List workers within scope
-
-**Query Parameters:**
-- `skip`, `limit` - Pagination
-- `location_id` (optional) - Filter by location
-- `unit` (optional) - Filter by unit (e.g., "Ushering")
-
-**Response:** `200 OK`
-```json
-[
-  {
-    "worker_id": "...",
-    "user_id": "KW/2349012345678",
-    "name": "John Doe",
-    "phone": "+2349012345678",
-    "email": "john@example.com",
-    "location_id": "001",
-    "location_name": "Ilorin East",
-    "unit": "Ushering",
-    "status": "Active"
-  }
-]
-```
-
----
-
-### 2.9 Register Worker
-
-**Endpoint:** `POST /workers`  
-**Authentication:** Required  
-**Permission:** `workers:create`
-
-**Request Body:**
-```json
-{
-  "name": "John Doe",
-  "phone": "+2349012345678",
-  "email": "john@example.com",
-  "gender": "Male",
-  "location_id": "001",
-  "unit": "Ushering",
-  "address": "123 Main St",
-  "occupation": "Engineer",
-  "marital_status": "Single"
-}
-```
-
-**Response:** `201 Created`
-
----
-
-## 3. RBAC
-
-### 3.1 List Permissions
-
-**Endpoint:** `GET /rbac/permissions`  
-**Authentication:** Required  
-**Description:** List all permissions
-
-**Response:** `200 OK`
-```json
-[
-  {
-    "id": 1,
-    "permission": "users:create",
-    "name": "Create Users",
-    "description": "Can create new user accounts"
-  },
-  {
-    "id": 2,
-    "permission": "counts:read",
-    "name": "Read Counts",
-    "description": "Can view count records"
-  }
-]
-```
-
----
-
-### 3.2 Create Permission
-
-**Endpoint:** `POST /rbac/permissions`  
-**Authentication:** Required  
-**Permission:** Superadmin only
-
-**Request Body:**
-```json
-{
-  "permission": "reports:export",
-  "name": "Export Reports",
-  "description": "Can export reports to CSV/Excel"
-}
-```
-
----
-
-### 3.3 List Roles
-
-**Endpoint:** `GET /rbac/roles`  
-**Authentication:** Required
-
-**Response:** `200 OK`
-```json
-[
-  {
-    "id": 1,
-    "role_name": "GroupPastor",
-    "description": "Group level pastor",
-    "score_id": 4,
-    "score_value": 4,
-    "permissions": [
-      {
-        "id": 1,
-        "permission": "users:create",
-        "name": "Create Users"
-      }
-    ]
-  }
-]
-```
-
----
-
-### 3.4 Create Role
-
-**Endpoint:** `POST /rbac/roles`  
-**Authentication:** Required  
-**Permission:** Superadmin only
-
-**Request Body:**
-```json
-{
-  "role_name": "RegionalPastor",
-  "description": "Regional level pastor",
-  "score_id": 5,
-  "permission_ids": [1, 2, 3, 4]
-}
-```
-
----
-
-### 3.5 Update Role
-
-**Endpoint:** `PUT /rbac/roles/{role_id}`  
-**Authentication:** Required  
-**Permission:** Superadmin only
-
-**Request Body:**
-```json
-{
-  "role_name": "RegionalPastor",
-  "description": "Updated description",
-  "permission_ids": [1, 2, 3, 4, 5]
-}
-```
-
----
-
-### 3.6 List Role Scores
-
-**Endpoint:** `GET /rbac/scores`  
-**Authentication:** Required  
-**Description:** List all role score levels (1-9)
-
-**Response:** `200 OK`
-```json
-[
-  {
-    "id": 1,
-    "score": 1,
-    "score_name": "Worker",
-    "description": "Location level worker/usher"
-  },
-  {
-    "id": 4,
-    "score": 4,
-    "score_name": "GroupPastor",
-    "description": "Group level pastor"
-  },
-  {
-    "id": 9,
-    "score": 9,
-    "score_name": "GlobalAdmin",
-    "description": "Highest privilege (GS, Top Engineer)"
-  }
-]
-```
-
----
-
-## 4. Hierarchy
-
-### 4.1 Get Hierarchy Tree
-
-**Endpoint:** `GET /hierarchy/tree`  
-**Authentication:** Required  
-**Description:** Get complete hierarchy tree (scoped to user's access)
-
-**Response:** `200 OK`
-```json
-{
-  "nation": {
-    "nation_id": "234",
-    "country_name": "Nigeria",
-    "path": "org.234",
-    "states": [
-      {
-        "state_id": "KW",
-        "state_name": "Kwara",
-        "path": "org.234.kw",
-        "regions": [...]
-      }
-    ]
-  }
-}
-```
-
----
+### POST `/users/verify-password`
+- Purpose: Verify current user password.
+- Request: `{ password }`.
+- Response: `{ verified }`.
+- Errors: `401` invalid token.
 
-### 4.2 List Locations
-
-**Endpoint:** `GET /locations`  
-**Authentication:** Required  
-**Description:** List locations within scope
-
-**Query Parameters:**
-- `skip`, `limit` - Pagination
-- `church_type` (optional) - Filter: "DLBC", "DLCF", "DLSO"
-
-**Response:** `200 OK`
-```json
-[
-  {
-    "location_id": "001",
-    "location_name": "Ilorin East",
-    "church_type": "DLBC",
-    "address": "123 Main St",
-    "path": "org.234.kw.iln.ile.001"
-  }
-]
-```
+### GET `/users/{user_id}`
+- Purpose: Get user by UUID.
+- Response: `UserResponse`.
+- Errors: `404` not found; `403` outside scope.
 
----
-
-### 4.3 Create Location
-
-**Endpoint:** `POST /locations`  
-**Authentication:** Required  
-**Permission:** `locations:create`
-
-**Request Body:**
-```json
-{
-  "location_id": "002",
-  "group_id": "ILE",
-  "location_name": "Ilorin West",
-  "church_type": "DLBC",
-  "address": "456 Oak Ave"
-}
-```
-
----
+### PUT `/users/{user_id}`
+- Purpose: Update user.
+- Request: `UserUpdate`.
+- Response: `UserResponse`.
+- Errors: `404` not found; `403` outside scope.
 
-### 4.4 List Fellowships
-
-**Endpoint:** `GET /fellowships`  
-**Authentication:** Required
-
-**Query Parameters:**
-- `location_id` (optional) - Filter by location
-
-**Response:** `200 OK`
-```json
-[
-  {
-    "fellowship_id": "F001",
-    "fellowship_name": "Victory Fellowship",
-    "location_id": "001",
-    "leader_in_charge": "Jane Doe",
-    "leader_contact": "+2349087654321",
-    "path": "org.234.kw.iln.ile.001.f001"
-  }
-]
-```
+### POST `/users/{user_id}/assign-roles`
+- Purpose: Replace roles.
+- Request: `{ role_ids }`.
+- Response: `UserResponse`.
+- Errors: `403` role score too high; `400` invalid role IDs.
 
----
+### GET `/users/{user_id}/details`
+- Purpose: User with embedded worker.
+- Response: `UserFullResponse`.
 
-### 4.5 Create Fellowship
-
-**Endpoint:** `POST /fellowships`  
-**Authentication:** Required  
-**Permission:** `fellowships:create`
-
-**Request Body:**
-```json
-{
-  "fellowship_id": "F002",
-  "location_id": "001",
-  "fellowship_name": "Grace Fellowship",
-  "fellowship_address": "789 Elm St",
-  "leader_in_charge": "Jane Doe",
-  "leader_contact": "+2349087654321"
-}
-```
+### GET `/users/search`
+- Purpose: Filter users.
+- Request: Query `name, email, phone, location_id, is_active, scope_path`.
+- Response: `List[UserResponse]`.
 
----
+### GET `/users/with-roles`
+- Purpose: List users with roles.
+- Response: `List[UserResponse]`.
 
-## 5. Data Collection
-
-### 5.1 Create Count
-
-**Endpoint:** `POST /counts`  
-**Authentication:** Required  
-**Permission:** `counts:create`  
-**Description:** Submit population count (with idempotency)
-
-**Request Body:**
-```json
-{
-  "program_event_id": "uuid-of-event",
-  "adult_male": 150,
-  "adult_female": 200,
-  "youth_male": 50,
-  "youth_female": 60,
-  "boys": 30,
-  "girls": 40,
-  "client_id": "client-generated-uuid",
-  "ts_utc": "2026-01-20T10:00:00Z"
-}
-```
-
-**Response:** `201 Created`
-```json
-{
-  "id": "server-uuid",
-  "program_event_id": "...",
-  "adult_male": 150,
-  "total": 530,
-  "client_id": "...",
-  "created_by": "...",
-  "created_at": "2026-01-20T10:00:05Z"
-}
-```
-
-**Idempotency:** If `client_id` already exists, returns existing record with `200 OK`
+### DELETE `/users/{user_id}`
+- Purpose: Soft delete user.
+- Errors: `404` not found.
 
 ---
 
-### 5.2 List Counts
-
-**Endpoint:** `GET /counts`  
-**Authentication:** Required  
-**Description:** List counts within scope
-
-**Query Parameters:**
-- `skip`, `limit` - Pagination
-- `start_date`, `end_date` (optional) - Date range filter
-- `program_event_id` (optional) - Filter by event
-
-**Response:** `200 OK`
-```json
-[
-  {
-    "id": "...",
-    "program_event_id": "...",
-    "adult_male": 150,
-    "adult_female": 200,
-    "total": 530,
-    "date": "2026-01-20",
-    "created_by": "...",
-    "path": "org.234.kw.iln.ile.001"
-  }
-]
-```
+## Workers (`/workers`)
 
----
+### GET `/workers/`
+- Purpose: List workers in scope.
+- Request: Query `skip, limit, scope_path`.
+- Response: `List[WorkerResponse]`.
 
-### 5.3 Get Count
-
-**Endpoint:** `GET /counts/{count_id}`  
-**Authentication:** Required
-
-**Response:** `200 OK`
-```json
-{
-  "id": "...",
-  "program_event_id": "...",
-  "adult_male": 150,
-  "adult_female": 200,
-  "youth_male": 50,
-  "youth_female": 60,
-  "boys": 30,
-  "girls": 40,
-  "total": 530,
-  "date": "2026-01-20",
-  "created_by": "...",
-  "created_at": "2026-01-20T10:00:05Z"
-}
-```
+### GET `/workers/search`
+- Purpose: Filter workers.
+- Request: Query `user_id, phone, email, name, unit, gender, status, location_id, scope_path`.
+- Response: `List[WorkerResponse]`.
 
----
+### POST `/workers/`
+- Purpose: Create worker.
+- Request: `WorkerCreate`.
+- Response: `WorkerResponse`.
+- Errors: `400` phone/email exists; `404` location not found.
 
-### 5.4 Update Count
+### GET `/workers/{worker_id}`
+- Purpose: Get worker by UUID.
+- Response: `WorkerResponse`.
+- Errors: `404` not found; `403` outside scope.
 
-**Endpoint:** `PUT /counts/{count_id}`  
-**Authentication:** Required  
-**Permission:** `counts:update`
+### PUT `/workers/{worker_id}`
+- Purpose: Update worker.
+- Request: `WorkerUpdate`.
+- Response: `WorkerResponse`.
 
-**Request Body:**
-```json
-{
-  "adult_male": 155,
-  "adult_female": 205
-}
-```
+### DELETE `/workers/{worker_id}`
+- Purpose: Soft delete worker (and linked user).
+- Errors: `404` not found.
 
 ---
 
-### 5.5 Create Offering
+## Hierarchy
 
-**Endpoint:** `POST /offerings`  
-**Authentication:** Required  
-**Permission:** `offerings:create`
+Applies to `nations`, `states`, `regions`, `groups`, `locations`, `fellowships`.
 
-**Request Body:**
-```json
-{
-  "program_event_id": "uuid-of-event",
-  "amount": 50000.00,
-  "currency": "NGN",
-  "client_id": "client-generated-uuid",
-  "ts_utc": "2026-01-20T10:00:00Z"
-}
-```
+### CRUD (each level)
+- Purpose: Create, list, get, update, delete each hierarchy level.
+- Request: level-specific create/update schema.
+- Response: level response schema.
+- Errors: `404` parent not found; `403` scope violation.
 
-**Response:** `201 Created`
+### GET `/locations/{location_id}/details`
+- Purpose: Location with parent chain.
+- Response: `LocationDetailResponse`.
 
----
-
-### 5.6 List Offerings
+### GET `/hierarchy/tree`
+- Purpose: Full hierarchy tree.
 
-**Endpoint:** `GET /offerings`  
-**Authentication:** Required
+### GET `/hierarchy/search`
+- Purpose: Search hierarchy by name.
 
-**Query Parameters:**
-- `skip`, `limit` - Pagination
-- `start_date`, `end_date` (optional)
-
 ---
-
-### 5.7 Create Record (Newcomer/Convert)
-
-**Endpoint:** `POST /records`  
-**Authentication:** Required  
-**Permission:** `records:create`
-
-**Request Body:**
-```json
-{
-  "program_event_id": "uuid-of-event",
-  "record_type": "newcomer",
-  "details": {
-    "name": "John Smith",
-    "phone": "+2349012345678",
-    "address": "123 Main St",
-    "notes": "Interested in baptism"
-  },
-  "client_id": "client-generated-uuid",
-  "ts_utc": "2026-01-20T10:00:00Z"
-}
-```
-
-**Response:** `201 Created`
 
----
+## Programs (`/programs`)
 
-### 5.8 Create Worker Attendance
-
-**Endpoint:** `POST /attendance`  
-**Authentication:** Required  
-**Permission:** `attendance:create`
-
-**Request Body:**
-```json
-{
-  "program_event_id": "uuid-of-event",
-  "worker_id": "worker-uuid",
-  "status": "present",
-  "client_id": "client-generated-uuid",
-  "ts_utc": "2026-01-20T10:00:00Z"
-}
-```
+### GET `/programs/domains`
+- Purpose: List domains.
+- Response: `List[ProgramDomainResponse]`.
 
----
+### POST `/programs/domains`
+- Purpose: Create domain.
+- Request: `ProgramDomainCreate`.
+- Response: `ProgramDomainResponse`.
+- Errors: `400` slug exists.
 
-## 6. Programs & Events
-
-### 6.1 List Program Domains
-
-**Endpoint:** `GET /programs/domains`  
-**Authentication:** Required
-
-**Response:** `200 OK`
-```json
-[
-  {
-    "id": 1,
-    "slug": "regular_service",
-    "name": "Regular Service",
-    "description": "Weekly church services"
-  },
-  {
-    "id": 2,
-    "slug": "crusade",
-    "name": "Crusade",
-    "description": "Evangelistic crusades"
-  }
-]
-```
+### PUT `/programs/domains/{id}` / DELETE `/programs/domains/{id}`
+- Purpose: Update/delete domain.
+- Errors: `404` not found.
 
----
+### GET `/programs/types`
+- Purpose: List types (optional `domain_id`).
+- Response: `List[ProgramTypeResponse]`.
 
-### 6.2 Create Program Domain
+### POST `/programs/types`
+- Purpose: Create type.
+- Request: `ProgramTypeCreate`.
+- Errors: `404` domain not found; `400` slug exists.
 
-**Endpoint:** `POST /programs/domains`  
-**Authentication:** Required  
-**Permission:** Superadmin only
+### PUT `/programs/types/{id}` / DELETE `/programs/types/{id}`
+- Purpose: Update/delete type.
+- Errors: `404` not found.
 
-**Request Body:**
-```json
-{
-  "slug": "retreat",
-  "name": "Retreat",
-  "description": "Annual retreats"
-}
-```
+### GET `/programs/events`
+- Purpose: List events with filters.
+- Request (query): `program_type, program_domain, title, level, location_id, date, start_month, end_month, start_year, end_year`.
+- Response: `List[ProgramEventResponse]`.
 
----
+### POST `/programs/events`
+- Purpose: Create event.
+- Request: `ProgramEventCreate`.
+- Errors: `403` path outside scope; `404` type not found.
 
-### 6.3 List Program Types
-
-**Endpoint:** `GET /programs/types`  
-**Authentication:** Required
-
-**Query Parameters:**
-- `domain_id` (optional) - Filter by domain
-
-**Response:** `200 OK`
-```json
-[
-  {
-    "id": 1,
-    "domain_id": 1,
-    "slug": "sunday_worship",
-    "name": "Sunday Worship Service",
-    "description": "Main Sunday service"
-  }
-]
-```
+### PUT `/programs/events/{event_id}` / DELETE `/programs/events/{event_id}`
+- Purpose: Update/delete event.
+- Errors: `404` not found; `403` path outside scope.
 
 ---
-
-### 6.4 Create Program Type
-
-**Endpoint:** `POST /programs/types`  
-**Authentication:** Required  
-**Permission:** Superadmin only
-
-**Request Body:**
-```json
-{
-  "domain_id": 1,
-  "slug": "bible_study",
-  "name": "Bible Study",
-  "description": "Weekly Bible study"
-}
-```
 
----
+## Counts (`/counts`)
 
-### 6.5 List Program Events
-
-**Endpoint:** `GET /programs/events`  
-**Authentication:** Required  
-**Description:** List scheduled events within scope
-
-**Query Parameters:**
-- `skip`, `limit` - Pagination
-- `start_date`, `end_date` (optional)
-- `program_type_id` (optional)
-
-**Response:** `200 OK`
-```json
-[
-  {
-    "id": "event-uuid",
-    "program_type_id": 1,
-    "date": "2026-01-26",
-    "title": "Sunday Service",
-    "path": "org.234.kw.iln.ile.001"
-  }
-]
-```
+### POST `/counts/`
+- Purpose: Create count.
+- Request: `CountCreate`.
+- Response: `CountResponse`.
 
----
+### GET `/counts/`
+- Purpose: List counts in scope.
+- Query: `skip, limit, scope_path`.
 
-### 6.6 Create Program Event
-
-**Endpoint:** `POST /programs/events`  
-**Authentication:** Required  
-**Permission:** `events:create`
-
-**Request Body:**
-```json
-{
-  "program_type_id": 1,
-  "date": "2026-01-26",
-  "title": "Special Sunday Service",
-  "location_id": "001"
-}
-```
+### GET `/counts/aggregate`
+- Purpose: Aggregate by location.
+- Query: `program_domain, program_type, location_id, start_date, end_date`.
 
----
+### GET `/counts/aggregate-flex`
+- Purpose: Aggregate by level.
+- Query: `view_level` (state|region|group|location).
 
-## 7. Fellowship Activities
-
-### 7.1 Register Fellowship Member
-
-**Endpoint:** `POST /fellowships/members`  
-**Authentication:** Required
-
-**Request Body:**
-```json
-{
-  "fellowship_id": "F001",
-  "name": "Jane Smith",
-  "phone": "+2349087654321",
-  "email": "jane@example.com",
-  "address": "456 Oak Ave",
-  "gender": "Female",
-  "marital_status": "Single"
-}
-```
+### GET `/counts/{id}` / PUT `/counts/{id}` / DELETE `/counts/{id}`
+- Purpose: Get/update/delete count.
+- Errors: `404` not found.
 
----
+### POST `/counts/batch`
+- Purpose: Batch create counts.
+- Request: `List[CountCreate]`.
+- Response: `SyncResult`.
 
-### 7.2 List Fellowship Members
-
-**Endpoint:** `GET /fellowships/members`  
-**Authentication:** Required
-
-**Query Parameters:**
-- `fellowship_id` (required) - Fellowship to list members for
-
-**Response:** `200 OK`
-```json
-[
-  {
-    "id": "...",
-    "fellowship_id": "F001",
-    "name": "Jane Smith",
-    "phone": "+2349087654321",
-    "is_active": true
-  }
-]
-```
+### GET `/counts/stats`
+- Purpose: Population statistics wrapper.
 
 ---
 
-### 7.3 Submit Fellowship Attendance
+## Offerings (`/offerings`)
 
-**Endpoint:** `POST /fellowships/attendance`  
-**Authentication:** Required
+### POST `/offerings/`
+- Purpose: Create offering.
+- Request: `OfferingCreate`.
+- Response: `OfferingResponse`.
 
-**Request Body:**
-```json
-{
-  "fellowship_id": "F001",
-  "date": "2026-01-20",
-  "member_id": "member-uuid",
-  "status": "present"
-}
-```
+### GET `/offerings/`
+- Purpose: List offerings.
+- Query: `fund_type, location_id, start_date, end_date, amount`.
 
----
-
-### 7.4 Submit Fellowship Offering
+### GET `/offerings/{id}` / PUT `/offerings/{id}` / DELETE `/offerings/{id}`
+- Purpose: Get/update/delete offering.
+- Errors: `404` not found.
 
-**Endpoint:** `POST /fellowships/offerings`  
-**Authentication:** Required
+### POST `/offerings/batch`
+- Purpose: Batch create offerings.
+- Request: `List[OfferingCreate]`.
+- Response: `SyncResult`.
 
-**Request Body:**
-```json
-{
-  "fellowship_id": "F001",
-  "date": "2026-01-20",
-  "amount": 5000.00,
-  "currency": "NGN"
-}
-```
+### GET `/offerings/stats`
+- Purpose: Aggregate offering stats.
 
 ---
 
-### 7.5 Create Testimony
+## Tithes (`/tithes`)
 
-**Endpoint:** `POST /fellowships/testimonies`  
-**Authentication:** Required
+Same as offerings, with fixed `fund_type="tithe"`.
 
-**Request Body:**
-```json
-{
-  "fellowship_id": "F001",
-  "member_id": "member-uuid",
-  "testimony": "God healed me from...",
-  "date": "2026-01-20"
-}
-```
-
 ---
-
-### 7.6 List Testimonies
 
-**Endpoint:** `GET /fellowships/testimonies`  
-**Authentication:** Required
+## Attendance (`/attendance`)
 
-**Query Parameters:**
-- `fellowship_id` (required)
+- `GET /attendance/workers` list workers for location.
+- `POST /attendance/` create attendance (`WorkerAttendanceCreate`).
+- `GET /attendance/` list attendance.
+- `GET /attendance/{id}` get attendance.
+- `PUT /attendance/{id}` update attendance.
+- `POST /attendance/batch` batch create.
+- `GET /attendance/stats` aggregate.
+- `DELETE /attendance/{id}` soft delete.
 
 ---
 
-### 7.7 Create Prayer Request
+## Records (`/records`, `/newcomers`, `/converts`)
 
-**Endpoint:** `POST /fellowships/prayers`  
-**Authentication:** Required
+- `POST /records/` create record (`RecordCreate`).
+- `GET /records/` list records.
+- `GET /records/{id}` get record.
+- `PUT /records/{id}` update.
+- `POST /records/batch` batch create.
+- `DELETE /records/{id}` delete.
 
-**Request Body:**
-```json
-{
-  "fellowship_id": "F001",
-  "member_id": "member-uuid",
-  "request": "Pray for my family...",
-  "is_urgent": false
-}
-```
+`/newcomers` and `/converts` mirror `/records` with fixed `record_type`.
 
 ---
 
-### 7.8 List Prayer Requests
+## Fellowship Activities (`/fellowships`)
 
-**Endpoint:** `GET /fellowships/prayers`  
-**Authentication:** Required
+Members
+- `POST /fellowships/members`
+- `GET /fellowships/members`
+- `PUT /fellowships/members/{id}`
+- `DELETE /fellowships/members/{id}`
 
-**Query Parameters:**
-- `fellowship_id` (required)
+Attendance
+- `POST /fellowships/attendance`
+- `GET /fellowships/attendance`
+- `PUT /fellowships/attendance/{id}`
+- `DELETE /fellowships/attendance/{id}`
 
----
-
-## 8. Media Management
-
-### 8.1 Create Media Gallery
-
-**Endpoint:** `POST /media/galleries`  
-**Authentication:** Required  
-**Permission:** `media:create`
-
-**Request Body:**
-```json
-{
-  "title": "Easter Retreat 2026",
-  "description": "Photos from our annual Easter retreat",
-  "location_id": "001",
-  "slug": "easter-retreat-2026",
-  "event_id": "event-uuid"
-}
-```
-
-**Response:** `201 Created`
-```json
-{
-  "id": "gallery-uuid",
-  "title": "Easter Retreat 2026",
-  "slug": "easter-retreat-2026",
-  "path": "org.234.kw.iln.ile.001",
-  "created_at": "2026-01-20T10:00:00Z"
-}
-```
-
----
+Offerings
+- `POST /fellowships/offerings`
+- `GET /fellowships/offerings`
+- `PUT /fellowships/offerings/{id}`
+- `DELETE /fellowships/offerings/{id}`
 
-### 8.2 List Media Galleries
+Testimonies
+- `POST /fellowships/testimonies`
+- `GET /fellowships/testimonies`
+- `PUT /fellowships/testimonies/{id}`
+- `DELETE /fellowships/testimonies/{id}`
 
-**Endpoint:** `GET /media/galleries`  
-**Authentication:** Required  
-**Description:** List galleries within scope
+Prayer Requests
+- `POST /fellowships/prayer-requests`
+- `GET /fellowships/prayer-requests`
+- `PUT /fellowships/prayer-requests/{id}`
+- `DELETE /fellowships/prayer-requests/{id}`
 
-**Query Parameters:**
-- `skip`, `limit` - Pagination
+Attendance Summaries
+- `POST /fellowships/attendance-summaries`
+- `GET /fellowships/attendance-summaries`
+- `PUT /fellowships/attendance-summaries/{id}`
+- `DELETE /fellowships/attendance-summaries/{id}`
 
 ---
 
-### 8.3 Add Media Item
-
-**Endpoint:** `POST /media/items`  
-**Authentication:** Required  
-**Permission:** `media:create`  
-**Description:** Add media item metadata (file already uploaded to storage)
-
-**Request Body:**
-```json
-{
-  "gallery_id": "gallery-uuid",
-  "file_path": "galleries/easter-2026/IMG_001.jpg",
-  "file_name": "IMG_001.jpg",
-  "file_type": "image/jpeg",
-  "file_size": 2048576,
-  "caption": "Opening ceremony",
-  "is_cover": true
-}
-```
+## Announcements / Information
 
----
+- `POST /announcements/` create
+- `GET /announcements/` list
+- `GET /announcements/{id}` get
+- `PUT /announcements/{id}` update
+- `POST /announcements/{id}/deactivate` deactivate
+- `DELETE /announcements/{id}` delete
 
-### 8.4 List Gallery Items
-
-**Endpoint:** `GET /media/galleries/{gallery_id}/items`  
-**Authentication:** Required
-
-**Response:** `200 OK`
-```json
-[
-  {
-    "id": "item-uuid",
-    "gallery_id": "gallery-uuid",
-    "file_path": "galleries/easter-2026/IMG_001.jpg",
-    "file_name": "IMG_001.jpg",
-    "file_type": "image/jpeg",
-    "caption": "Opening ceremony",
-    "is_cover": true
-  }
-]
-```
+Information routes mirror announcements.
 
 ---
 
-## 9. Public API
-
-### 9.1 Get Public Events
-
-**Endpoint:** `GET /public/events`  
-**Authentication:** None (public)  
-**Description:** List upcoming public events
-
-**Query Parameters:**
-- `skip`, `limit` - Pagination
-- `from_date` (optional, default: today)
-
-**Response:** `200 OK`
-```json
-[
-  {
-    "id": "event-uuid",
-    "title": "Easter Retreat 2026",
-    "date": "2026-04-05",
-    "type_name": "Retreat"
-  }
-]
-```
+## Media (`/media`)
 
----
+Galleries
+- `POST /media/galleries` create
+- `GET /media/galleries` list
+- `GET /media/galleries/{id}` get
+- `DELETE /media/galleries/{id}` delete
 
-### 9.2 Get Public Locations
-
-**Endpoint:** `GET /public/locations`  
-**Authentication:** None (public)
-
-**Query Parameters:**
-- `skip`, `limit` - Pagination
-- `search` (optional) - Search by name
-
-**Response:** `200 OK`
-```json
-[
-  {
-    "id": "001",
-    "name": "Ilorin East",
-    "type": "DLBC",
-    "address": "123 Main St"
-  }
-]
-```
+Items
+- `POST /media/items` create
+- `GET /media/items` list
+- `GET /media/items/{id}` get
+- `DELETE /media/items/{id}` delete
 
 ---
 
-### 9.3 Get Public Galleries
-
-**Endpoint:** `GET /public/galleries`  
-**Authentication:** None (public)
-
-**Response:** `200 OK`
-```json
-[
-  {
-    "id": "gallery-uuid",
-    "title": "Easter Retreat 2026",
-    "description": "Photos from our annual Easter retreat",
-    "slug": "easter-retreat-2026",
-    "created_at": "2026-01-20T10:00:00Z"
-  }
-]
-```
+## Reports (`/reports`)
 
----
+- `GET /reports/summary`
+- `GET /reports/financial`
+- `GET /reports/attendance`
+- `GET /reports/timeseries` (metric, interval)
+- `GET /reports/by-level` (metric, level)
+- `GET /reports/anomalies`
+- `GET /reports/growth-rate`
+- `GET /reports/export/csv` (report_type)
+- `POST /reports/export/excel` (report_type)
+- `POST /reports/export/pdf` (report_type)
+- `POST /reports/refresh`
 
-## 10. Reports & Analytics
-
-### 10.1 Get Summary Report
-
-**Endpoint:** `GET /reports/summary`  
-**Authentication:** Required  
-**Description:** Get summary statistics within scope
-
-**Query Parameters:**
-- `start_date`, `end_date` (optional)
-
-**Response:** `200 OK`
-```json
-{
-  "total_counts": 50,
-  "total_attendance": 25000,
-  "total_offerings": 5000000.00,
-  "total_newcomers": 150,
-  "total_converts": 75,
-  "period": {
-    "start": "2026-01-01",
-    "end": "2026-01-31"
-  }
-}
-```
-
 ---
-
-### 10.2 Get Financial Summary
-
-**Endpoint:** `GET /reports/financial`  
-**Authentication:** Required  
-**Permission:** `reports:financial`
-
-**Query Parameters:**
-- `month` (required) - Format: "2026-01"
-
-**Response:** `200 OK`
-```json
-{
-  "month": "2026-01",
-  "total_offerings": 5000000.00,
-  "total_tithes": 2000000.00,
-  "by_location": [
-    {
-      "location_id": "001",
-      "location_name": "Ilorin East",
-      "total": 500000.00
-    }
-  ]
-}
-```
 
----
+## Statistics (`/statistics`)
 
-### 10.3 Export CSV
-
-**Endpoint:** `POST /reports/export/csv`  
-**Authentication:** Required  
-**Permission:** `reports:export`
-
-**Request Body:**
-```json
-{
-  "report_type": "counts",
-  "start_date": "2026-01-01",
-  "end_date": "2026-01-31"
-}
-```
-
-**Response:** `200 OK`
-```
-Content-Type: text/csv
-Content-Disposition: attachment; filename="counts_2026-01.csv"
-
-date,location,adult_male,adult_female,total
-2026-01-05,Ilorin East,150,200,530
-...
-```
+- `GET /statistics/read-population/`
+- `GET /statistics/church-statistics/`
+- `GET /statistics/get-user-statistics/`
 
 ---
-
-### 10.4 Get Population Analytics
-
-**Endpoint:** `GET /statistics/read-population`  
-**Authentication:** Required
-
-**Response:** `200 OK`
-```json
-{
-  "total_population": 25000,
-  "demographics": {
-    "adult_male": 8000,
-    "adult_female": 10000,
-    "youth_male": 3000,
-    "youth_female": 3500,
-    "boys": 250,
-    "girls": 250
-  },
-  "growth_rate": 5.2
-}
-```
 
----
+## Sync (`/sync`)
 
-### 10.5 Get Church Statistics
-
-**Endpoint:** `GET /statistics/church-statistics`  
-**Authentication:** Required
-
-**Response:** `200 OK`
-```json
-{
-  "total_locations": 50,
-  "total_groups": 10,
-  "total_regions": 3,
-  "total_workers": 500,
-  "total_fellowships": 200
-}
-```
+- `POST /sync/batch` batch upload (SyncBatchRequest).
+- `GET /sync/changes?since=ISO-8601` incremental changes.
+- `GET /sync/conflicts` list conflicts.
+- `POST /sync/resolve` resolve by `conflict_id` and `resolution`.
 
 ---
-
-## 11. System & Utilities
 
-### 11.1 Get System Metadata
-
-**Endpoint:** `GET /system/meta`  
-**Authentication:** Required
-
-**Response:** `200 OK`
-```json
-{
-  "program_domains": [...],
-  "program_types": [...],
-  "church_types": ["DLBC", "DLCF", "DLSO"],
-  "units": ["Ushering", "Choir", "Technical", ...],
-  "version": "1.0.0"
-}
-```
-
----
+## Approvals (`/approvals`)
 
-### 11.2 Batch Sync
-
-**Endpoint:** `POST /sync/batch`  
-**Authentication:** Required  
-**Description:** Batch upload offline records
-
-**Request Body:**
-```json
-{
-  "counts": [
-    {
-      "program_event_id": "...",
-      "adult_male": 150,
-      "client_id": "uuid1",
-      "ts_utc": "2026-01-20T10:00:00Z"
-    }
-  ],
-  "offerings": [...],
-  "records": [...],
-  "attendance": [...]
-}
-```
-
-**Response:** `200 OK`
-```json
-{
-  "counts": {
-    "created": 5,
-    "duplicates": 2,
-    "errors": 0
-  },
-  "offerings": {...},
-  "id_mappings": {
-    "uuid1": "server-uuid1",
-    "uuid2": "server-uuid2"
-  }
-}
-```
+- Transfer: `POST /transfers`, `GET /transfers`, `POST /transfers/{id}/approve`, `POST /transfers/{id}/reject`
+- Status change: `POST /status-changes`, `GET /status-changes`, `POST /status-changes/{id}/approve`, `POST /status-changes/{id}/reject`
 
 ---
 
-### 11.3 Poll Notifications
-
-**Endpoint:** `GET /notifications/poll`  
-**Authentication:** Required
-
-**Query Parameters:**
-- `since` (required) - ISO timestamp
-
-**Response:** `200 OK`
-```json
-{
-  "counts": [
-    {
-      "id": "...",
-      "created_at": "2026-01-20T10:05:00Z",
-      "location": "Ilorin East"
-    }
-  ],
-  "offerings": [...],
-  "prayers": [...]
-}
-```
+## RBAC (`/rbac`)
 
----
-
-### 11.4 Request Password Reset
-
-**Endpoint:** `POST /recovery/request-reset`  
-**Authentication:** None (public)
-
-**Request Body:**
-```json
-{
-  "phone": "+2349012345678"
-}
-```
-
-**Response:** `200 OK`
-```json
-{
-  "message": "Reset token sent (mock email)",
-  "token": "reset-token-123"
-}
-```
+- Permissions: `GET/POST/PUT/DELETE /permissions`
+- Roles: `GET/POST/PUT/DELETE /roles`
+- Role Scores: `GET/POST/PUT/DELETE /role-scores`
+- Assign permissions: `POST /roles/{id}/permissions`, `DELETE /roles/{id}/permissions`
+- Available roles: `GET /roles/available`
 
 ---
-
-### 11.5 Verify Reset Token
-
-**Endpoint:** `POST /recovery/verify-token`  
-**Authentication:** None
 
-**Request Body:**
-```json
-{
-  "token": "reset-token-123"
-}
-```
+## Recovery (`/recovery`)
 
-**Response:** `200 OK`
+- `POST /request-reset`
+- `POST /verify-token`
+- `POST /reset-password`
+- `POST /set-recovery-question`
+- `GET /read-recovery-question`
+- `PATCH /update-recovery-question`
 
 ---
 
-### 11.6 Reset Password
+## System (`/system`)
 
-**Endpoint:** `POST /recovery/reset-password`  
-**Authentication:** None
+- `GET /system/meta`
+- `GET /system/metrics`
+- `POST /system/seed`
 
-**Request Body:**
-```json
-{
-  "token": "reset-token-123",
-  "new_password": "NewSecurePass123!"
-}
-```
-
----
-
-## 12. Error Handling
-
-### Standard Error Response
-
-All errors return JSON with this format:
-
-```json
-{
-  "detail": "Error message describing what went wrong"
-}
-```
-
-### HTTP Status Codes
-
-| Code | Meaning | When Used |
-|------|---------|-----------|
-| `200` | OK | Successful GET/PUT/DELETE |
-| `201` | Created | Successful POST (resource created) |
-| `400` | Bad Request | Invalid input, validation error |
-| `401` | Unauthorized | Missing/invalid token, pending approval |
-| `403` | Forbidden | Insufficient permissions |
-| `404` | Not Found | Resource doesn't exist |
-| `409` | Conflict | Duplicate resource (e.g., phone already exists) |
-| `422` | Unprocessable Entity | Validation error (Pydantic) |
-| `500` | Internal Server Error | Server error |
-
-### Common Error Scenarios
-
-**Invalid Token:**
-```json
-Status: 403
-{
-  "detail": "Could not validate credentials"
-}
-```
-
-**Insufficient Permissions:**
-```json
-Status: 403
-{
-  "detail": "Operation not permitted. Required: users:create"
-}
-```
-
-**Validation Error:**
-```json
-Status: 422
-{
-  "detail": [
-    {
-      "loc": ["body", "phone"],
-      "msg": "field required",
-      "type": "value_error.missing"
-    }
-  ]
-}
-```
-
 ---
-
-## 13. Authentication Guide
 
-### Step 1: Login
+## Public (`/public`)
 
-```bash
-curl -X POST "http://api.example.com/api/v1/auth/login" \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "username=+2349012345678&password=SecurePass123!"
-```
+- Events: `GET /public/events`, `GET /public/events/{id}`
+- Locations: `GET /public/locations`, `GET /public/locations/nearby`
+- Galleries: `GET /public/galleries`, `GET /public/galleries/{id}`
+- Announcements: `GET /public/announcements`
+- Forms: `POST /public/workers/register`, `POST /public/contact`, `POST /public/prayer-request`
+- App Versions: `GET /public/app-version`, `GET /public/app-versions`
 
-**Response:**
-```json
-{
-  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "token_type": "bearer"
-}
-```
-
-### Step 2: Use Access Token
-
-```bash
-curl -X GET "http://api.example.com/api/v1/auth/me" \
-  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-```
-
-### Step 3: Refresh When Expired
-
-```bash
-curl -X POST "http://api.example.com/api/v1/auth/refresh" \
-  -H "Content-Type: application/json" \
-  -d '{"refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."}'
-```
-
-### Token Expiration
-
-- **Access Token:** 60 minutes (configurable)
-- **Refresh Token:** 7 days (configurable)
-
-### Scope-Based Data Filtering
-
-All authenticated requests automatically filter data based on the user's `scope_path` from their JWT token:
-
-- **Score 1-3** (Worker/Location Pastor): See only their location's data
-- **Score 4** (Group Pastor): See all locations in their group
-- **Score 5** (Regional Pastor): See all groups in their region
-- **Score 6** (State Pastor): See all regions in their state
-- **Score 7** (National Admin): See all states in their nation
-- **Score 8-9** (Continental/Global): See all data
-
-This is enforced at the **database level** via Row-Level Security (RLS) and cannot be bypassed.
-
 ---
-
-## Appendix: Quick Reference
 
-### Base URL
-```
-Production: https://api.dclm.org/api/v1
-Development: http://localhost:8000/api/v1
-```
+## WebSocket
 
-### Authentication Header
-```
-Authorization: Bearer {access_token}
-```
-
-### Pagination
-Most list endpoints support:
-- `skip` (default: 0)
-- `limit` (default: 100, max: 1000)
-
-### Date Formats
-- **ISO 8601:** `2026-01-20T10:30:00Z`
-- **Date Only:** `2026-01-20`
-
-### Idempotency
-Data collection endpoints (`counts`, `offerings`, `records`, `attendance`) support idempotency via `client_id`. Submitting the same `client_id` twice returns the existing record.
-
----
+- `GET /ws` with JWT query param or header.
 
-**End of Documentation**  
-**Version:** 1.0.0  
-**Last Updated:** 2026-01-24

@@ -5,6 +5,7 @@ import asyncio
 from sqlalchemy import text
 from app.db.session import async_session
 
+
 async def check_tables():
     async with async_session() as db:
         # Check what tables exist

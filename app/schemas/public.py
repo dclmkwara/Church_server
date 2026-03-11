@@ -33,6 +33,39 @@ class PublicGalleryResponse(BaseModel):
         orm_mode = True
 
 
+class PublicGalleryItemResponse(BaseModel):
+    id: UUID
+    file_path: str
+    file_name: str
+    file_type: str
+    file_size: int
+    caption: Optional[str] = None
+    is_cover: bool = False
+    created_at: datetime
+
+    class Config:
+        orm_mode = True
+
+
+class PublicGalleryDetailResponse(PublicGalleryResponse):
+    items: List[PublicGalleryItemResponse] = []
+
+
+class PublicAnnouncementResponse(BaseModel):
+    id: UUID
+    region_name: str
+    meeting: Optional[str] = None
+    date: date
+    sws_topic: Optional[str] = None
+    trets_topic: Optional[str] = None
+    mbs_bible_reading: Optional[str] = None
+    sts_study: Optional[str] = None
+    published_at: Optional[datetime] = None
+
+    class Config:
+        orm_mode = True
+
+
 # Public Form Schemas
 class PublicWorkerRegistration(BaseModel):
     """Public worker registration form (from website)"""

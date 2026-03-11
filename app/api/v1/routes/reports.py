@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import text
 from app.api import deps
 from app.services.report_service import ReportService
 from app.schemas.report import DailyCountSummary, MonthlyFinancialSummary, AttendanceTrend
@@ -10,7 +11,27 @@ from datetime import date, timedelta
 
 router = APIRouter()
 
-@router.get("/export/csv")
+
+async def _resolve_scope(
+    db: AsyncSession,
+    current_user: User,
+    scope_path: Optional[str],
+) -> str:
+    effective_scope = str(current_user.path)
+    if scope_path:
+        allowed = (await db.execute(
+            text("CAST(:scope_path AS ltree) <@ CAST(:user_scope AS ltree)"),
+            {"scope_path": scope_path, "user_scope": effective_scope},
+        )).scalar()
+        if not allowed:
+            raise HTTPException(status_code=403, detail="Scope outside your permission")
+        effective_scope = scope_path
+    return effective_scope
+
+@router.get(
+    "/export/csv",
+    dependencies=[Depends(deps.PermissionChecker("reports:read"))],
+)
 async def export_report_csv(
     report_type: str = Query(..., description="counts, financial, or attendance"),
     scope_path: Optional[str] = None,
@@ -27,10 +48,9 @@ async def export_report_csv(
     if not end_date:
         end_date = date.today()
     
-    effective_scope = str(current_user.path)
+    effective_scope = await _resolve_scope(db, current_user, scope_path)
     
     if report_type == "counts":
-        # We only implemented counts export in service for now
         buffer = await ReportService.export_counts_csv(db, effective_scope, start_date, end_date)
         filename = f"counts_{start_date}_{end_date}.csv"
         return StreamingResponse(
@@ -38,11 +58,29 @@ async def export_report_csv(
             media_type="text/csv",
             headers={"Content-Disposition": f"attachment; filename={filename}"}
         )
-    else:
-        # Placeholder for others
-        raise HTTPException(status_code=400, detail="Export type not supported yet")
+    if report_type == "financial":
+        buffer = await ReportService.export_financial_csv(db, effective_scope, start_date, end_date)
+        filename = f"financial_{start_date}_{end_date}.csv"
+        return StreamingResponse(
+            iter([buffer.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+    if report_type == "attendance":
+        buffer = await ReportService.export_attendance_csv(db, effective_scope, start_date, end_date)
+        filename = f"attendance_{start_date}_{end_date}.csv"
+        return StreamingResponse(
+            iter([buffer.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+    raise HTTPException(status_code=400, detail="Export type not supported")
 
-@router.get("/summary", response_model=List[DailyCountSummary])
+@router.get(
+    "/summary",
+    response_model=List[DailyCountSummary],
+    dependencies=[Depends(deps.PermissionChecker("reports:read"))],
+)
 async def get_summary_report(
     scope_path: Optional[str] = None,
     start_date: Optional[date] = None,
@@ -60,20 +98,16 @@ async def get_summary_report(
     if not end_date:
         end_date = date.today()
 
-    # Determine scope
-    # User can only see their own scope or below.
-    # If scope_path provided, verify it is descendant of user's path.
-    effective_scope = str(current_user.path)
-    if scope_path:
-        # TODO: Strict LTree check logic here
-        # For MVP, assume endpoint security or just force user scope for now
-        # Ideally: if not scope_path.startswith(effective_scope): raise Forbidden
-        pass 
+    effective_scope = await _resolve_scope(db, current_user, scope_path)
     
     # We use user's scope as base to restrict access
     return await ReportService.get_daily_counts(db, effective_scope, start_date, end_date)
 
-@router.get("/financial", response_model=List[MonthlyFinancialSummary])
+@router.get(
+    "/financial",
+    response_model=List[MonthlyFinancialSummary],
+    dependencies=[Depends(deps.PermissionChecker("reports:read"))],
+)
 async def get_financial_report(
     scope_path: Optional[str] = None,
     start_date: Optional[date] = None,
@@ -89,11 +123,15 @@ async def get_financial_report(
     if not end_date:
         end_date = date.today()
 
-    effective_scope = str(current_user.path)
+    effective_scope = await _resolve_scope(db, current_user, scope_path)
     
     return await ReportService.get_financial_summary(db, effective_scope, start_date, end_date)
 
-@router.get("/attendance", response_model=List[AttendanceTrend])
+@router.get(
+    "/attendance",
+    response_model=List[AttendanceTrend],
+    dependencies=[Depends(deps.PermissionChecker("reports:read"))],
+)
 async def get_attendance_report(
     scope_path: Optional[str] = None,
     start_date: Optional[date] = None,
@@ -109,11 +147,11 @@ async def get_attendance_report(
     if not end_date:
         end_date = date.today()
 
-    effective_scope = str(current_user.path)
+    effective_scope = await _resolve_scope(db, current_user, scope_path)
     
     return await ReportService.get_attendance_trends(db, effective_scope, start_date, end_date)
 
-@router.post("/refresh")
+@router.post("/refresh", dependencies=[Depends(deps.PermissionChecker("reports:refresh"))])
 async def refresh_reports(
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_user),
@@ -121,13 +159,16 @@ async def refresh_reports(
     """
     Manually refresh report views (Admin only ideally).
     """
-    # TODO: Add specific permission check
+    # Permission enforced via PermissionChecker ("reports:refresh")
     await ReportService.refresh_views(db)
     return {"status": "success", "message": "Materialized views refreshed"}
 
 
 # Advanced Analytics Routes
-@router.get("/timeseries")
+@router.get(
+    "/timeseries",
+    dependencies=[Depends(deps.PermissionChecker("reports:read"))],
+)
 async def get_timeseries_analysis(
     metric: str = Query(..., description="counts, offerings, or attendance"),
     interval: str = Query("daily", description="daily, weekly, or monthly"),
@@ -147,35 +188,91 @@ async def get_timeseries_analysis(
         end_date = date.today()
     
     effective_scope = str(current_user.path)
-    
-    # Simple implementation - can be enhanced with trend lines, forecasting
-    from app.models.data_collection import Count, Offering, WorkerAttendance
-    from sqlalchemy import select, func, text
-    
+
+    interval_map = {
+        "daily": "day",
+        "weekly": "week",
+        "monthly": "month",
+    }
+    interval_key = interval.strip().lower()
+    if interval_key not in interval_map:
+        raise HTTPException(status_code=400, detail="Invalid interval")
+
+    from app.models.counts import Count
+    from app.models.offerings import Offering
+    from app.models.attendance import WorkerAttendance
+    from app.models.programs import ProgramEvent
+    from sqlalchemy import select, func, text, cast, DateTime
+
+    def _trend_from_series(series: List[dict]) -> str:
+        if len(series) < 2:
+            return "stable"
+        first = series[0]["value"]
+        last = series[-1]["value"]
+        if first == 0:
+            return "up" if last > 0 else "stable"
+        change = (last - first) / abs(first)
+        if change > 0.05:
+            return "up"
+        if change < -0.05:
+            return "down"
+        return "stable"
+
     if metric == "counts":
+        period = func.date_trunc(interval_map[interval_key], Count.date).label("period")
         query = select(
-            Count.date,
-            func.sum(Count.adult_male + Count.adult_female + Count.youth_male + 
+            period,
+            func.sum(Count.adult_male + Count.adult_female + Count.youth_male +
                     Count.youth_female + Count.boys + Count.girls).label('total')
         ).where(
             Count.date.between(start_date, end_date),
             text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=effective_scope)
-        ).group_by(Count.date).order_by(Count.date)
-        
+        ).group_by(period).order_by(period)
+
         result = await db.execute(query)
-        data = [{"date": str(row.date), "value": row.total} for row in result]
-        
+        data = [{"date": str(row.period.date()), "value": row.total} for row in result]
+
         return {
             "metric": metric,
-            "interval": interval,
+            "interval": interval_key,
             "data": data,
-            "trend": "stable"  # Placeholder - can add actual trend calculation
+            "trend": _trend_from_series(data)
         }
+    if metric == "offerings":
+        period = func.date_trunc(interval_map[interval_key], Offering.date).label("period")
+        query = select(
+            period,
+            func.coalesce(func.sum(Offering.amount), 0).label("total")
+        ).where(
+            Offering.date.between(start_date, end_date),
+            text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=effective_scope)
+        ).group_by(period).order_by(period)
+        result = await db.execute(query)
+        data = [{"date": str(row.period.date()), "value": float(row.total)} for row in result]
+        return {"metric": metric, "interval": interval_key, "data": data, "trend": _trend_from_series(data)}
+    if metric == "attendance":
+        period = func.date_trunc(
+            interval_map[interval_key],
+            cast(ProgramEvent.date, DateTime),
+        ).label("period")
+        query = select(
+            period,
+            func.count(WorkerAttendance.id).label("total")
+        ).join(ProgramEvent, ProgramEvent.id == WorkerAttendance.event_id).where(
+            ProgramEvent.date.between(start_date, end_date),
+            text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=effective_scope)
+        ).group_by(period).order_by(period)
+        result = await db.execute(query)
+        data = [{"date": str(row.period.date()), "value": row.total} for row in result]
+        return {"metric": metric, "interval": interval_key, "data": data, "trend": _trend_from_series(data)}
     
-    return {"error": "Metric not yet implemented"}
+    raise HTTPException(status_code=400, detail="Metric not supported")
 
 
-@router.get("/by-level")
+@router.get(
+    "/by-level",
+    dependencies=[Depends(deps.PermissionChecker("reports:read"))],
+)
 async def get_hierarchical_breakdown(
     metric: str = Query(..., description="counts, offerings, or attendance"),
     level: str = Query(..., description="location, group, region, or state"),
@@ -196,36 +293,67 @@ async def get_hierarchical_breakdown(
     
     effective_scope = str(current_user.path)
     
-    # Simplified implementation
-    from app.models.data_collection import Count
-    from app.models.location import Location
     from sqlalchemy import select, func, text
-    
-    if metric == "counts" and level == "location":
+    from app.models.counts import Count
+    from app.models.offerings import Offering
+    from app.models.attendance import WorkerAttendance
+    from app.models.programs import ProgramEvent
+
+    level_map = {
+        "location": 6,
+        "group": 5,
+        "region": 4,
+        "state": 3,
+    }
+    level_key = level.strip().lower()
+    if level_key not in level_map:
+        raise HTTPException(status_code=400, detail="Invalid level")
+    segment_count = level_map[level_key]
+
+    def group_expr(model):
+        return func.subpath(model.path, 0, segment_count).label("group_path")
+
+    if metric == "counts":
         query = select(
-            Location.location_name,
-            func.count(Count.id).label('record_count'),
-            func.sum(Count.adult_male + Count.adult_female + Count.youth_male + 
-                    Count.youth_female + Count.boys + Count.girls).label('total_attendance')
-        ).join(Count, Count.location_id == Location.location_id).where(
+            group_expr(Count),
+            func.sum(Count.adult_male + Count.adult_female + Count.youth_male +
+                    Count.youth_female + Count.boys + Count.girls).label("total")
+        ).where(
             Count.date.between(start_date, end_date),
-            text("Location.path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=effective_scope)
-        ).group_by(Location.location_name).order_by(func.sum(Count.adult_male + Count.adult_female).desc())
-        
+            text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=effective_scope)
+        ).group_by(group_expr(Count)).order_by(group_expr(Count))
         result = await db.execute(query)
-        data = [{"name": row.location_name, "records": row.record_count, "total": row.total_attendance} 
-                for row in result]
-        
-        return {
-            "metric": metric,
-            "level": level,
-            "breakdown": data
-        }
-    
-    return {"error": "Combination not yet implemented"}
+        return {"metric": metric, "level": level, "breakdown": [{"path": row.group_path, "total": row.total} for row in result]}
+
+    if metric == "offerings":
+        query = select(
+            group_expr(Offering),
+            func.coalesce(func.sum(Offering.amount), 0).label("total")
+        ).where(
+            Offering.date.between(start_date, end_date),
+            text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=effective_scope)
+        ).group_by(group_expr(Offering)).order_by(group_expr(Offering))
+        result = await db.execute(query)
+        return {"metric": metric, "level": level, "breakdown": [{"path": row.group_path, "total": str(row.total)} for row in result]}
+
+    if metric == "attendance":
+        query = select(
+            group_expr(WorkerAttendance),
+            func.count(WorkerAttendance.id).label("total")
+        ).join(ProgramEvent, ProgramEvent.id == WorkerAttendance.event_id).where(
+            ProgramEvent.date.between(start_date, end_date),
+            text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=effective_scope)
+        ).group_by(group_expr(WorkerAttendance)).order_by(group_expr(WorkerAttendance))
+        result = await db.execute(query)
+        return {"metric": metric, "level": level, "breakdown": [{"path": row.group_path, "total": row.total} for row in result]}
+
+    raise HTTPException(status_code=400, detail="Metric not supported")
 
 
-@router.get("/anomalies")
+@router.get(
+    "/anomalies",
+    dependencies=[Depends(deps.PermissionChecker("reports:read"))],
+)
 async def detect_anomalies(
     metric: str = Query("counts", description="Metric to analyze"),
     threshold: float = Query(2.0, description="Standard deviations for anomaly detection"),
@@ -242,7 +370,7 @@ async def detect_anomalies(
     start_date = date.today() - timedelta(days=days)
     
     # Simplified anomaly detection
-    from app.models.data_collection import Count
+    from app.models.counts import Count
     from sqlalchemy import select, func, text
     
     # Get daily totals
@@ -276,7 +404,10 @@ async def detect_anomalies(
     return {"anomalies": []}
 
 
-@router.get("/growth-rate")
+@router.get(
+    "/growth-rate",
+    dependencies=[Depends(deps.PermissionChecker("reports:read"))],
+)
 async def get_growth_rate(
     metric: str = Query("counts", description="Metric to analyze"),
     period: str = Query("monthly", description="daily, weekly, or monthly"),
@@ -292,7 +423,7 @@ async def get_growth_rate(
     effective_scope = str(current_user.path)
     start_date = date.today() - timedelta(days=months * 30)
     
-    from app.models.data_collection import Count
+    from app.models.counts import Count
     from sqlalchemy import select, func, text, extract
     
     # Monthly aggregation
@@ -366,11 +497,33 @@ async def export_excel(
         ws.title = "Counts Report"
         
         # Headers
-        ws.append(["Date", "Location", "Total"])
+        ws.append([
+            "Date",
+            "Location",
+            "Total Attendance",
+            "Men",
+            "Women",
+            "Youth Male",
+            "Youth Female",
+            "Boys",
+            "Girls",
+            "Record Count",
+        ])
         
         # Data
         for item in data:
-            ws.append([str(item.date), item.location_name or "N/A", item.total])
+            ws.append([
+                str(item.day),
+                item.location_name or "N/A",
+                item.total_attendance,
+                item.total_men,
+                item.total_women,
+                item.total_youth_male,
+                item.total_youth_female,
+                item.total_boys,
+                item.total_girls,
+                item.record_count,
+            ])
         
         # Save to BytesIO
         buffer = BytesIO()
@@ -383,7 +536,41 @@ async def export_excel(
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             headers={"Content-Disposition": f"attachment; filename={filename}"}
         )
-    
+    if report_type == "financial":
+        data = await ReportService.get_financial_summary(db, effective_scope, start_date, end_date)
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Financial Report"
+        ws.append(["Month", "Location", "Total Amount", "Transactions"])
+        for item in data:
+            ws.append([str(item.month), item.location_name or "N/A", item.total_amount, item.transaction_count])
+        buffer = BytesIO()
+        wb.save(buffer)
+        buffer.seek(0)
+        filename = f"financial_{start_date}_{end_date}.xlsx"
+        return StreamingResponse(
+            iter([buffer.getvalue()]),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+    if report_type == "attendance":
+        data = await ReportService.get_attendance_trends(db, effective_scope, start_date, end_date)
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Attendance Report"
+        ws.append(["Week", "Location", "Status", "Worker Count"])
+        for item in data:
+            ws.append([str(item.week), item.location_name or "N/A", item.status, item.worker_count])
+        buffer = BytesIO()
+        wb.save(buffer)
+        buffer.seek(0)
+        filename = f"attendance_{start_date}_{end_date}.xlsx"
+        return StreamingResponse(
+            iter([buffer.getvalue()]),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+
     raise HTTPException(status_code=400, detail="Report type not supported")
 
 
@@ -431,9 +618,31 @@ async def export_pdf(
         elements.append(title)
         
         # Table data
-        table_data = [["Date", "Location", "Total"]]
+        table_data = [[
+            "Date",
+            "Location",
+            "Total Attendance",
+            "Men",
+            "Women",
+            "Youth Male",
+            "Youth Female",
+            "Boys",
+            "Girls",
+            "Record Count",
+        ]]
         for item in data[:50]:  # Limit to 50 rows for PDF
-            table_data.append([str(item.date), item.location_name or "N/A", str(item.total)])
+            table_data.append([
+                str(item.day),
+                item.location_name or "N/A",
+                str(item.total_attendance),
+                str(item.total_men),
+                str(item.total_women),
+                str(item.total_youth_male),
+                str(item.total_youth_female),
+                str(item.total_boys),
+                str(item.total_girls),
+                str(item.record_count),
+            ])
         
         # Create table
         t = Table(table_data)
@@ -459,6 +668,68 @@ async def export_pdf(
             media_type="application/pdf",
             headers={"Content-Disposition": f"attachment; filename={filename}"}
         )
-    
+    if report_type == "financial":
+        data = await ReportService.get_financial_summary(db, effective_scope, start_date, end_date)
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4)
+        elements = []
+        styles = getSampleStyleSheet()
+        title = Paragraph(f"Financial Report: {start_date} to {end_date}", styles['Title'])
+        elements.append(title)
+        table_data = [["Month", "Location", "Total Amount", "Transactions"]]
+        for item in data[:50]:
+            table_data.append([str(item.month), item.location_name or "N/A", str(item.total_amount), str(item.transaction_count)])
+        t = Table(table_data)
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 14),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black)
+        ]))
+        elements.append(t)
+        doc.build(elements)
+        buffer.seek(0)
+        filename = f"financial_{start_date}_{end_date}.pdf"
+        return StreamingResponse(
+            iter([buffer.getvalue()]),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+    if report_type == "attendance":
+        data = await ReportService.get_attendance_trends(db, effective_scope, start_date, end_date)
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4)
+        elements = []
+        styles = getSampleStyleSheet()
+        title = Paragraph(f"Attendance Report: {start_date} to {end_date}", styles['Title'])
+        elements.append(title)
+        table_data = [["Week", "Location", "Status", "Worker Count"]]
+        for item in data[:50]:
+            table_data.append([str(item.week), item.location_name or "N/A", item.status, str(item.worker_count)])
+        t = Table(table_data)
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 14),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black)
+        ]))
+        elements.append(t)
+        doc.build(elements)
+        buffer.seek(0)
+        filename = f"attendance_{start_date}_{end_date}.pdf"
+        return StreamingResponse(
+            iter([buffer.getvalue()]),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+
     raise HTTPException(status_code=400, detail="Report type not supported")
 

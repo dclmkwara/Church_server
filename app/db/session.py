@@ -7,9 +7,18 @@ from typing import AsyncGenerator
 from app.core.config import settings
 
 
+# Normalize DATABASE_URL for asyncpg compatibility
+# Render/Supabase may provide postgresql:// but asyncpg needs postgresql+asyncpg://
+_db_url = settings.DATABASE_URL
+if _db_url.startswith("postgresql://"):
+    _db_url = _db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+elif _db_url.startswith("postgres://"):
+    _db_url = _db_url.replace("postgres://", "postgresql+asyncpg://", 1)
+
+
 # Create async engine
 engine = create_async_engine(
-    settings.DATABASE_URL,
+    _db_url,
     echo=settings.DEBUG,
     pool_pre_ping=True,
     pool_size=10,

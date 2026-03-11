@@ -351,6 +351,8 @@ class CRUDLocation(CRUDBase[Location, LocationCreate, LocationUpdate]):
             church_type=obj_in.church_type,
             address=obj_in.address,
             associate_cord=obj_in.associate_cord,
+            latitude=obj_in.latitude,
+            longitude=obj_in.longitude,
             path=new_path
         )
         db.add(db_obj)

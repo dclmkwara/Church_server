@@ -53,7 +53,11 @@ async def get_system_metadata(
         server_time=datetime.utcnow()
     )
 
-@router.get("/audit-logs", response_model=List[AuditLogResponse])
+@router.get(
+    "/audit-logs",
+    response_model=List[AuditLogResponse],
+    dependencies=[Depends(deps.PermissionChecker("system:read_audit_logs"))],
+)
 async def get_audit_logs(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
@@ -62,7 +66,7 @@ async def get_audit_logs(
 ):
     """
     Get audit logs (admin only).
-    TODO: Add permission check for admin role.
+    Permission enforced via PermissionChecker ("system:read_audit_logs").
     """
     stmt = select(AuditLog).order_by(AuditLog.ts_utc.desc()).offset(skip).limit(limit)
     result = await db.execute(stmt)
@@ -98,7 +102,8 @@ async def get_system_metrics(
         raise HTTPException(status_code=403, detail="Admin access required")
     
     from sqlalchemy import text, func
-    from app.models.data_collection import Count, Offering
+    from app.models.counts import Count
+    from app.models.offerings import Offering
     from app.models.user import User as UserModel, Worker
     from app.models.location import Location
     
@@ -130,7 +135,7 @@ async def get_system_metrics(
     }
 
 
-@router.post("/seed")
+@router.post("/seed", dependencies=[Depends(deps.PermissionChecker("system:seed"))])
 async def seed_database(
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_user),

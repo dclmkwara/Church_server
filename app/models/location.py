@@ -31,7 +31,7 @@ Example hierarchy:
                         └── Fellowship: F001
 """
 from typing import Optional, List
-from sqlalchemy import Column, String, ForeignKey, Integer, Text, Boolean, DateTime
+from sqlalchemy import Column, String, ForeignKey, Integer, Text, Boolean, DateTime, Float
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 from sqlalchemy.sql import func
 from app.db.base import Base
@@ -172,6 +172,8 @@ class Location(Base, TimestampMixin, AuditMixin):
     church_type = Column(String, nullable=False) # DLBC, DLCF, DLSO
     address = Column(String, nullable=True)
     associate_cord = Column(String, nullable=True)
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
     
     # Hierarchy
     path = Column(LtreeType, nullable=False, index=True)

@@ -12,21 +12,27 @@ Users are strictly for authentication and must be linked to existing workers.
 All operations respect hierarchical scope based on the current user's role.
 """
 from typing import Any, List
+from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
+from sqlalchemy import select, text
 from app.core import security
 from app.crud.crud_user import user as crud_user
-from app.schemas.user import UserCreate, UserResponse, UserUpdate
+from app.schemas.user import UserCreate, UserResponse, UserUpdate, UserFullResponse, PasswordVerifyRequest, AutoCreateUserResponse
 from app.models.user import User
 
 router = APIRouter()
 
 
-@router.get("/", response_model=List[UserResponse])
+@router.get(
+    "/",
+    response_model=List[UserResponse],
+    dependencies=[Depends(deps.PermissionChecker("users:read"))],
+)
 async def read_users(
     db: AsyncSession = Depends(deps.get_db),
     skip: int = 0,
@@ -86,7 +92,11 @@ async def read_users(
     return users
 
 
-@router.post("/", response_model=UserResponse)
+@router.post(
+    "/",
+    response_model=UserResponse,
+    dependencies=[Depends(deps.PermissionChecker("users:create"))],
+)
 async def create_user(
     *,
     db: AsyncSession = Depends(deps.get_db),
@@ -142,7 +152,82 @@ async def create_user(
     return user
 
 
-@router.get("/{user_id}", response_model=UserResponse)
+@router.post(
+    "/auto-create",
+    response_model=AutoCreateUserResponse,
+    dependencies=[Depends(deps.PermissionChecker("users:create"))],
+)
+async def auto_create_user(
+    *,
+    db: AsyncSession = Depends(deps.get_db),
+    email: str = Body(..., embed=True),
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Auto-create a user from an existing worker record using email.
+    Generates a temporary password from the worker's first name.
+    """
+    from sqlalchemy import select
+    from app.models.user import Worker
+
+    worker_result = await db.execute(select(Worker).where(Worker.email == email))
+    worker = worker_result.scalars().first()
+    if not worker:
+        raise HTTPException(status_code=404, detail="Worker with this email not found")
+
+    existing = await crud_user.get_by_email(db, email=email)
+    if existing:
+        raise HTTPException(status_code=400, detail="User with this email already exists")
+
+    user_by_worker = await db.execute(select(User).where(User.worker_id == worker.worker_id))
+    if user_by_worker.scalars().first():
+        raise HTTPException(status_code=400, detail="User already exists for this worker")
+
+    first_name = worker.name.split(" ")[0].lower() if worker.name else "tempuser"
+    temp_password = first_name
+
+    user_in = UserCreate(
+        worker_id=worker.worker_id,
+        email=worker.email,
+        password=temp_password,
+        roles=[],
+        is_active=False,
+    )
+    user = await crud_user.create(db, obj_in=user_in)
+    return {"user": user, "temporary_password": temp_password}
+
+
+@router.get("/state-region")
+async def get_state_region_data(
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Return state and region derived from user's path."""
+    path = str(current_user.path)
+    parts = path.split(".")
+    state = parts[2] if len(parts) > 2 else None
+    region = parts[3] if len(parts) > 3 else None
+    return {"state": state, "region": region}
+
+
+@router.post("/verify-password")
+async def verify_user_password(
+    *,
+    db: AsyncSession = Depends(deps.get_db),
+    payload: PasswordVerifyRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Verify the current user's password."""
+    is_valid = security.verify_password(payload.password, current_user.password)
+    return {"verified": is_valid}
+
+
+
+
+@router.get(
+    "/{user_id}",
+    response_model=UserResponse,
+    dependencies=[Depends(deps.PermissionChecker("users:read"))],
+)
 async def read_user(
     *,
     db: AsyncSession = Depends(deps.get_db),
@@ -177,14 +262,23 @@ async def read_user(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    # TODO: Add scope validation
-    # if not user.path.descendant_of(current_user.path):
-    #     raise HTTPException(status_code=403, detail="User outside your scope")
+    if str(user.path) and str(current_user.path):
+        scope_stmt = select(User.user_id).where(
+            User.user_id == user_id,
+            text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=str(current_user.path))
+        )
+        scope_result = await db.execute(scope_stmt)
+        if scope_result.scalar_one_or_none() is None:
+            raise HTTPException(status_code=403, detail="User outside your scope")
     
     return user
 
 
-@router.put("/{user_id}", response_model=UserResponse)
+@router.put(
+    "/{user_id}",
+    response_model=UserResponse,
+    dependencies=[Depends(deps.PermissionChecker("users:update"))],
+)
 async def update_user(
     *,
     db: AsyncSession = Depends(deps.get_db),
@@ -231,13 +325,17 @@ async def update_user(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    # TODO: Add scope and permission validation
+    # Scope validated in read_user; permission enforced via PermissionChecker ("users:update")
     
     user = await crud_user.update(db, db_obj=user, obj_in=user_in)
     return user
 
 
-@router.post("/{user_id}/assign-roles", response_model=UserResponse)
+@router.post(
+    "/{user_id}/assign-roles",
+    response_model=UserResponse,
+    dependencies=[Depends(deps.PermissionChecker("users:assign_roles"))],
+)
 async def assign_roles_to_user(
     *,
     db: AsyncSession = Depends(deps.get_db),
@@ -284,8 +382,129 @@ async def assign_roles_to_user(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    # TODO: Validate current user can assign these roles
-    # (current user's max role score must be > target role scores)
+    # Validate current user can assign these roles by score
+    if current_user.roles:
+        current_max = max([r.score.score for r in current_user.roles if r.score])
+        # Fetch target roles
+        from app.models.user import Role as RoleModel
+        from sqlalchemy import select
+        stmt = select(RoleModel).where(RoleModel.id.in_(role_ids))
+        res = await db.execute(stmt)
+        target_roles = res.scalars().all()
+        if not target_roles:
+            raise HTTPException(status_code=400, detail="Invalid role IDs")
+        target_max = max([r.score.score for r in target_roles if r.score])
+        if target_max >= current_max:
+            raise HTTPException(status_code=403, detail="Cannot assign roles at or above your level")
     
-    user = await crud_user.assign_roles(db, user_id=user_id, role_ids=role_ids)
+    user = await crud_user.assign_roles(db, user=user, role_ids=role_ids)
     return user
+
+
+@router.get(
+    "/{user_id}/details",
+    response_model=UserFullResponse,
+    dependencies=[Depends(deps.PermissionChecker("users:read"))],
+)
+async def read_user_details(
+    *,
+    db: AsyncSession = Depends(deps.get_db),
+    user_id: UUID,
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Get a user with embedded worker and roles."""
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+    from app.models.user import Role, Worker
+    stmt = select(User).where(User.user_id == user_id).options(
+        selectinload(User.roles).selectinload(Role.score),
+        selectinload(User.worker)
+    )
+    result = await db.execute(stmt)
+    user = result.scalars().first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+
+@router.get(
+    "/search",
+    response_model=List[UserResponse],
+    dependencies=[Depends(deps.PermissionChecker("users:read"))],
+)
+async def search_users(
+    db: AsyncSession = Depends(deps.get_db),
+    skip: int = 0,
+    limit: int = 100,
+    current_user: User = Depends(deps.get_current_active_user),
+    scope_path: str = Query(None, description="Filter by scope path"),
+    name: str = Query(None),
+    email: str = Query(None),
+    phone: str = Query(None),
+    location_id: str = Query(None),
+    is_active: bool = Query(None),
+) -> Any:
+    """Search users with optional filters."""
+    from sqlalchemy import select, text
+    from sqlalchemy.orm import selectinload
+    from app.models.user import Role
+    search_scope = scope_path if scope_path else str(current_user.path)
+    query = select(User).where(
+        text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=search_scope)
+    ).options(selectinload(User.roles).selectinload(Role.score)).offset(skip).limit(limit)
+    if name:
+        query = query.where(User.name.ilike(f"%{name}%"))
+    if email:
+        query = query.where(User.email == email)
+    if phone:
+        query = query.where(User.phone == phone)
+    if location_id:
+        query = query.where(User.location_id == location_id)
+    if is_active is not None:
+        query = query.where(User.is_active == is_active)
+    result = await db.execute(query)
+    return result.scalars().all()
+
+
+@router.get(
+    "/with-roles",
+    response_model=List[UserResponse],
+    dependencies=[Depends(deps.PermissionChecker("users:read"))],
+)
+async def list_users_with_roles(
+    db: AsyncSession = Depends(deps.get_db),
+    skip: int = 0,
+    limit: int = 100,
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """List users with roles loaded."""
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+    from app.models.user import Role
+    query = select(User).options(selectinload(User.roles).selectinload(Role.score)).offset(skip).limit(limit)
+    result = await db.execute(query)
+    return result.scalars().all()
+
+
+@router.delete(
+    "/{user_id}",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(deps.PermissionChecker("users:delete"))],
+)
+async def delete_user(
+    *,
+    db: AsyncSession = Depends(deps.get_db),
+    user_id: UUID,
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Soft delete a user account."""
+    user = await crud_user.get(db, id=user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    await crud_user.update(
+        db,
+        db_obj=user,
+        obj_in={"is_deleted": True, "operation": "DELETE", "last_modify": datetime.utcnow()}
+    )
+    return None

@@ -49,22 +49,40 @@ markdown_extensions:
   - md_in_html
 
 nav:
-  - Home: README.md
+  - Home: index.md
+  - Overview: OVERVIEW.md
+  - Features: FEATURES.md
+  - Limitations: LIMITATIONS.md
+  - Maintainers: MAINTAINERS.md
+  - Non-Technical:
+      - Guide: NON_TECHNICAL_GUIDE.md
+      - Quickstart: NON_TECHNICAL_QUICKSTART.md
+      - Glossary: GLOSSARY_PLAIN.md
   - Getting Started:
+      - Project Readme: README.md
       - Quick Start: QUICK_START.md
       - Setup Guide: SETUP.md
       - Deployment: DEPLOYMENT.md
   - Architecture:
       - System Overview: COMPREHENSIVE_ANALYSIS.md
       - Architecture: ARCHITECTURE.md
+      - Hierarchy Diagram: HIERARCHY_DIAGRAM.md
       - Database Schema: DATABASE_SCHEMA.md
       - Security & Access Control: SECURITY.md
       - Data Flow: DATA_FLOW.md
+      - Data Flow Diagrams: DATA_FLOW_DIAGRAMS.md
+      - Advanced Data Flows: ADVANCED_DATA_FLOWS.md
+      - More Diagrams: MORE_DIAGRAMS.md
+      - Extra Diagrams: EXTRA_DIAGRAMS.md
+      - Data Governance: DATA_GOVERNANCE.md
   - API Reference:
       - Complete API Docs: API_DOCUMENTATION.md
       - Authentication: AUTHENTICATION.md
       - Route Catalog: ROUTE_CATALOG.md
+      - Route Details: ROUTE_DETAILS.md
+      - Permissions Matrix: PERMISSIONS_MATRIX.md
       - Missing Routes: MISSING_ROUTES_ANALYSIS.md
+  - Quick Reference: QUICK_REFERENCE.md
   - Development:
       - Tech Stack: TECH_STACK.md
       - Testing Guide: TESTING.md

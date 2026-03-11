@@ -156,6 +156,8 @@ class LocationBase(BaseModel):
     church_type: str # DLBC, DLCF...
     address: Optional[str] = None
     associate_cord: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
 
 class LocationCreate(LocationBase):
     """Schema for creating a Location."""
@@ -168,6 +170,8 @@ class LocationUpdate(BaseModel):
     church_type: Optional[str] = None
     address: Optional[str] = None
     associate_cord: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
 
 class LocationResponse(LocationBase):
     """Schema for Location response."""
@@ -176,6 +180,22 @@ class LocationResponse(LocationBase):
     path: str
     formatted_id: str
     created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class LocationDetailResponse(BaseModel):
+    """Schema for detailed location info with hierarchy names."""
+    location_id: str
+    location_name: str
+    church_type: str
+    group_id: str
+    group_name: str
+    region_id: str
+    region_name: str
+    state_id: str
+    state_name: str
 
     class Config:
         from_attributes = True

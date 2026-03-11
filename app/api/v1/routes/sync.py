@@ -8,6 +8,8 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Body, Query
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, func, text
+from datetime import datetime
 
 from app.api import deps
 from app.models.user import User
@@ -25,6 +27,129 @@ from app.crud.crud_fellowship_activities import (
 )
 
 router = APIRouter()
+
+
+def _parse_iso_datetime(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+async def _client_id_conflicts(
+    db: AsyncSession,
+    model: Any,
+    model_key: str,
+    scope_path: str,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    query = select(
+        model.client_id.label("client_id"),
+        func.count(model.id).label("count")
+    ).where(
+        model.client_id.isnot(None),
+        text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
+    ).group_by(model.client_id).having(func.count(model.id) > 1).limit(limit)
+    result = await db.execute(query)
+    conflicts = []
+    for row in result:
+        conflicts.append({
+            "conflict_id": f"{model_key}:client_id:{row.client_id}",
+            "model": model_key,
+            "kind": "client_id",
+            "client_id": str(row.client_id),
+            "count": row.count,
+        })
+    return conflicts
+
+
+async def _counts_key_conflicts(
+    db: AsyncSession,
+    scope_path: str,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    from app.models.counts import Count
+    query = select(
+        Count.location_id,
+        Count.date,
+        Count.event_id,
+        func.count(Count.id).label("count"),
+    ).where(
+        text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
+    ).group_by(Count.location_id, Count.date, Count.event_id).having(func.count(Count.id) > 1).limit(limit)
+    result = await db.execute(query)
+    conflicts = []
+    for row in result:
+        event_id = row.event_id if row.event_id else "none"
+        key = f"{row.location_id}|{row.date.isoformat()}|{event_id}"
+        conflicts.append({
+            "conflict_id": f"counts:key:{key}",
+            "model": "counts",
+            "kind": "key",
+            "location_id": row.location_id,
+            "date": str(row.date),
+            "event_id": str(row.event_id) if row.event_id else None,
+            "count": row.count,
+        })
+    return conflicts
+
+
+async def _offerings_key_conflicts(
+    db: AsyncSession,
+    scope_path: str,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    from app.models.offerings import Offering
+    query = select(
+        Offering.location_id,
+        Offering.date,
+        Offering.event_id,
+        Offering.fund_type,
+        func.count(Offering.id).label("count"),
+    ).where(
+        text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
+    ).group_by(Offering.location_id, Offering.date, Offering.event_id, Offering.fund_type).having(func.count(Offering.id) > 1).limit(limit)
+    result = await db.execute(query)
+    conflicts = []
+    for row in result:
+        event_id = row.event_id if row.event_id else "none"
+        key = f"{row.location_id}|{row.date.isoformat()}|{event_id}|{row.fund_type}"
+        conflicts.append({
+            "conflict_id": f"offerings:key:{key}",
+            "model": "offerings",
+            "kind": "key",
+            "location_id": row.location_id,
+            "date": str(row.date),
+            "event_id": str(row.event_id) if row.event_id else None,
+            "fund_type": row.fund_type,
+            "count": row.count,
+        })
+    return conflicts
+
+
+async def _attendance_key_conflicts(
+    db: AsyncSession,
+    scope_path: str,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    from app.models.attendance import WorkerAttendance
+    query = select(
+        WorkerAttendance.worker_id,
+        WorkerAttendance.event_id,
+        func.count(WorkerAttendance.id).label("count"),
+    ).where(
+        text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
+    ).group_by(WorkerAttendance.worker_id, WorkerAttendance.event_id).having(func.count(WorkerAttendance.id) > 1).limit(limit)
+    result = await db.execute(query)
+    conflicts = []
+    for row in result:
+        key = f"{row.worker_id}|{row.event_id}"
+        conflicts.append({
+            "conflict_id": f"worker_attendance:key:{key}",
+            "model": "worker_attendance",
+            "kind": "key",
+            "worker_id": str(row.worker_id),
+            "event_id": str(row.event_id),
+            "count": row.count,
+        })
+    return conflicts
 
 async def process_sync_list(
     db: AsyncSession, 
@@ -93,7 +218,11 @@ async def process_sync_list(
     return result
 
 
-@router.post("/batch", response_model=SyncBatchResponse)
+@router.post(
+    "/batch",
+    response_model=SyncBatchResponse,
+    dependencies=[Depends(deps.PermissionChecker("sync:batch"))],
+)
 async def batch_sync(
     *,
     db: AsyncSession = Depends(deps.get_db),
@@ -126,7 +255,10 @@ async def batch_sync(
     )
 
 
-@router.get("/changes")
+@router.get(
+    "/changes",
+    dependencies=[Depends(deps.PermissionChecker("sync:read_changes"))],
+)
 async def get_incremental_changes(
     *,
     db: AsyncSession = Depends(deps.get_db),
@@ -140,7 +272,10 @@ async def get_incremental_changes(
     filtered by user's scope. More efficient than full batch sync.
     """
     from datetime import datetime
-    from app.models.data_collection import Count, Offering, Record, WorkerAttendance
+    from app.models.counts import Count
+    from app.models.offerings import Offering
+    from app.models.records import Record
+    from app.models.attendance import WorkerAttendance
     from sqlalchemy import and_, text
     
     try:
@@ -187,7 +322,10 @@ async def get_incremental_changes(
     }
 
 
-@router.get("/conflicts")
+@router.get(
+    "/conflicts",
+    dependencies=[Depends(deps.PermissionChecker("sync:conflicts"))],
+)
 async def get_sync_conflicts(
     *,
     db: AsyncSession = Depends(deps.get_db),
@@ -198,20 +336,38 @@ async def get_sync_conflicts(
     
     Returns records that have potential conflicts (e.g., duplicate client_ids,
     same date/location combinations, etc.)
-    
-    Note: This is a placeholder. Full conflict detection requires
-    additional tracking tables or status fields.
     """
-    # In a full implementation, you'd have a conflicts table
-    # For now, return empty list as conflicts are handled during sync
-    
+    scope_path = str(current_user.path)
+    conflicts: List[Dict[str, Any]] = []
+
+    from app.models.counts import Count
+    from app.models.offerings import Offering
+    from app.models.records import Record
+    from app.models.attendance import WorkerAttendance
+    from app.models.fellowship_activities import FellowshipMember, FellowshipAttendance, FellowshipOffering
+
+    conflicts.extend(await _client_id_conflicts(db, Count, "counts", scope_path))
+    conflicts.extend(await _client_id_conflicts(db, Offering, "offerings", scope_path))
+    conflicts.extend(await _client_id_conflicts(db, Record, "records", scope_path))
+    conflicts.extend(await _client_id_conflicts(db, WorkerAttendance, "worker_attendance", scope_path))
+    conflicts.extend(await _client_id_conflicts(db, FellowshipMember, "fellowship_members", scope_path))
+    conflicts.extend(await _client_id_conflicts(db, FellowshipAttendance, "fellowship_attendance", scope_path))
+    conflicts.extend(await _client_id_conflicts(db, FellowshipOffering, "fellowship_offerings", scope_path))
+
+    conflicts.extend(await _counts_key_conflicts(db, scope_path))
+    conflicts.extend(await _offerings_key_conflicts(db, scope_path))
+    conflicts.extend(await _attendance_key_conflicts(db, scope_path))
+
     return {
-        "conflicts": [],
-        "message": "Conflict detection is handled during batch sync. Duplicates are automatically ignored."
+        "conflicts": conflicts,
+        "total": len(conflicts),
     }
 
 
-@router.post("/resolve")
+@router.post(
+    "/resolve",
+    dependencies=[Depends(deps.PermissionChecker("sync:resolve"))],
+)
 async def resolve_conflict(
     *,
     db: AsyncSession = Depends(deps.get_db),
@@ -223,19 +379,157 @@ async def resolve_conflict(
     Resolve a sync conflict.
     
     Applies the chosen resolution strategy to a conflicted record.
-    
-    Note: This is a placeholder. Full conflict resolution requires
-    additional conflict tracking infrastructure.
     """
-    # In a full implementation, you'd:
-    # 1. Fetch the conflict record
-    # 2. Apply the resolution strategy
-    # 3. Update both client and server records
-    # 4. Mark conflict as resolved
-    
+    parts = conflict_id.split(":", 2)
+    if len(parts) != 3:
+        raise HTTPException(status_code=400, detail="Invalid conflict_id format")
+    model_key, kind, key = parts
+
+    scope_path = str(current_user.path)
+
+    model_map = {
+        "counts": "Count",
+        "offerings": "Offering",
+        "records": "Record",
+        "worker_attendance": "WorkerAttendance",
+        "fellowship_members": "FellowshipMember",
+        "fellowship_attendance": "FellowshipAttendance",
+        "fellowship_offerings": "FellowshipOffering",
+    }
+    if model_key not in model_map:
+        raise HTTPException(status_code=400, detail="Unknown model key")
+
+    from app.models.counts import Count
+    from app.models.offerings import Offering
+    from app.models.records import Record
+    from app.models.attendance import WorkerAttendance
+    from app.models.fellowship_activities import FellowshipMember, FellowshipAttendance, FellowshipOffering
+
+    model_lookup = {
+        "counts": Count,
+        "offerings": Offering,
+        "records": Record,
+        "worker_attendance": WorkerAttendance,
+        "fellowship_members": FellowshipMember,
+        "fellowship_attendance": FellowshipAttendance,
+        "fellowship_offerings": FellowshipOffering,
+    }
+    model = model_lookup[model_key]
+
+    records = []
+    if kind == "client_id":
+        try:
+            client_uuid = UUID(key)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid client_id format")
+        query = select(model).where(
+            model.client_id == client_uuid,
+            text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
+        )
+        records = (await db.execute(query)).scalars().all()
+        if len(records) < 2:
+            return {"success": True, "message": "No conflict to resolve"}
+        records.sort(key=lambda r: r.created_at or datetime.min)
+        if resolution == "keep_client":
+            keep = records[0]
+            delete = records[1:]
+        elif resolution == "keep_server":
+            keep = records[-1]
+            delete = records[:-1]
+        elif resolution == "merge":
+            raise HTTPException(status_code=400, detail="Merge not supported for client_id conflicts")
+        else:
+            raise HTTPException(status_code=400, detail="Invalid resolution strategy")
+    elif kind == "key":
+        if model_key == "counts":
+            parts_key = key.split("|")
+            if len(parts_key) != 3:
+                raise HTTPException(status_code=400, detail="Invalid key format")
+            location_id, date_str, event_id = parts_key
+            date_val = _parse_iso_datetime(date_str)
+            event_val = None if event_id in ("none", "null", "") else UUID(event_id)
+            query = select(Count).where(
+                Count.location_id == location_id,
+                Count.date == date_val,
+                Count.event_id == event_val,
+                text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path),
+            )
+            records = (await db.execute(query)).scalars().all()
+        elif model_key == "offerings":
+            parts_key = key.split("|")
+            if len(parts_key) != 4:
+                raise HTTPException(status_code=400, detail="Invalid key format")
+            location_id, date_str, event_id, fund_type = parts_key
+            date_val = _parse_iso_datetime(date_str)
+            event_val = None if event_id in ("none", "null", "") else UUID(event_id)
+            query = select(Offering).where(
+                Offering.location_id == location_id,
+                Offering.date == date_val,
+                Offering.event_id == event_val,
+                Offering.fund_type == fund_type,
+                text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path),
+            )
+            records = (await db.execute(query)).scalars().all()
+        elif model_key == "worker_attendance":
+            parts_key = key.split("|")
+            if len(parts_key) != 2:
+                raise HTTPException(status_code=400, detail="Invalid key format")
+            worker_id, event_id = parts_key
+            query = select(WorkerAttendance).where(
+                WorkerAttendance.worker_id == UUID(worker_id),
+                WorkerAttendance.event_id == UUID(event_id),
+                text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path),
+            )
+            records = (await db.execute(query)).scalars().all()
+        else:
+            raise HTTPException(status_code=400, detail="Key conflicts not supported for this model")
+
+        if len(records) < 2:
+            return {"success": True, "message": "No conflict to resolve"}
+        records.sort(key=lambda r: r.created_at or datetime.min)
+        if resolution == "keep_client":
+            keep = records[0]
+            delete = records[1:]
+        elif resolution == "keep_server":
+            keep = records[-1]
+            delete = records[:-1]
+        elif resolution == "merge":
+            keep = records[-1]
+            delete = [r for r in records if r is not keep]
+            if model_key == "counts":
+                keep.adult_male = sum(r.adult_male or 0 for r in records)
+                keep.adult_female = sum(r.adult_female or 0 for r in records)
+                keep.youth_male = sum(r.youth_male or 0 for r in records)
+                keep.youth_female = sum(r.youth_female or 0 for r in records)
+                keep.boys = sum(r.boys or 0 for r in records)
+                keep.girls = sum(r.girls or 0 for r in records)
+                keep.calculate_total()
+                keep.operation = "UPDATE"
+                keep.last_modify = datetime.utcnow()
+            elif model_key == "offerings":
+                keep.amount = sum(r.amount or 0 for r in records)
+                keep.operation = "UPDATE"
+                keep.last_modify = datetime.utcnow()
+            elif model_key == "worker_attendance":
+                raise HTTPException(status_code=400, detail="Merge not supported for attendance conflicts")
+        else:
+            raise HTTPException(status_code=400, detail="Invalid resolution strategy")
+    else:
+        raise HTTPException(status_code=400, detail="Invalid conflict kind")
+
+    for obj in delete:
+        if hasattr(obj, "is_deleted"):
+            obj.is_deleted = True
+            obj.operation = "DELETE"
+            obj.last_modify = datetime.utcnow()
+        db.add(obj)
+    db.add(keep)
+    await db.commit()
+
     return {
         "success": True,
         "message": f"Conflict {conflict_id} resolved using strategy: {resolution}",
-        "note": "Full conflict resolution will be implemented in Phase 2"
+        "kept_id": str(keep.id),
+        "deleted_count": len(delete),
     }
 

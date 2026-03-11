@@ -39,6 +39,7 @@ class Offering(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     # Financial Data
     amount = Column(Numeric(12, 2), nullable=False) # Up to 999,999,999.99
     payment_method = Column(String, nullable=False, index=True) # cash, bank_transfer, mobile_money, check
+    fund_type = Column(String, nullable=False, index=True, default="offering") # offering, tithe, seed, etc.
     
     # Metadata
     status = Column(String, default="pending", index=True) # pending, approved, rejected

@@ -23,6 +23,14 @@ class FellowshipMemberBase(BaseModel):
 class FellowshipMemberCreate(FellowshipMemberBase):
     pass
 
+class FellowshipMemberUpdate(BaseModel):
+    name: Optional[str] = None
+    phone: Optional[str] = None
+    gender: Optional[str] = None
+    address: Optional[str] = None
+    role: Optional[str] = None
+    is_active: Optional[bool] = None
+
 class FellowshipMemberResponse(FellowshipMemberBase):
     id: UUID
     path: str
@@ -51,6 +59,15 @@ class FellowshipAttendanceBase(BaseModel):
 class FellowshipAttendanceCreate(FellowshipAttendanceBase):
     pass
 
+class FellowshipAttendanceUpdate(BaseModel):
+    date: Optional[datetime] = None
+    men: Optional[int] = None
+    women: Optional[int] = None
+    youths: Optional[int] = None
+    children: Optional[int] = None
+    topic: Optional[str] = None
+    note: Optional[str] = None
+
 class FellowshipAttendanceResponse(FellowshipAttendanceBase):
     id: UUID
     path: str
@@ -73,6 +90,11 @@ class FellowshipOfferingBase(BaseModel):
 
 class FellowshipOfferingCreate(FellowshipOfferingBase):
     pass
+
+class FellowshipOfferingUpdate(BaseModel):
+    date: Optional[datetime] = None
+    amount: Optional[Decimal] = None
+    note: Optional[str] = None
 
 class FellowshipOfferingResponse(FellowshipOfferingBase):
     id: UUID

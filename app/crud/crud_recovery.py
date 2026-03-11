@@ -8,10 +8,51 @@ from fastapi import HTTPException
 
 from app.crud.base import CRUDBase
 from app.models.user import PasswordResetToken, User
-from app.schemas.recovery import PasswordResetRequest, PasswordResetConfirm
+from app.schemas.recovery import PasswordResetRequest, PasswordResetConfirm, RecoveryQuestionSetup, RecoveryQuestionUpdate
 from app.core.security import hash_password
 
 class CRUDRecovery:
+    async def set_recovery_questions(self, db: AsyncSession, data: RecoveryQuestionSetup) -> User:
+        """Set recovery questions and hashed answers for a user."""
+        stmt = select(User).where(User.user_id == data.user_id)
+        result = await db.execute(stmt)
+        user = result.scalars().first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        user.recovery_question_one = data.recovery_question_one
+        user.recovery_question_two = data.recovery_question_two
+        user.recovery_answer_one = hash_password(data.recovery_answer_one)
+        user.recovery_answer_two = hash_password(data.recovery_answer_two)
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+        return user
+
+    async def get_recovery_questions(self, db: AsyncSession, user_id: str) -> Optional[User]:
+        """Get recovery questions (without answers)."""
+        stmt = select(User).where(User.user_id == user_id)
+        result = await db.execute(stmt)
+        return result.scalars().first()
+
+    async def update_recovery_questions(self, db: AsyncSession, user_id: str, data: RecoveryQuestionUpdate) -> User:
+        """Update recovery questions and answers."""
+        stmt = select(User).where(User.user_id == user_id)
+        result = await db.execute(stmt)
+        user = result.scalars().first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        if data.recovery_question_one is not None:
+            user.recovery_question_one = data.recovery_question_one
+        if data.recovery_question_two is not None:
+            user.recovery_question_two = data.recovery_question_two
+        if data.recovery_answer_one is not None:
+            user.recovery_answer_one = hash_password(data.recovery_answer_one)
+        if data.recovery_answer_two is not None:
+            user.recovery_answer_two = hash_password(data.recovery_answer_two)
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+        return user
     async def create_token(self, db: AsyncSession, email: str) -> Optional[PasswordResetToken]:
         # Check if user exists
         stmt = select(User).where(User.email == email)

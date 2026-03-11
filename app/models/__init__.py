@@ -24,5 +24,7 @@ from app.models.fellowship_activities import FellowshipMember, FellowshipAttenda
 from app.models.audit import IdempotencyKey, AuditLog
 from app.models.announcement import Announcement, AnnouncementItem
 from app.models.media import MediaGallery, MediaItem
+from app.models.app_version import AppVersion
+from app.models.approvals import TransferRequest, StatusChangeRequest
 # from app.models.audit import AuditLog, ClientSyncQueue, ExportJob
 # from app.models.version import AppVersion

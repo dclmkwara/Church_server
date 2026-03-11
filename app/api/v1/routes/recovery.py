@@ -4,7 +4,10 @@ from typing import Any
 
 from app.api import deps
 from app.crud.crud_recovery import recovery
-from app.schemas.recovery import PasswordResetRequest, PasswordResetConfirm, PasswordResetResponse, PasswordResetVerify
+from app.schemas.recovery import (
+    PasswordResetRequest, PasswordResetConfirm, PasswordResetResponse, PasswordResetVerify,
+    RecoveryQuestionSetup, RecoveryQuestionUpdate, RecoveryQuestionResponse
+)
 
 router = APIRouter()
 
@@ -56,3 +59,48 @@ async def reset_password(
         raise HTTPException(status_code=400, detail="Invalid or expired token")
         
     return {"message": "Password reset successfully"}
+
+
+@router.post("/set-recovery-question", response_model=RecoveryQuestionResponse)
+async def set_recovery_question(
+    data: RecoveryQuestionSetup,
+    db: AsyncSession = Depends(deps.get_db)
+) -> Any:
+    """Set recovery questions for a user."""
+    user = await recovery.set_recovery_questions(db, data)
+    return RecoveryQuestionResponse(
+        user_id=str(user.user_id),
+        recovery_question_one=user.recovery_question_one,
+        recovery_question_two=user.recovery_question_two
+    )
+
+
+@router.get("/read-recovery-question", response_model=RecoveryQuestionResponse)
+async def read_recovery_question(
+    user_id: str,
+    db: AsyncSession = Depends(deps.get_db)
+) -> Any:
+    """Read recovery questions for a user."""
+    user = await recovery.get_recovery_questions(db, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return RecoveryQuestionResponse(
+        user_id=str(user.user_id),
+        recovery_question_one=user.recovery_question_one,
+        recovery_question_two=user.recovery_question_two
+    )
+
+
+@router.patch("/update-recovery-question", response_model=RecoveryQuestionResponse)
+async def update_recovery_question(
+    user_id: str,
+    data: RecoveryQuestionUpdate,
+    db: AsyncSession = Depends(deps.get_db)
+) -> Any:
+    """Update recovery questions for a user."""
+    user = await recovery.update_recovery_questions(db, user_id, data)
+    return RecoveryQuestionResponse(
+        user_id=str(user.user_id),
+        recovery_question_one=user.recovery_question_one,
+        recovery_question_two=user.recovery_question_two
+    )

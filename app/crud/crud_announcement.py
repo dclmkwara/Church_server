@@ -1,5 +1,5 @@
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, date
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
 from sqlalchemy.orm import selectinload
@@ -61,6 +61,11 @@ class CRUDAnnouncement:
         db: AsyncSession,
         scope_path: str,
         is_active: Optional[bool] = None,
+        region_id: Optional[str] = None,
+        meeting: Optional[str] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        get_last: Optional[bool] = None,
         skip: int = 0,
         limit: int = 100
     ) -> List[Announcement]:
@@ -74,8 +79,21 @@ class CRUDAnnouncement:
         
         if is_active is not None:
             stmt = stmt.where(Announcement.is_active == is_active)
+        if region_id:
+            stmt = stmt.where(Announcement.region_id == region_id)
+        if meeting:
+            stmt = stmt.where(Announcement.meeting == meeting)
+        if start_date:
+            stmt = stmt.where(Announcement.date >= start_date)
+        if end_date:
+            stmt = stmt.where(Announcement.date <= end_date)
         
-        stmt = stmt.order_by(Announcement.date.desc()).offset(skip).limit(limit)
+        stmt = stmt.order_by(Announcement.date.desc())
+
+        if get_last:
+            stmt = stmt.limit(100)
+        else:
+            stmt = stmt.offset(skip).limit(limit)
         
         result = await db.execute(stmt)
         return list(result.scalars().all())

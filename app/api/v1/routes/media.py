@@ -4,7 +4,7 @@ Media Management Routes.
 from typing import Any, List
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
@@ -20,7 +20,11 @@ from app.models.user import User
 
 router = APIRouter()
 
-@router.post("/galleries", response_model=MediaGalleryResponse)
+@router.post(
+    "/galleries",
+    response_model=MediaGalleryResponse,
+    dependencies=[Depends(deps.PermissionChecker("media:create_gallery"))],
+)
 async def create_gallery(
     *,
     db: AsyncSession = Depends(deps.get_db),
@@ -36,7 +40,11 @@ async def create_gallery(
     return await crud_media.gallery.create(db, obj_in=gallery_in, user_id=current_user.user_id)
 
 
-@router.get("/galleries", response_model=List[MediaGalleryResponse])
+@router.get(
+    "/galleries",
+    response_model=List[MediaGalleryResponse],
+    dependencies=[Depends(deps.PermissionChecker("media:read"))],
+)
 async def read_galleries(
     db: AsyncSession = Depends(deps.get_db),
     skip: int = 0,
@@ -54,7 +62,11 @@ async def read_galleries(
     )
 
 
-@router.get("/galleries/{gallery_id}", response_model=MediaGalleryResponse)
+@router.get(
+    "/galleries/{gallery_id}",
+    response_model=MediaGalleryResponse,
+    dependencies=[Depends(deps.PermissionChecker("media:read"))],
+)
 async def read_gallery(
     *,
     db: AsyncSession = Depends(deps.get_db),
@@ -68,7 +80,11 @@ async def read_gallery(
     return gallery
 
 
-@router.post("/items", response_model=MediaItemResponse)
+@router.post(
+    "/items",
+    response_model=MediaItemResponse,
+    dependencies=[Depends(deps.PermissionChecker("media:create_item"))],
+)
 async def create_item(
     *,
     db: AsyncSession = Depends(deps.get_db),
@@ -82,7 +98,11 @@ async def create_item(
     return await crud_media.item.create(db, obj_in=item_in, user_id=current_user.user_id)
 
 
-@router.get("/galleries/{gallery_id}/items", response_model=List[MediaItemResponse])
+@router.get(
+    "/galleries/{gallery_id}/items",
+    response_model=List[MediaItemResponse],
+    dependencies=[Depends(deps.PermissionChecker("media:read"))],
+)
 async def read_gallery_items(
     *,
     db: AsyncSession = Depends(deps.get_db),
@@ -101,7 +121,11 @@ async def read_gallery_items(
     )
 
 
-@router.delete("/galleries/{gallery_id}", status_code=204)
+@router.delete(
+    "/galleries/{gallery_id}",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(deps.PermissionChecker("media:delete_gallery"))],
+)
 async def delete_gallery(
     *,
     db: AsyncSession = Depends(deps.get_db),
@@ -118,14 +142,17 @@ async def delete_gallery(
     if not gallery:
         raise HTTPException(status_code=404, detail="Gallery not found")
     
-    # Optional: Check if user has permission to delete
-    # For now, any active user can delete (consider adding permission check)
+    # Permission enforced via PermissionChecker ("media:delete_gallery")
     
     await crud_media.gallery.remove(db, id=gallery_id)
     return None
 
 
-@router.delete("/items/{item_id}", status_code=204)
+@router.delete(
+    "/items/{item_id}",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(deps.PermissionChecker("media:delete_item"))],
+)
 async def delete_item(
     *,
     db: AsyncSession = Depends(deps.get_db),
