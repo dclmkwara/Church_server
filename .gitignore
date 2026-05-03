@@ -29,6 +29,13 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 
+# Build artifacts
+build/
+dist/
+*.egg-info/
+.pip-tmp/
+.wheel-test/
+
 # Environments
 .env
 .venv
