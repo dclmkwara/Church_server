@@ -31,6 +31,12 @@ async def create_offering(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Submit a new offering/tithe record."""
+    await deps.get_location_in_scope(
+        db,
+        current_user=current_user,
+        location_id=offering_in.location_id,
+        detail="Offering location outside your scope",
+    )
     created = await crud_offering.create(db, obj_in=offering_in, user_id=current_user.user_id)
     try:
         from app.api.v1.routes.websocket import manager
@@ -59,7 +65,7 @@ async def read_offerings(
     amount: float = Query(None, description="Filter by exact amount"),
 ) -> Any:
     """Retrieve offerings with scope filtering."""
-    search_scope = scope_path if scope_path else str(current_user.path)
+    search_scope = deps.resolve_scope_path(current_user, scope_path)
     return await crud_offering.get_multi_by_scope(
         db,
         scope_path=search_scope,
@@ -88,6 +94,7 @@ async def read_offering(
     offering = await crud_offering.get(db, id=offering_id)
     if not offering:
         raise HTTPException(status_code=404, detail="Offering not found")
+    deps.ensure_path_in_scope(current_user, offering.path, detail="Offering outside your scope")
     return offering
 
 
@@ -107,6 +114,7 @@ async def update_offering(
     offering = await crud_offering.get(db, id=offering_id)
     if not offering:
         raise HTTPException(status_code=404, detail="Offering not found")
+    deps.ensure_path_in_scope(current_user, offering.path, detail="Offering outside your scope")
     
     return await crud_offering.update(db, db_obj=offering, obj_in=offering_in)
 
@@ -134,10 +142,17 @@ async def batch_create_offerings(
                 result.duplicates += 1
                 details.append({"client_id": item.client_id, "id": existing.id, "status": "duplicate"})
                 continue
+            await deps.get_location_in_scope(
+                db,
+                current_user=current_user,
+                location_id=item.location_id,
+                detail="Offering location outside your scope",
+            )
             created = await crud_offering.create(db, obj_in=item, user_id=current_user.user_id)
             result.synced += 1
             details.append({"client_id": item.client_id, "id": created.id, "status": "synced"})
         except Exception as e:
+            await db.rollback()
             result.errors += 1
             details.append({"client_id": item.client_id, "error": str(e), "status": "error"})
     result.details = details
@@ -162,7 +177,7 @@ async def get_offering_stats(
         func.count(Offering.id).label("count"),
         func.coalesce(func.sum(Offering.amount), 0).label("total_amount")
     ).where(
-        text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
+        text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
     )
     if start_date:
         query = query.where(Offering.date >= start_date)
@@ -190,6 +205,7 @@ async def delete_offering(
     offering = await crud_offering.get(db, id=offering_id)
     if not offering:
         raise HTTPException(status_code=404, detail="Offering not found")
+    deps.ensure_path_in_scope(current_user, offering.path, detail="Offering outside your scope")
     
     await crud_offering.update(
         db,

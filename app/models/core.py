@@ -9,6 +9,49 @@ import uuid
 import re
 
 
+STATE_PUBLIC_CODE_MAP = {
+    "abia": "AB",
+    "adamawa": "AD",
+    "akwa ibom": "AK",
+    "anambra": "AN",
+    "bauchi": "BA",
+    "bayelsa": "BY",
+    "benue": "BN",
+    "borno": "BO",
+    "cross river": "CR",
+    "delta": "DT",
+    "ebonyi": "EB",
+    "edo": "ED",
+    "ekiti": "EK",
+    "enugu": "EN",
+    "fct": "FC",
+    "federal capital territory": "FC",
+    "federal capital territory abuja": "FC",
+    "gombe": "GM",
+    "imo": "IM",
+    "jigawa": "JG",
+    "kaduna": "KD",
+    "kano": "KN",
+    "katsina": "KT",
+    "kebbi": "KB",
+    "kogi": "KG",
+    "kwara": "KW",
+    "lagos": "LG",
+    "nasarawa": "NS",
+    "niger": "NG",
+    "ogun": "OG",
+    "ondo": "ON",
+    "osun": "OS",
+    "oyo": "OY",
+    "plateau": "PL",
+    "rivers": "RV",
+    "sokoto": "SK",
+    "taraba": "TR",
+    "yobe": "YB",
+    "zamfara": "ZF",
+}
+
+
 from sqlalchemy import TypeDecorator, cast, String
 from sqlalchemy.types import UserDefinedType
 
@@ -162,6 +205,42 @@ def parse_display_id(display_id: str) -> str:
     segments = [seg.lower() for seg in segments]
     
     return '.'.join(segments)
+
+
+
+def normalize_public_phone(phone: str | None) -> str:
+    """Normalize Nigerian-style phone values into a search/display friendly code body."""
+    digits = re.sub(r"\D", "", str(phone or ""))
+    if digits.startswith("234") and len(digits) > 10:
+        return digits[3:]
+    if digits.startswith("0") and len(digits) > 1:
+        return digits[1:]
+    return digits
+
+
+def state_public_code(value: str | None) -> str:
+    """Return the canonical two-letter public code used in worker/account references."""
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+    normalized = re.sub(r"[_\-/]+", " ", raw).lower()
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    normalized = re.sub(r"\bstate\b", "", normalized).strip()
+    if normalized in STATE_PUBLIC_CODE_MAP:
+        return STATE_PUBLIC_CODE_MAP[normalized]
+    compact = re.sub(r"[^A-Za-z0-9]", "", raw).upper()
+    if len(compact) == 2:
+        return compact
+    return compact[:2]
+
+
+def generate_public_person_code(state_name_or_code: str | None, phone: str | None) -> str:
+    """Generate the public worker/account code such as ``KW9029952120``."""
+    code = state_public_code(state_name_or_code)
+    number = normalize_public_phone(phone)
+    if not code and not number:
+        return ""
+    return f"{code}{number}" if code else number
 
 
 def validate_path(path: str) -> bool:

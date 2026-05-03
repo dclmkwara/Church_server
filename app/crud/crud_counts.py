@@ -1,118 +1,52 @@
-"""
-CRUD operations for Count records.
-
-Handles population count submission with offline sync support via client_id.
-"""
-from typing import List, Optional, Any
+"""CRUD operations for Count records."""
+from typing import List, Optional
 from uuid import UUID
+from datetime import datetime, UTC
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import HTTPException
-
 from app.crud.base import CRUDBase
 from app.models.counts import Count
+from app.models.programs import EventAssignment
+from app.models.user import User
 from app.schemas.counts import CountCreate, CountUpdate
 
-
 class CRUDCount(CRUDBase[Count, CountCreate, CountUpdate]):
-    """
-    CRUD operations for Count model.
-    
-    Includes idempotency checking for offline sync.
-    """
-    
     async def create(self, db: AsyncSession, *, obj_in: CountCreate, user_id: UUID) -> Count:
-        """
-        Create a new count record.
-        
-        Checks for duplicate client_id to prevent duplicate submissions during offline sync.
-        
-        Args:
-            db: Database session
-            obj_in: Count creation data
-            user_id: ID of user submitting the count
-            
-        Returns:
-            Count: Created count record
-            
-        Raises:
-            HTTPException 400: Duplicate client_id (already submitted)
-            HTTPException 404: Event not found
-        """
-        # Check for duplicate client_id (idempotency)
         if obj_in.client_id:
             existing = await self.get_by_client_id(db, client_id=obj_in.client_id)
             if existing:
-                # Return existing record instead of creating duplicate
                 return existing
-        
-        # Verify event exists
         from app.crud.crud_programs import program_event
+        from app.crud.crud_location import location as crud_location
         event = await program_event.get(db, id=obj_in.event_id)
-        if not event:
-            raise HTTPException(status_code=404, detail="Event not found")
-        
-        # Derive path from event
-        path_str = str(event.path)
-        
-        # Create count record
-        db_obj = Count(
-            event_id=obj_in.event_id,
-            location_id=obj_in.location_id,
-            path=path_str,
-            date=event.date,
-            client_id=obj_in.client_id,
-            adult_male=obj_in.adult_male,
-            adult_female=obj_in.adult_female,
-            youth_male=obj_in.youth_male,
-            youth_female=obj_in.youth_female,
-            boys=obj_in.boys,
-            girls=obj_in.girls,
-            note=obj_in.note,
-            entered_by_id=user_id,
-            status="pending"
-        )
-        
-        # Calculate total
-        db_obj.calculate_total()
-        
-        db.add(db_obj)
-        await db.commit()
-        await db.refresh(db_obj)
-        return db_obj
-    
+        if not event: raise HTTPException(status_code=404, detail="Event not found")
+        location = await crud_location.get(db, obj_in.location_id)
+        if not location: raise HTTPException(status_code=404, detail="Location not found")
+        event_path = str(event.path); location_path = str(location.path)
+        if not (location_path == event_path or location_path.startswith(f"{event_path}.")):
+            raise HTTPException(status_code=400, detail="Location must fall within the selected event scope")
+        source_role = obj_in.source_role or ("alpha" if event.alpha_location_id and event.alpha_location_id == obj_in.location_id else ("satellite" if event.event_mode == "crusade" else "regular"))
+        campaign_code = obj_in.campaign_code or event.campaign_code
+        assignment = None
+        if obj_in.assignment_id:
+            assignment = await db.get(EventAssignment, obj_in.assignment_id)
+            if not assignment: raise HTTPException(status_code=404, detail="Assignment not found")
+            if assignment.event_id != obj_in.event_id: raise HTTPException(status_code=400, detail="Assignment does not belong to this event")
+            if assignment.status != "approved": raise HTTPException(status_code=400, detail="Assignment is not approved")
+            if assignment.assignment_type not in {"count", "both"}: raise HTTPException(status_code=400, detail="Assignment is not enabled for count submission")
+            current_user = await db.get(User, user_id)
+            if not current_user or current_user.worker_id != assignment.worker_id: raise HTTPException(status_code=403, detail="Assignment belongs to a different worker")
+        elif event.event_mode == "crusade" and source_role == "alpha":
+            raise HTTPException(status_code=400, detail="Alpha crusade submissions require an approved assignment")
+        db_obj = Count(event_id=obj_in.event_id, location_id=obj_in.location_id, assignment_id=obj_in.assignment_id, path=location_path, date=event.date, client_id=obj_in.client_id, adult_male=obj_in.adult_male, adult_female=obj_in.adult_female, youth_male=obj_in.youth_male, youth_female=obj_in.youth_female, boys=obj_in.boys, girls=obj_in.girls, note=obj_in.note, entered_by_id=user_id, status="pending", source_role=source_role, campaign_code=campaign_code, submission_channel=obj_in.submission_channel)
+        db_obj.calculate_total(); db.add(db_obj)
+        if assignment:
+            assignment.submission_completed = True; assignment.submitted_at = datetime.now(UTC); db.add(assignment)
+        await db.commit(); await db.refresh(db_obj); return db_obj
     async def get_by_client_id(self, db: AsyncSession, *, client_id: UUID) -> Optional[Count]:
-        """Get count by client_id (for idempotency check)."""
-        query = select(Count).where(Count.client_id == client_id)
-        result = await db.execute(query)
-        return result.scalars().first()
-    
-    async def get_multi_by_scope(
-        self, 
-        db: AsyncSession, 
-        *, 
-        scope_path: str, 
-        skip: int = 0, 
-        limit: int = 100
-    ) -> List[Count]:
-        """
-        Get counts within a hierarchical scope.
-        
-        Args:
-            db: Database session
-            scope_path: ltree path for scope filtering
-            skip: Pagination offset
-            limit: Pagination limit
-            
-        Returns:
-            List[Count]: Counts within scope
-        """
-        query = select(Count).where(
-            text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
-        ).offset(skip).limit(limit).order_by(Count.created_at.desc())
-        
-        result = await db.execute(query)
+        result = await db.execute(select(Count).where(Count.client_id == client_id)); return result.scalars().first()
+    async def get_multi_by_scope(self, db: AsyncSession, *, scope_path: str, skip: int = 0, limit: int = 100) -> List[Count]:
+        result = await db.execute(select(Count).where(text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path), Count.is_deleted == False).offset(skip).limit(limit).order_by(Count.created_at.desc()))
         return result.scalars().all()
-
-
 count = CRUDCount(Count)

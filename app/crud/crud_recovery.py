@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import HTTPException
 
 from app.crud.base import CRUDBase
+from app.core.config import settings
 from app.models.user import PasswordResetToken, User
 from app.schemas.recovery import PasswordResetRequest, PasswordResetConfirm, RecoveryQuestionSetup, RecoveryQuestionUpdate
 from app.core.security import hash_password
@@ -28,13 +29,13 @@ class CRUDRecovery:
         await db.refresh(user)
         return user
 
-    async def get_recovery_questions(self, db: AsyncSession, user_id: str) -> Optional[User]:
+    async def get_recovery_questions(self, db: AsyncSession, user_id: UUID | str) -> Optional[User]:
         """Get recovery questions (without answers)."""
         stmt = select(User).where(User.user_id == user_id)
         result = await db.execute(stmt)
         return result.scalars().first()
 
-    async def update_recovery_questions(self, db: AsyncSession, user_id: str, data: RecoveryQuestionUpdate) -> User:
+    async def update_recovery_questions(self, db: AsyncSession, user_id: UUID | str, data: RecoveryQuestionUpdate) -> User:
         """Update recovery questions and answers."""
         stmt = select(User).where(User.user_id == user_id)
         result = await db.execute(stmt)
@@ -63,7 +64,12 @@ class CRUDRecovery:
             return None # Don't reveal if user exists or not, but return None to controller
             
         token = secrets.token_urlsafe(32)
-        expiration = int((datetime.now() + timedelta(hours=1)).timestamp())
+        expiration = int(
+            (
+                datetime.now()
+                + timedelta(minutes=settings.PASSWORD_RESET_TOKEN_EXPIRE_MINUTES)
+            ).timestamp()
+        )
         
         db_obj = PasswordResetToken(
             user_id=user.user_id,

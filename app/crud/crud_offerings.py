@@ -29,13 +29,24 @@ class CRUDOffering(CRUDBase[Offering, OfferingCreate, OfferingUpdate]):
         event = await program_event.get(db, id=obj_in.event_id)
         if not event:
             raise HTTPException(status_code=404, detail="Event not found")
-        
-        path_str = str(event.path)
+
+        from app.crud.crud_location import location as crud_location
+        location = await crud_location.get(db, obj_in.location_id)
+        if not location:
+            raise HTTPException(status_code=404, detail="Location not found")
+
+        event_path = str(event.path)
+        location_path = str(location.path)
+        if not (location_path == event_path or location_path.startswith(f"{event_path}.")):
+            raise HTTPException(
+                status_code=400,
+                detail="Location must fall within the selected event scope",
+            )
         
         db_obj = Offering(
             event_id=obj_in.event_id,
             location_id=obj_in.location_id,
-            path=path_str,
+            path=location_path,
             date=event.date,
             client_id=obj_in.client_id,
             amount=obj_in.amount,
@@ -73,7 +84,8 @@ class CRUDOffering(CRUDBase[Offering, OfferingCreate, OfferingUpdate]):
     ) -> List[Offering]:
         """Get offerings within scope."""
         query = select(Offering).where(
-            text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
+            text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path),
+            Offering.is_deleted == False,
         )
         if fund_type:
             query = query.where(Offering.fund_type == fund_type)

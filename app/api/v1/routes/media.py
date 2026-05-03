@@ -37,6 +37,12 @@ async def create_gallery(
     # Permission check usually happens here or in CRUD.
     # Assuming any active user can create (for now) or restrict to workers?
     # Basic Active User is fine.
+    await deps.get_location_in_scope(
+        db,
+        current_user=current_user,
+        location_id=gallery_in.location_id,
+        detail="Media gallery location outside your scope",
+    )
     return await crud_media.gallery.create(db, obj_in=gallery_in, user_id=current_user.user_id)
 
 
@@ -55,7 +61,7 @@ async def read_galleries(
     """
     Retrieve media galleries with hierarchical scope filtering.
     """
-    search_scope = scope_path if scope_path else str(current_user.path)
+    search_scope = deps.resolve_scope_path(current_user, scope_path)
     
     return await crud_media.gallery.get_multi_by_scope(
         db, scope_path=search_scope, skip=skip, limit=limit
@@ -77,6 +83,7 @@ async def read_gallery(
     gallery = await crud_media.gallery.get(db, id=gallery_id)
     if not gallery:
         raise HTTPException(status_code=404, detail="Gallery not found")
+    deps.ensure_path_in_scope(current_user, gallery.path, detail="Gallery outside your scope")
     return gallery
 
 
@@ -95,6 +102,10 @@ async def create_item(
     Add a media item (photo/video) to a gallery.
     The file should be uploaded to Storage first, and the path provided here.
     """
+    gallery = await crud_media.gallery.get(db, id=item_in.gallery_id)
+    if not gallery:
+        raise HTTPException(status_code=404, detail="Gallery not found")
+    deps.ensure_path_in_scope(current_user, gallery.path, detail="Gallery outside your scope")
     return await crud_media.item.create(db, obj_in=item_in, user_id=current_user.user_id)
 
 
@@ -112,10 +123,10 @@ async def read_gallery_items(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Get items for a gallery."""
-    # Check gallery access? 
-    # Usually implied by knowledge of ID + RLS scoping (if applied).
-    # Since we don't have explicit RLS on media_items (only inherited via join potentially),
-    # we rely on the API layer or loose permissions for now.
+    gallery = await crud_media.gallery.get(db, id=gallery_id)
+    if not gallery:
+        raise HTTPException(status_code=404, detail="Gallery not found")
+    deps.ensure_path_in_scope(current_user, gallery.path, detail="Gallery outside your scope")
     return await crud_media.item.get_by_gallery(
         db, gallery_id=gallery_id, skip=skip, limit=limit
     )
@@ -141,8 +152,7 @@ async def delete_gallery(
     gallery = await crud_media.gallery.get(db, id=gallery_id)
     if not gallery:
         raise HTTPException(status_code=404, detail="Gallery not found")
-    
-    # Permission enforced via PermissionChecker ("media:delete_gallery")
+    deps.ensure_path_in_scope(current_user, gallery.path, detail="Gallery outside your scope")
     
     await crud_media.gallery.remove(db, id=gallery_id)
     return None
@@ -168,6 +178,10 @@ async def delete_item(
     item = await crud_media.item.get(db, id=item_id)
     if not item:
         raise HTTPException(status_code=404, detail="Media item not found")
+    gallery = await crud_media.gallery.get(db, id=item.gallery_id)
+    if not gallery:
+        raise HTTPException(status_code=404, detail="Gallery not found")
+    deps.ensure_path_in_scope(current_user, gallery.path, detail="Media item outside your scope")
     
     await crud_media.item.remove(db, id=item_id)
     return None

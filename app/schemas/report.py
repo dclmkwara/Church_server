@@ -1,9 +1,11 @@
 from datetime import date, datetime
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from uuid import UUID
 
 class DailyCountSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     day: date
     location_id: str
     location_name: str
@@ -17,10 +19,9 @@ class DailyCountSummary(BaseModel):
     total_girls: int
     record_count: int
 
-    class Config:
-        from_attributes = True
-
 class MonthlyFinancialSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     month: datetime
     location_id: str
     location_name: str
@@ -28,19 +29,15 @@ class MonthlyFinancialSummary(BaseModel):
     total_amount: float
     transaction_count: int
 
-    class Config:
-        from_attributes = True
-
 class AttendanceTrend(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     week: datetime
     location_id: str
     location_name: str
     path: str
     status: str
     worker_count: int
-
-    class Config:
-        from_attributes = True
 
 class ReportResponse(BaseModel):
     data: List[dict] # Generic wrapper or specific based on endpoint

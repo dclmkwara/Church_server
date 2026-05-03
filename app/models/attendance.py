@@ -1,7 +1,7 @@
 """
 Worker Attendance models.
 """
-from sqlalchemy import Column, String, ForeignKey, Integer, DateTime, Boolean, Text
+from sqlalchemy import Column, String, ForeignKey, Integer, Date, DateTime, Boolean, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 import uuid
@@ -56,3 +56,53 @@ class WorkerAttendance(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     
     def __repr__(self):
         return f"<WorkerAttendance(worker='{self.worker_name}', status='{self.status}')>"
+
+
+class WorkerAbsenceNotice(Base, TimestampMixin):
+    """
+    Worker Absence Notice.
+
+    Allows workers to proactively report expected absences before a meeting.
+    Helps pastors anticipate worker unavailability and reduces false
+    'absent without notice' marks on the attendance tracker.
+
+    Status values:
+        noted        — Submitted, not yet reviewed
+        acknowledged — Pastor has seen and accepted this notice
+        rejected     — Pastor has rejected/dismissed this notice
+    """
+    __tablename__ = "worker_absence_notices"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    worker_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("workers.worker_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    event_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("program_events.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    reason = Column(Text, nullable=False)
+    expected_return = Column(Date, nullable=True)
+
+    # Review
+    status = Column(String, default="noted", nullable=False, index=True)
+    acknowledged_by = Column(
+        UUID(as_uuid=True),
+        ForeignKey("users.user_id"),
+        nullable=True,
+    )
+    acknowledged_at = Column(DateTime(timezone=True), nullable=True)
+    admin_note = Column(Text, nullable=True)
+
+    # Relationships
+    worker = relationship("Worker")
+    event = relationship("ProgramEvent")
+    acknowledged_by_user = relationship("User", foreign_keys=[acknowledged_by])
+
+    def __repr__(self) -> str:
+        return f"<WorkerAbsenceNotice(worker={self.worker_id}, event={self.event_id}, status='{self.status}')>"

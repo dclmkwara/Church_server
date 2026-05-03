@@ -1,228 +1,92 @@
-# Setup Guide
+# Developer Setup Guide
 
-Complete installation and configuration guide for DCLM backend.
+## Prerequisites
 
----
+| Tool | Version Required | Purpose |
+|---|---|---|
+| Python | 3.11 or higher | Backend runtime |
+| PostgreSQL or Supabase | 14 or higher with `ltree` | Primary database |
+| Git | Any recent version | Version control |
+| pip | Latest | Python package manager |
 
-## System Requirements
-
-### Minimum Requirements
-- **OS:** Windows 10+, Ubuntu 20.04+, macOS 11+
-- **Python:** 3.11 or higher
-- **RAM:** 4GB minimum, 8GB recommended
-- **Storage:** 10GB free space
-- **Database:** PostgreSQL 16+
-
-### Recommended Setup
-- **Python:** 3.11.7
-- **PostgreSQL:** 16.1
-- **RAM:** 16GB
-- **CPU:** 4+ cores
-
----
-
-## Installation Steps
-
-### 1. Install Python
-
-Download and install Python 3.11+ from [python.org](https://python.org)
-
-Verify installation:
-```bash
-python --version
-# Should show: Python 3.11.x or higher
-```
-
-### 2. Install PostgreSQL
-
-**Option A: Local PostgreSQL**
-- Download from [postgresql.org](https://postgresql.org)
-- Install with default settings
-- Remember your postgres password
-
-**Option B: Supabase (Recommended)**
-- Create account at [supabase.com](https://supabase.com)
-- Create new project
-- Copy connection string from Settings → Database
-
-### 3. Clone Repository
+## Local Setup
 
 ```bash
-git clone https://github.com/your-org/dclm-backend.git
-cd dclm-backend
-```
-
-### 4. Set Up Virtual Environment
-
-```bash
-# Create virtual environment
-python -m venv venv
-
-# Activate (Windows)
-venv\Scripts\activate
-
-# Activate (Linux/Mac)
-source venv/bin/activate
-```
-
-### 5. Install Dependencies
-
-```bash
-# Production dependencies
+git clone <repository-url>
+cd Church_server
+python -m venv .venv
+.venv\Scripts\activate
 pip install -r requirements.txt
-
-# Development dependencies (optional)
-pip install -r requirements-dev.txt
-```
-
-### 6. Configure Environment Variables
-
-Create `.env` file:
-```bash
 cp .env.example .env
+python -m alembic upgrade head
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Edit `.env`:
-```env
-# Database Configuration
-DATABASE_URL=postgresql+asyncpg://user:password@localhost:5432/dclm
+Swagger UI runs at `http://localhost:8000/docs`.
 
-# Security
-SECRET_KEY=generate-a-secure-random-key-min-32-chars
-ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=60
-REFRESH_TOKEN_EXPIRE_MINUTES=10080
+## Environment
 
-# Application
-APP_NAME=DCLM Server
-DEBUG=True
-API_V1_PREFIX=/api/v1
+Required variables:
 
-# CORS (adjust for production)
-BACKEND_CORS_ORIGINS=["http://localhost:3000","http://localhost:8080"]
+```ini
+APP_NAME="DCLM Server"
+DEBUG=false
+SECRET_KEY=replace-with-a-64-character-random-hex-secret
+DATABASE_URL=postgresql+asyncpg://postgres:password@localhost:5432/dclm_db
+BACKEND_CORS_ORIGINS=["http://localhost:3000","http://localhost:8000"]
 ```
 
-**Generate SECRET_KEY:**
-```python
-import secrets
-print(secrets.token_urlsafe(32))
-```
+For Supabase, use the transaction pooler URL with `sslmode=require`. If your password contains `#`, encode it as `%23` where possible.
 
-### 7. Initialize Database
+## Database
+
+Run migrations:
 
 ```bash
-# Run migrations
-alembic upgrade head
+python -m alembic upgrade head
 ```
 
-### 8. Create Admin User
+Seed safe metadata only:
 
 ```bash
-python scripts/create_admin.py
+python scripts/seed_admin_bootstrap.py --metadata-only
 ```
 
-### 9. Start Development Server
+The full bootstrap script creates starter hierarchy records, workers, and users. Only run it intentionally, and pass a strong password:
 
 ```bash
-uvicorn app.main:app --reload
+python scripts/seed_admin_bootstrap.py --password "use-a-strong-unique-password"
 ```
 
-Server will start at: `http://localhost:8000`
+## FastAPI Cloud Deployment
 
----
+The app is configured for FastAPI Cloud:
 
-## Verification
+- `pyproject.toml` declares `app.main:app`
+- `.fastapicloudignore` excludes local-only files
+- Supabase remains the production database
 
-### 1. Check API Documentation
-Visit: `http://localhost:8000/docs`
-
-### 2. Test Authentication
+Set production env vars in FastAPI Cloud, run migrations against Supabase, seed metadata, then deploy:
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/auth/login \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "username=admin@dclm.org&password=your-password"
+fastapi deploy
 ```
 
-### 3. Verify Database Connection
+See [DEPLOYMENT.md](DEPLOYMENT.md) for the full production checklist.
+
+## Tests
 
 ```bash
-python -c "from app.db.session import engine; print('Database connected!')"
+pytest
+python -m compileall app alembic scripts tests
 ```
 
----
+## Common Issues
 
-## Production Setup
-
-### 1. Update Environment Variables
-
-```env
-DEBUG=False
-BACKEND_CORS_ORIGINS=["https://yourdomain.com"]
-```
-
-### 2. Use Production Server
-
-```bash
-# Install gunicorn
-pip install gunicorn
-
-# Run with workers
-gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker
-```
-
-### 3. Set Up Reverse Proxy
-
-Use Nginx or Caddy to proxy requests to your FastAPI app.
-
-**Nginx example:**
-```nginx
-server {
-    listen 80;
-    server_name api.yourdomain.com;
-
-    location / {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-}
-```
-
-### 4. Enable HTTPS
-
-Use Let's Encrypt for free SSL certificates:
-```bash
-certbot --nginx -d api.yourdomain.com
-```
-
----
-
-## Docker Setup (Optional)
-
-### Using Docker Compose
-
-```bash
-# Build and start
-docker-compose up -d
-
-# View logs
-docker-compose logs -f
-
-# Stop
-docker-compose down
-```
-
----
-
-## Troubleshooting
-
-See [Troubleshooting Guide](TROUBLESHOOTING.md) for common issues and solutions.
-
----
-
-## Next Steps
-
-- [Architecture Overview](ARCHITECTURE.md)
-- [API Documentation](API_DOCUMENTATION.md)
-- [Deployment Guide](DEPLOYMENT.md)
+| Error | Likely Cause | Fix |
+|---|---|---|
+| `asyncpg.InvalidPasswordError` | Wrong database password | Check `DATABASE_URL`; encode `#` as `%23` if needed |
+| `Connection refused` | Database unavailable or wrong host/port | Start Postgres or verify Supabase URL |
+| `relation does not exist` | Migrations not applied | Run `python -m alembic upgrade head` |
+| `ModuleNotFoundError: No module named 'app'` | Wrong working directory or inactive venv | Run commands from `Church_server` root |
+| `422 Unprocessable Entity` on login | JSON sent to form login endpoint | Use form-urlencoded login payload |

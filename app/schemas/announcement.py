@@ -1,6 +1,6 @@
 from datetime import date, datetime
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from uuid import UUID
 
 class AnnouncementItemBase(BaseModel):
@@ -11,10 +11,9 @@ class AnnouncementItemCreate(AnnouncementItemBase):
     pass
 
 class AnnouncementItemResponse(AnnouncementItemBase):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
-    
-    class Config:
-        from_attributes = True
 
 class AnnouncementBase(BaseModel):
     region_id: str
@@ -43,7 +42,7 @@ class AnnouncementBase(BaseModel):
     is_active: bool = True
 
 class AnnouncementCreate(AnnouncementBase):
-    items: List[AnnouncementItemCreate] = []
+    items: List[AnnouncementItemCreate] = Field(default_factory=list)
 
 class AnnouncementUpdate(BaseModel):
     region_name: Optional[str] = None
@@ -73,12 +72,11 @@ class AnnouncementUpdate(BaseModel):
     items: Optional[List[AnnouncementItemCreate]] = None
 
 class AnnouncementResponse(AnnouncementBase):
+    model_config = ConfigDict(from_attributes=True)
+
     id: UUID
     published_at: Optional[datetime] = None
-    items: List[AnnouncementItemResponse] = []
+    items: List[AnnouncementItemResponse] = Field(default_factory=list)
     
     created_at: datetime
     last_modify: datetime
-
-    class Config:
-        from_attributes = True

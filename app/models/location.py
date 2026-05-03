@@ -181,6 +181,7 @@ class Location(Base, TimestampMixin, AuditMixin):
     # Relationships
     group = relationship("Group", back_populates="locations")
     fellowships = relationship("Fellowship", back_populates="location")
+    profile = relationship("LocationProfile", back_populates="location", uselist=False)
 
     @property
     def formatted_id(self) -> str:

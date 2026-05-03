@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, Body
+import logging
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Any
 
@@ -10,6 +11,7 @@ from app.schemas.recovery import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 @router.post("/request-reset", response_model=PasswordResetResponse)
 async def request_password_reset(
@@ -17,17 +19,12 @@ async def request_password_reset(
     db: AsyncSession = Depends(deps.get_db)
 ) -> Any:
     """
-    Request a password reset token. 
-    In production, this would send an email. For now, it logs the token (mock behavior).
+    Request a password reset token.
     """
     token = await recovery.create_token(db, email=request.email)
     
     if token:
-        # MOCK EMAIL SENDING
-        print(f"============================================")
-        print(f"MOCK EMAIL TO: {request.email}")
-        print(f"RESET TOKEN: {token.token}")
-        print(f"============================================")
+        logger.info("Password reset token created for email=%s", request.email)
     
     # Always return success to prevent user enumeration
     return {"message": "If an account exists with this email, a reset link has been sent."}
@@ -64,9 +61,11 @@ async def reset_password(
 @router.post("/set-recovery-question", response_model=RecoveryQuestionResponse)
 async def set_recovery_question(
     data: RecoveryQuestionSetup,
-    db: AsyncSession = Depends(deps.get_db)
+    db: AsyncSession = Depends(deps.get_db),
+    current_user=Depends(deps.get_current_active_user),
 ) -> Any:
     """Set recovery questions for a user."""
+    deps.ensure_same_user(current_user, data.user_id)
     user = await recovery.set_recovery_questions(db, data)
     return RecoveryQuestionResponse(
         user_id=str(user.user_id),
@@ -77,11 +76,11 @@ async def set_recovery_question(
 
 @router.get("/read-recovery-question", response_model=RecoveryQuestionResponse)
 async def read_recovery_question(
-    user_id: str,
-    db: AsyncSession = Depends(deps.get_db)
+    db: AsyncSession = Depends(deps.get_db),
+    current_user=Depends(deps.get_current_active_user),
 ) -> Any:
-    """Read recovery questions for a user."""
-    user = await recovery.get_recovery_questions(db, user_id)
+    """Read recovery questions for the current user."""
+    user = await recovery.get_recovery_questions(db, current_user.user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     return RecoveryQuestionResponse(
@@ -93,12 +92,12 @@ async def read_recovery_question(
 
 @router.patch("/update-recovery-question", response_model=RecoveryQuestionResponse)
 async def update_recovery_question(
-    user_id: str,
     data: RecoveryQuestionUpdate,
-    db: AsyncSession = Depends(deps.get_db)
+    db: AsyncSession = Depends(deps.get_db),
+    current_user=Depends(deps.get_current_active_user),
 ) -> Any:
-    """Update recovery questions for a user."""
-    user = await recovery.update_recovery_questions(db, user_id, data)
+    """Update recovery questions for the current user."""
+    user = await recovery.update_recovery_questions(db, current_user.user_id, data)
     return RecoveryQuestionResponse(
         user_id=str(user.user_id),
         recovery_question_one=user.recovery_question_one,

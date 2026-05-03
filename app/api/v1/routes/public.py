@@ -1,15 +1,18 @@
-
+import logging
 from typing import List, Optional
 from datetime import date
+from uuid import UUID
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select
 from sqlalchemy.orm import selectinload
+from sqlalchemy.exc import IntegrityError
 
 from app.api import deps
 from app.models.programs import ProgramEvent, ProgramType
 from app.models.location import Location
 from app.models.media import MediaGallery
+from app.models.public_intake import PublicContactSubmission, PublicPrayerSubmission
 from app.schemas.public import (
     PublicEventResponse,
     PublicLocationResponse,
@@ -20,12 +23,13 @@ from app.schemas.public import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 @router.get("/events", response_model=List[PublicEventResponse])
 async def get_public_events(
     db: AsyncSession = Depends(deps.get_db),
-    skip: int = 0,
-    limit: int = 100,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
     from_date: Optional[date] = None
 ):
     """
@@ -37,7 +41,12 @@ async def get_public_events(
     query = (
         select(ProgramEvent)
         .options(selectinload(ProgramEvent.program_type))
-        .where(ProgramEvent.date >= from_date)
+        .where(
+            ProgramEvent.date >= from_date,
+            ProgramEvent.is_public == True,
+            ProgramEvent.is_deleted == False,
+            ProgramEvent.published_at.is_not(None),
+        )
         .order_by(ProgramEvent.date.asc())
         .offset(skip)
         .limit(limit)
@@ -63,14 +72,19 @@ async def get_public_events(
 
 @router.get("/events/{event_id}", response_model=PublicEventResponse)
 async def get_public_event(
-    event_id: str,
+    event_id: UUID,
     db: AsyncSession = Depends(deps.get_db),
 ):
     """Get a single public event."""
     query = (
         select(ProgramEvent)
         .options(selectinload(ProgramEvent.program_type))
-        .where(ProgramEvent.id == event_id)
+        .where(
+            ProgramEvent.id == event_id,
+            ProgramEvent.is_public == True,
+            ProgramEvent.is_deleted == False,
+            ProgramEvent.published_at.is_not(None),
+        )
     )
     result = await db.execute(query)
     event = result.scalars().first()
@@ -86,17 +100,17 @@ async def get_public_event(
 @router.get("/locations", response_model=List[PublicLocationResponse])
 async def get_public_locations(
     db: AsyncSession = Depends(deps.get_db),
-    skip: int = 0,
-    limit: int = 100,
-    search: Optional[str] = None
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    search: Optional[str] = Query(None, min_length=2, max_length=100)
 ):
     """
     Get public locations.
     """
-    query = select(Location)
+    query = select(Location).order_by(Location.location_name.asc())
     
     if search:
-        query = query.where(Location.location_name.ilike(f"%{search}%"))
+        query = query.where(Location.location_name.ilike(f"%{search.strip()}%"))
     
     query = query.offset(skip).limit(limit)
     
@@ -116,15 +130,22 @@ async def get_public_locations(
 
 @router.get("/locations/nearby", response_model=List[PublicLocationResponse])
 async def get_nearby_locations(
-    lat: float = Query(...),
-    lng: float = Query(...),
-    radius_km: float = Query(10.0),
+    lat: float = Query(..., ge=-90, le=90),
+    lng: float = Query(..., ge=-180, le=180),
+    radius_km: float = Query(10.0, gt=0, le=200),
+    limit: int = Query(25, ge=1, le=100),
     db: AsyncSession = Depends(deps.get_db),
 ):
     """Find nearby locations by latitude/longitude."""
+    from math import cos, radians
+
+    lat_delta = radius_km / 111.32
+    lng_delta = radius_km / max(111.32 * abs(cos(radians(lat))), 0.01)
     query = select(Location).where(
         Location.latitude.is_not(None),
         Location.longitude.is_not(None),
+        Location.latitude.between(lat - lat_delta, lat + lat_delta),
+        Location.longitude.between(lng - lng_delta, lng + lng_delta),
     )
     result = await db.execute(query)
     locations = result.scalars().all()
@@ -142,28 +163,39 @@ async def get_nearby_locations(
     for loc in locations:
         dist = haversine_km(lat, lng, loc.latitude, loc.longitude)
         if dist <= radius_km:
-            nearby.append(loc)
+            nearby.append((dist, loc))
+    nearby.sort(key=lambda item: item[0])
     
     return [
         PublicLocationResponse(
-            id=e.location_id,
-            name=e.location_name,
-            type=e.church_type,
-            address=e.address
+            id=loc.location_id,
+            name=loc.location_name,
+            type=loc.church_type,
+            address=loc.address
         )
-        for e in nearby
+        for _, loc in nearby[:limit]
     ]
 
 @router.get("/galleries", response_model=List[PublicGalleryResponse])
 async def get_public_galleries(
     db: AsyncSession = Depends(deps.get_db),
-    skip: int = 0,
-    limit: int = 100
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200)
 ):
     """
     Get public media galleries.
     """
-    query = select(MediaGallery).order_by(MediaGallery.created_at.desc()).offset(skip).limit(limit)
+    query = (
+        select(MediaGallery)
+        .where(
+            MediaGallery.is_public == True,
+            MediaGallery.is_deleted == False,
+            MediaGallery.published_at.is_not(None),
+        )
+        .order_by(MediaGallery.created_at.desc())
+        .offset(skip)
+        .limit(limit)
+    )
     result = await db.execute(query)
     galleries = result.scalars().all()
     return galleries
@@ -172,28 +204,43 @@ async def get_public_galleries(
 @router.get("/announcements", response_model=List[PublicAnnouncementResponse])
 async def get_public_announcements(
     db: AsyncSession = Depends(deps.get_db),
-    limit: int = 50
+    limit: int = Query(25, ge=1, le=100)
 ):
     """Get public announcements (active only)."""
     from app.models.announcement import Announcement
-    query = select(Announcement).where(Announcement.is_active == True).order_by(Announcement.date.desc()).limit(limit)
+    query = (
+        select(Announcement)
+        .where(Announcement.is_active == True, Announcement.published_at.is_not(None))
+        .order_by(Announcement.date.desc())
+        .limit(limit)
+    )
     result = await db.execute(query)
     return result.scalars().all()
 
 
 @router.get("/galleries/{gallery_id}", response_model=PublicGalleryDetailResponse)
 async def get_public_gallery(
-    gallery_id: str,
+    gallery_id: UUID,
     db: AsyncSession = Depends(deps.get_db),
 ):
     """Get gallery details with items."""
     from app.models.media import MediaItem
-    query = select(MediaGallery).where(MediaGallery.id == gallery_id)
+    query = select(MediaGallery).where(
+        MediaGallery.id == gallery_id,
+        MediaGallery.is_public == True,
+        MediaGallery.is_deleted == False,
+        MediaGallery.published_at.is_not(None),
+    )
     result = await db.execute(query)
     gallery = result.scalars().first()
     if not gallery:
         raise HTTPException(status_code=404, detail="Gallery not found")
-    items_query = select(MediaItem).where(MediaItem.gallery_id == gallery_id)
+    items_query = (
+        select(MediaItem)
+        .where(MediaItem.gallery_id == gallery_id, MediaItem.is_deleted == False)
+        .order_by(MediaItem.is_cover.desc(), MediaItem.created_at.desc())
+        .limit(200)
+    )
     items_result = await db.execute(items_query)
     items = items_result.scalars().all()
     return PublicGalleryDetailResponse(
@@ -225,7 +272,6 @@ from app.schemas.public import (
     PublicFormResponse
 )
 from app.models.user import Worker
-from app.models.fellowship_activities import PrayerRequest
 import uuid
 
 
@@ -269,7 +315,8 @@ async def public_worker_registration(
     # Generate user_id (simplified version)
     # Format: STATE/PHONE (e.g., KW/2349012345678)
     phone_clean = worker_in.phone.replace("+", "").replace(" ", "")
-    state_code = str(location.path).split('.')[2] if len(str(location.path).split('.')) > 2 else "XX"
+    path_parts = str(location.path).split(".")
+    state_code = path_parts[2] if len(path_parts) > 2 else "XX"
     user_id = f"{state_code.upper()}/{phone_clean}"
     
     # Create worker
@@ -283,23 +330,31 @@ async def public_worker_registration(
         location_id=worker_in.location_id,
         location_name=location.location_name,
         church_type=location.church_type,
-        state=location.path.split('.')[2] if len(str(location.path).split('.')) > 2 else "",
-        region=location.path.split('.')[3] if len(str(location.path).split('.')) > 3 else "",
-        group=location.path.split('.')[4] if len(str(location.path).split('.')) > 4 else "",
+        state=path_parts[2] if len(path_parts) > 2 else "",
+        region=path_parts[3] if len(path_parts) > 3 else "",
+        group=path_parts[4] if len(path_parts) > 4 else "",
         unit=worker_in.unit,
         address=worker_in.address,
         occupation=worker_in.occupation,
         marital_status=worker_in.marital_status,
-        status="Active",
+        status="Pending",
+        approval_status="pending_verification",
         path=str(location.path)
     )
     
     db.add(worker)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        return PublicFormResponse(
+            success=False,
+            message="A worker with this phone, email, or generated ID already exists."
+        )
     
     return PublicFormResponse(
         success=True,
-        message="Registration successful! Your worker ID is: " + user_id,
+        message="Registration received. Your worker ID is: " + user_id + ". Awaiting verification.",
         reference_id=user_id
     )
 
@@ -313,22 +368,24 @@ async def public_contact_form(
     """
     Public contact form submission.
     
-    Stores contact inquiries for admin review.
-    Could be stored in a dedicated table or sent via email.
-    For now, we'll log it (in production, store in a contacts table).
+    Stores contact inquiries durably for admin review.
     """
-    # In production, create a Contact model and store this
-    # For now, just return success
-    # You could also send an email notification to admin
-    
-    import logging
-    logger = logging.getLogger(__name__)
-    logger.info(f"Contact form submission from {contact_in.name} ({contact_in.email}): {contact_in.subject}")
+    submission = PublicContactSubmission(
+        name=contact_in.name,
+        email=contact_in.email,
+        phone=contact_in.phone,
+        subject=contact_in.subject,
+        message=contact_in.message,
+        status="new",
+    )
+    db.add(submission)
+    await db.commit()
+    await db.refresh(submission)
     
     return PublicFormResponse(
         success=True,
         message="Thank you for contacting us! We will respond within 24-48 hours.",
-        reference_id=str(uuid.uuid4())
+        reference_id=str(submission.id)
     )
 
 
@@ -341,29 +398,30 @@ async def public_prayer_request(
     """
     Public prayer request submission.
     
-    Creates a prayer request that can be viewed by fellowship leaders.
+    Stores prayer requests durably for later admin review and routing.
     """
-    # Create prayer request (assign to a default fellowship or make it global)
-    # For public requests, we might need a special "Public Requests" fellowship
-    # Or store them separately
-    
-    # For now, log it and return success
-    # In production, create a PublicPrayerRequest model or assign to a default fellowship
-    
-    import logging
-    logger = logging.getLogger(__name__)
-    logger.info(f"Public prayer request from {prayer_in.name}: {prayer_in.request[:50]}...")
+    submission = PublicPrayerSubmission(
+        name=prayer_in.name,
+        email=prayer_in.email,
+        phone=prayer_in.phone,
+        request=prayer_in.request,
+        is_urgent=prayer_in.is_urgent,
+        status="new",
+    )
+    db.add(submission)
+    await db.commit()
+    await db.refresh(submission)
     
     return PublicFormResponse(
         success=True,
         message="Your prayer request has been received. We will pray for you!",
-        reference_id=str(uuid.uuid4())
+        reference_id=str(submission.id)
     )
 
 
 # App Version & Downloads
 @router.get("/app-version")
-async def get_app_version():
+async def get_app_version(db: AsyncSession = Depends(deps.get_db)):
     """
     Get mobile app version information and download links.
     
@@ -371,33 +429,33 @@ async def get_app_version():
     """
     # Try DB-backed versions first
     try:
-        from app.db.session import AsyncSessionLocal
         from app.models.app_version import AppVersion
-        async with AsyncSessionLocal() as db:
-            result = await db.execute(
-                select(AppVersion).where(AppVersion.is_active == True)
-            )
-            versions = result.scalars().all()
-            if versions:
-                return {
-                    "apps": [
-                        {
-                            "name": v.app_name,
-                            "platform": v.platform,
-                            "version": v.version_number,
-                            "build": v.build,
-                            "download_url": v.download_url,
-                            "min_os_version": v.min_os_version,
-                            "release_date": v.release_date,
-                            "changelog": v.description
-                        }
-                        for v in versions
-                    ],
-                    "api_version": "1.0.0",
-                    "min_supported_api": "1.0.0"
-                }
+        result = await db.execute(
+            select(AppVersion)
+            .where(AppVersion.is_active == True)
+            .order_by(AppVersion.app_name.asc(), AppVersion.platform.asc())
+        )
+        versions = result.scalars().all()
+        if versions:
+            return {
+                "apps": [
+                    {
+                        "name": v.app_name,
+                        "platform": v.platform,
+                        "version": v.version_number,
+                        "build": v.build,
+                        "download_url": v.download_url,
+                        "min_os_version": v.min_os_version,
+                        "release_date": v.release_date,
+                        "changelog": v.description
+                    }
+                    for v in versions
+                ],
+                "api_version": "1.0.0",
+                "min_supported_api": "1.0.0"
+            }
     except Exception:
-        pass
+        logger.exception("Failed to load DB-backed app version information; using fallback payload")
 
     return {
         "apps": [
@@ -443,8 +501,8 @@ async def get_app_version():
 
 
 @router.get("/app-versions")
-async def get_app_versions():
+async def get_app_versions(db: AsyncSession = Depends(deps.get_db)):
     """Alias for app version info."""
-    return await get_app_version()
+    return await get_app_version(db)
 
 

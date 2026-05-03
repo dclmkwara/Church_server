@@ -13,6 +13,11 @@ from app.models.user import User
 router = APIRouter()
 
 
+def _require_release_admin(current_user: User) -> None:
+    if not current_user.roles or max(role.score_value for role in current_user.roles) < 7:
+        raise HTTPException(status_code=403, detail="National admin access required")
+
+
 @router.post("/", response_model=AppVersionResponse, status_code=status.HTTP_201_CREATED)
 async def create_app_version(
     *,
@@ -21,6 +26,7 @@ async def create_app_version(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Create app version metadata."""
+    _require_release_admin(current_user)
     return await crud_app_version.create(db, obj_in=version_in)
 
 
@@ -38,6 +44,7 @@ async def list_app_versions(
     get_last: bool = False,
 ) -> Any:
     """List app versions."""
+    _require_release_admin(current_user)
     from sqlalchemy import select
     from app.models.app_version import AppVersion
     query = select(AppVersion)
@@ -66,6 +73,7 @@ async def get_app_version(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Get app version by id."""
+    _require_release_admin(current_user)
     version = await crud_app_version.get(db, id=version_id)
     if not version:
         raise HTTPException(status_code=404, detail="App version not found")
@@ -81,6 +89,7 @@ async def update_app_version(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Update app version."""
+    _require_release_admin(current_user)
     version = await crud_app_version.get(db, id=version_id)
     if not version:
         raise HTTPException(status_code=404, detail="App version not found")
@@ -95,6 +104,7 @@ async def delete_app_version(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Delete app version."""
+    _require_release_admin(current_user)
     version = await crud_app_version.get(db, id=version_id)
     if not version:
         raise HTTPException(status_code=404, detail="App version not found")

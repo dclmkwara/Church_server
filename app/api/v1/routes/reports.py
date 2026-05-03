@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import text
 from app.api import deps
+from app.models.core import validate_path
 from app.services.report_service import ReportService
 from app.schemas.report import DailyCountSummary, MonthlyFinancialSummary, AttendanceTrend
 from app.models.user import User
@@ -12,21 +12,25 @@ from datetime import date, timedelta
 router = APIRouter()
 
 
-async def _resolve_scope(
-    db: AsyncSession,
+def _resolve_scope(
     current_user: User,
     scope_path: Optional[str],
 ) -> str:
-    effective_scope = str(current_user.path)
-    if scope_path:
-        allowed = (await db.execute(
-            text("CAST(:scope_path AS ltree) <@ CAST(:user_scope AS ltree)"),
-            {"scope_path": scope_path, "user_scope": effective_scope},
-        )).scalar()
-        if not allowed:
-            raise HTTPException(status_code=403, detail="Scope outside your permission")
-        effective_scope = scope_path
-    return effective_scope
+    """
+    Validate and return the effective scope path.
+
+    Replaces the original async helper that made a raw SQL round-trip
+    (SELECT CAST ... <@ CAST ...) on every report request.
+    deps.resolve_scope_path() performs the same check in pure Python
+    using the ltree path already loaded from the JWT claim, with no
+    extra database call.
+
+    Also validates that any caller-supplied scope_path is a well-formed
+    ltree string before it reaches raw SQL templates.
+    """
+    if scope_path and not validate_path(scope_path):
+        raise HTTPException(status_code=400, detail="Invalid scope path format")
+    return deps.resolve_scope_path(current_user, scope_path)
 
 @router.get(
     "/export/csv",
@@ -47,9 +51,9 @@ async def export_report_csv(
         start_date = date.today() - timedelta(days=30)
     if not end_date:
         end_date = date.today()
-    
-    effective_scope = await _resolve_scope(db, current_user, scope_path)
-    
+
+    effective_scope = _resolve_scope(current_user, scope_path)
+
     if report_type == "counts":
         buffer = await ReportService.export_counts_csv(db, effective_scope, start_date, end_date)
         filename = f"counts_{start_date}_{end_date}.csv"
@@ -98,8 +102,8 @@ async def get_summary_report(
     if not end_date:
         end_date = date.today()
 
-    effective_scope = await _resolve_scope(db, current_user, scope_path)
-    
+    effective_scope = _resolve_scope(current_user, scope_path)
+
     # We use user's scope as base to restrict access
     return await ReportService.get_daily_counts(db, effective_scope, start_date, end_date)
 
@@ -123,8 +127,8 @@ async def get_financial_report(
     if not end_date:
         end_date = date.today()
 
-    effective_scope = await _resolve_scope(db, current_user, scope_path)
-    
+    effective_scope = _resolve_scope(current_user, scope_path)
+
     return await ReportService.get_financial_summary(db, effective_scope, start_date, end_date)
 
 @router.get(
@@ -147,8 +151,8 @@ async def get_attendance_report(
     if not end_date:
         end_date = date.today()
 
-    effective_scope = await _resolve_scope(db, current_user, scope_path)
-    
+    effective_scope = _resolve_scope(current_user, scope_path)
+
     return await ReportService.get_attendance_trends(db, effective_scope, start_date, end_date)
 
 @router.post("/refresh", dependencies=[Depends(deps.PermissionChecker("reports:refresh"))])
@@ -179,14 +183,14 @@ async def get_timeseries_analysis(
 ):
     """
     Get time series analysis for a specific metric.
-    
+
     Returns data points over time with trend analysis.
     """
     if not start_date:
         start_date = date.today() - timedelta(days=90)
     if not end_date:
         end_date = date.today()
-    
+
     effective_scope = str(current_user.path)
 
     interval_map = {
@@ -226,7 +230,7 @@ async def get_timeseries_analysis(
                     Count.youth_female + Count.boys + Count.girls).label('total')
         ).where(
             Count.date.between(start_date, end_date),
-            text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=effective_scope)
+            text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=effective_scope)
         ).group_by(period).order_by(period)
 
         result = await db.execute(query)
@@ -245,7 +249,7 @@ async def get_timeseries_analysis(
             func.coalesce(func.sum(Offering.amount), 0).label("total")
         ).where(
             Offering.date.between(start_date, end_date),
-            text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=effective_scope)
+            text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=effective_scope)
         ).group_by(period).order_by(period)
         result = await db.execute(query)
         data = [{"date": str(row.period.date()), "value": float(row.total)} for row in result]
@@ -260,12 +264,12 @@ async def get_timeseries_analysis(
             func.count(WorkerAttendance.id).label("total")
         ).join(ProgramEvent, ProgramEvent.id == WorkerAttendance.event_id).where(
             ProgramEvent.date.between(start_date, end_date),
-            text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=effective_scope)
+            text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=effective_scope)
         ).group_by(period).order_by(period)
         result = await db.execute(query)
         data = [{"date": str(row.period.date()), "value": row.total} for row in result]
         return {"metric": metric, "interval": interval_key, "data": data, "trend": _trend_from_series(data)}
-    
+
     raise HTTPException(status_code=400, detail="Metric not supported")
 
 
@@ -283,16 +287,16 @@ async def get_hierarchical_breakdown(
 ):
     """
     Get hierarchical breakdown by organizational level.
-    
+
     Shows aggregated metrics for each unit at the specified level.
     """
     if not start_date:
         start_date = date.today() - timedelta(days=30)
     if not end_date:
         end_date = date.today()
-    
+
     effective_scope = str(current_user.path)
-    
+
     from sqlalchemy import select, func, text
     from app.models.counts import Count
     from app.models.offerings import Offering
@@ -320,7 +324,7 @@ async def get_hierarchical_breakdown(
                     Count.youth_female + Count.boys + Count.girls).label("total")
         ).where(
             Count.date.between(start_date, end_date),
-            text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=effective_scope)
+            text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=effective_scope)
         ).group_by(group_expr(Count)).order_by(group_expr(Count))
         result = await db.execute(query)
         return {"metric": metric, "level": level, "breakdown": [{"path": row.group_path, "total": row.total} for row in result]}
@@ -331,7 +335,7 @@ async def get_hierarchical_breakdown(
             func.coalesce(func.sum(Offering.amount), 0).label("total")
         ).where(
             Offering.date.between(start_date, end_date),
-            text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=effective_scope)
+            text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=effective_scope)
         ).group_by(group_expr(Offering)).order_by(group_expr(Offering))
         result = await db.execute(query)
         return {"metric": metric, "level": level, "breakdown": [{"path": row.group_path, "total": str(row.total)} for row in result]}
@@ -342,7 +346,7 @@ async def get_hierarchical_breakdown(
             func.count(WorkerAttendance.id).label("total")
         ).join(ProgramEvent, ProgramEvent.id == WorkerAttendance.event_id).where(
             ProgramEvent.date.between(start_date, end_date),
-            text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=effective_scope)
+            text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=effective_scope)
         ).group_by(group_expr(WorkerAttendance)).order_by(group_expr(WorkerAttendance))
         result = await db.execute(query)
         return {"metric": metric, "level": level, "breakdown": [{"path": row.group_path, "total": row.total} for row in result]}
@@ -363,36 +367,36 @@ async def detect_anomalies(
 ):
     """
     Detect anomalies in data using statistical analysis.
-    
+
     Identifies unusual patterns or outliers that may need attention.
     """
     effective_scope = str(current_user.path)
     start_date = date.today() - timedelta(days=days)
-    
+
     # Simplified anomaly detection
     from app.models.counts import Count
     from sqlalchemy import select, func, text
-    
+
     # Get daily totals
     query = select(
         Count.date,
         Count.location_id,
-        func.sum(Count.adult_male + Count.adult_female + Count.youth_male + 
+        func.sum(Count.adult_male + Count.adult_female + Count.youth_male +
                 Count.youth_female + Count.boys + Count.girls).label('total')
     ).where(
         Count.date >= start_date,
-        text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=effective_scope)
+        text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=effective_scope)
     ).group_by(Count.date, Count.location_id)
-    
+
     result = await db.execute(query)
     data = [{"date": str(row.date), "location": row.location_id, "value": row.total} for row in result]
-    
+
     # Simple threshold-based detection (can be enhanced with statistical methods)
     if data:
         values = [d['value'] for d in data]
         avg = sum(values) / len(values)
         anomalies = [d for d in data if abs(d['value'] - avg) > (avg * 0.5)]  # 50% deviation
-        
+
         return {
             "metric": metric,
             "period_days": days,
@@ -400,7 +404,7 @@ async def detect_anomalies(
             "anomalies_detected": len(anomalies),
             "anomalies": anomalies[:10]  # Top 10
         }
-    
+
     return {"anomalies": []}
 
 
@@ -417,29 +421,29 @@ async def get_growth_rate(
 ):
     """
     Calculate growth rate over time.
-    
+
     Shows percentage change in metrics period-over-period.
     """
     effective_scope = str(current_user.path)
     start_date = date.today() - timedelta(days=months * 30)
-    
+
     from app.models.counts import Count
     from sqlalchemy import select, func, text, extract
-    
+
     # Monthly aggregation
     query = select(
         extract('year', Count.date).label('year'),
         extract('month', Count.date).label('month'),
-        func.sum(Count.adult_male + Count.adult_female + Count.youth_male + 
+        func.sum(Count.adult_male + Count.adult_female + Count.youth_male +
                 Count.youth_female + Count.boys + Count.girls).label('total')
     ).where(
         Count.date >= start_date,
-        text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=effective_scope)
+        text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=effective_scope)
     ).group_by('year', 'month').order_by('year', 'month')
-    
+
     result = await db.execute(query)
     data = [{"year": int(row.year), "month": int(row.month), "total": row.total} for row in result]
-    
+
     # Calculate growth rates
     growth_rates = []
     for i in range(1, len(data)):
@@ -452,7 +456,7 @@ async def get_growth_rate(
                 "value": curr,
                 "growth_rate": round(growth, 2)
             })
-    
+
     return {
         "metric": metric,
         "period": period,
@@ -461,7 +465,10 @@ async def get_growth_rate(
 
 
 # Export Format Routes
-@router.post("/export/excel")
+@router.post(
+    "/export/excel",
+    dependencies=[Depends(deps.PermissionChecker("reports:read"))],
+)
 async def export_excel(
     report_type: str = Query(..., description="counts, financial, or attendance"),
     start_date: Optional[date] = None,
@@ -471,7 +478,7 @@ async def export_excel(
 ):
     """
     Export report as Excel file.
-    
+
     Note: Requires openpyxl package. Install with: pip install openpyxl
     """
     try:
@@ -479,23 +486,23 @@ async def export_excel(
         from io import BytesIO
     except ImportError:
         raise HTTPException(status_code=501, detail="Excel export not available. Install openpyxl.")
-    
+
     if not start_date:
         start_date = date.today() - timedelta(days=30)
     if not end_date:
         end_date = date.today()
-    
+
     effective_scope = str(current_user.path)
-    
+
     # Get data (reuse existing service)
     if report_type == "counts":
         data = await ReportService.get_daily_counts(db, effective_scope, start_date, end_date)
-        
+
         # Create Excel workbook
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "Counts Report"
-        
+
         # Headers
         ws.append([
             "Date",
@@ -509,7 +516,7 @@ async def export_excel(
             "Girls",
             "Record Count",
         ])
-        
+
         # Data
         for item in data:
             ws.append([
@@ -524,12 +531,12 @@ async def export_excel(
                 item.total_girls,
                 item.record_count,
             ])
-        
+
         # Save to BytesIO
         buffer = BytesIO()
         wb.save(buffer)
         buffer.seek(0)
-        
+
         filename = f"counts_{start_date}_{end_date}.xlsx"
         return StreamingResponse(
             iter([buffer.getvalue()]),
@@ -573,8 +580,10 @@ async def export_excel(
 
     raise HTTPException(status_code=400, detail="Report type not supported")
 
-
-@router.post("/export/pdf")
+@router.post(
+    "/export/pdf",
+    dependencies=[Depends(deps.PermissionChecker("reports:read"))],
+)
 async def export_pdf(
     report_type: str = Query(..., description="counts, financial, or attendance"),
     start_date: Optional[date] = None,
@@ -584,7 +593,7 @@ async def export_pdf(
 ):
     """
     Export report as PDF file.
-    
+
     Note: Requires reportlab package. Install with: pip install reportlab
     """
     try:
@@ -595,28 +604,28 @@ async def export_pdf(
         from io import BytesIO
     except ImportError:
         raise HTTPException(status_code=501, detail="PDF export not available. Install reportlab.")
-    
+
     if not start_date:
         start_date = date.today() - timedelta(days=30)
     if not end_date:
         end_date = date.today()
-    
+
     effective_scope = str(current_user.path)
-    
+
     # Get data
     if report_type == "counts":
         data = await ReportService.get_daily_counts(db, effective_scope, start_date, end_date)
-        
+
         # Create PDF
         buffer = BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=A4)
         elements = []
-        
+
         # Title
         styles = getSampleStyleSheet()
         title = Paragraph(f"Counts Report: {start_date} to {end_date}", styles['Title'])
         elements.append(title)
-        
+
         # Table data
         table_data = [[
             "Date",
@@ -643,7 +652,7 @@ async def export_pdf(
                 str(item.total_girls),
                 str(item.record_count),
             ])
-        
+
         # Create table
         t = Table(table_data)
         t.setStyle(TableStyle([
@@ -657,11 +666,11 @@ async def export_pdf(
             ('GRID', (0, 0), (-1, -1), 1, colors.black)
         ]))
         elements.append(t)
-        
+
         # Build PDF
         doc.build(elements)
         buffer.seek(0)
-        
+
         filename = f"counts_{start_date}_{end_date}.pdf"
         return StreamingResponse(
             iter([buffer.getvalue()]),
@@ -732,4 +741,3 @@ async def export_pdf(
         )
 
     raise HTTPException(status_code=400, detail="Report type not supported")
-

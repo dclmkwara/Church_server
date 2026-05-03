@@ -8,10 +8,11 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Body, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, text
+from sqlalchemy import and_, or_, select, func, text
 from datetime import datetime
 
 from app.api import deps
+from app.models.location import Fellowship
 from app.models.user import User
 from app.schemas.sync import SyncBatchRequest, SyncBatchResponse, SyncResult
 
@@ -27,10 +28,96 @@ from app.crud.crud_fellowship_activities import (
 )
 
 router = APIRouter()
+MAX_SYNC_BATCH_RECORDS = 500
 
 
 def _parse_iso_datetime(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _sync_batch_size(batch: SyncBatchRequest) -> int:
+    return (
+        len(batch.counts)
+        + len(batch.offerings)
+        + len(batch.records)
+        + len(batch.worker_attendance)
+        + len(batch.fellowship_members)
+        + len(batch.fellowship_attendance)
+        + len(batch.fellowship_offerings)
+    )
+
+
+async def _ensure_sync_item_in_scope(
+    db: AsyncSession,
+    current_user: User,
+    item: Any,
+    scope_cache: Dict[str, bool],
+) -> None:
+    location_id = getattr(item, "location_id", None)
+    if location_id:
+        cache_key = f"location:{location_id}"
+        if cache_key not in scope_cache:
+            await deps.get_location_in_scope(
+                db,
+                current_user=current_user,
+                location_id=location_id,
+                detail="Sync item location outside your scope",
+            )
+            scope_cache[cache_key] = True
+        return
+
+    fellowship_id = getattr(item, "fellowship_id", None)
+    if fellowship_id:
+        cache_key = f"fellowship:{fellowship_id}"
+        if cache_key not in scope_cache:
+            fellowship = await db.get(Fellowship, fellowship_id)
+            if not fellowship:
+                raise HTTPException(status_code=404, detail="Fellowship not found")
+            deps.ensure_path_in_scope(
+                current_user,
+                fellowship.path,
+                detail="Sync item fellowship outside your scope",
+            )
+            scope_cache[cache_key] = True
+
+
+def _scope_filter(scope_path: str):
+    return text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
+
+
+def _changed_since_filter(model: Any, since_dt: datetime, scope_path: str):
+    return and_(
+        or_(model.created_at > since_dt, model.last_modify > since_dt),
+        _scope_filter(scope_path),
+    )
+
+
+async def _fetch_changes(
+    db: AsyncSession,
+    model: Any,
+    since_dt: datetime,
+    scope_path: str,
+    limit: int,
+) -> List[Any]:
+    result = await db.execute(
+        select(model)
+        .where(_changed_since_filter(model, since_dt, scope_path))
+        .order_by(model.last_modify.asc(), model.created_at.asc())
+        .limit(limit)
+    )
+    return result.scalars().all()
+
+
+def _sync_payload(obj: Any, **extra: Any) -> Dict[str, Any]:
+    payload = {
+        "id": str(obj.id),
+        "client_id": str(obj.client_id) if getattr(obj, "client_id", None) else None,
+        "operation": getattr(obj, "operation", None),
+        "is_deleted": bool(getattr(obj, "is_deleted", False)),
+        "last_modify": obj.last_modify.isoformat() if getattr(obj, "last_modify", None) else None,
+    }
+    payload.update(extra)
+    return payload
 
 
 async def _client_id_conflicts(
@@ -45,7 +132,7 @@ async def _client_id_conflicts(
         func.count(model.id).label("count")
     ).where(
         model.client_id.isnot(None),
-        text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
+        text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
     ).group_by(model.client_id).having(func.count(model.id) > 1).limit(limit)
     result = await db.execute(query)
     conflicts = []
@@ -72,7 +159,7 @@ async def _counts_key_conflicts(
         Count.event_id,
         func.count(Count.id).label("count"),
     ).where(
-        text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
+        text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
     ).group_by(Count.location_id, Count.date, Count.event_id).having(func.count(Count.id) > 1).limit(limit)
     result = await db.execute(query)
     conflicts = []
@@ -104,7 +191,7 @@ async def _offerings_key_conflicts(
         Offering.fund_type,
         func.count(Offering.id).label("count"),
     ).where(
-        text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
+        text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
     ).group_by(Offering.location_id, Offering.date, Offering.event_id, Offering.fund_type).having(func.count(Offering.id) > 1).limit(limit)
     result = await db.execute(query)
     conflicts = []
@@ -135,7 +222,7 @@ async def _attendance_key_conflicts(
         WorkerAttendance.event_id,
         func.count(WorkerAttendance.id).label("count"),
     ).where(
-        text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
+        text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
     ).group_by(WorkerAttendance.worker_id, WorkerAttendance.event_id).having(func.count(WorkerAttendance.id) > 1).limit(limit)
     result = await db.execute(query)
     conflicts = []
@@ -155,7 +242,8 @@ async def process_sync_list(
     db: AsyncSession, 
     items: List[Any], 
     crud_module: Any, 
-    user_id: UUID
+    current_user: User,
+    scope_cache: Dict[str, bool],
 ) -> SyncResult:
     """
     Helper to process a list of items for a specific CRUD module.
@@ -166,6 +254,8 @@ async def process_sync_list(
     
     for item in items:
         try:
+            await _ensure_sync_item_in_scope(db, current_user, item, scope_cache)
+
             # Most CRUD create methods we built accept `obj_in` and `user_id` (except some maybe)
             # We need to standardize or handle exceptions.
             # Our CRUD methods currently check client_id and return existing if found.
@@ -187,7 +277,7 @@ async def process_sync_list(
                  db_obj = await crud_module.create(db, obj_in=item)
             else:
                  # Standard logic with user_id
-                 db_obj = await crud_module.create(db, obj_in=item, user_id=user_id)
+                 db_obj = await crud_module.create(db, obj_in=item, user_id=current_user.user_id)
             
             # How do we know if it was a duplicate?
             # Our CRUD returns the object. If created_at is old, it's a duplicate.
@@ -207,6 +297,7 @@ async def process_sync_list(
             result.synced += 1
             
         except Exception as e:
+            await db.rollback()
             result.errors += 1
             results_list.append({
                 "client_id": getattr(item, 'client_id', None),
@@ -233,16 +324,23 @@ async def batch_sync(
     Batch upload synchronization.
     Accepts lists of records, processes them (preventing duplicates), and returns status.
     """
+    total_records = _sync_batch_size(batch)
+    if total_records > MAX_SYNC_BATCH_RECORDS:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Batch contains {total_records} records; maximum is {MAX_SYNC_BATCH_RECORDS}.",
+        )
+    scope_cache: Dict[str, bool] = {}
     
     # Process each list
-    counts_res = await process_sync_list(db, batch.counts, crud_count, current_user.user_id)
-    offerings_res = await process_sync_list(db, batch.offerings, crud_offering, current_user.user_id)
-    records_res = await process_sync_list(db, batch.records, crud_record, current_user.user_id)
-    worker_att_res = await process_sync_list(db, batch.worker_attendance, crud_worker_attendance, current_user.user_id)
+    counts_res = await process_sync_list(db, batch.counts, crud_count, current_user, scope_cache)
+    offerings_res = await process_sync_list(db, batch.offerings, crud_offering, current_user, scope_cache)
+    records_res = await process_sync_list(db, batch.records, crud_record, current_user, scope_cache)
+    worker_att_res = await process_sync_list(db, batch.worker_attendance, crud_worker_attendance, current_user, scope_cache)
     
-    fel_mem_res = await process_sync_list(db, batch.fellowship_members, crud_fellowship_member, current_user.user_id)
-    fel_att_res = await process_sync_list(db, batch.fellowship_attendance, crud_fellowship_attendance, current_user.user_id)
-    fel_off_res = await process_sync_list(db, batch.fellowship_offerings, crud_fellowship_offering, current_user.user_id)
+    fel_mem_res = await process_sync_list(db, batch.fellowship_members, crud_fellowship_member, current_user, scope_cache)
+    fel_att_res = await process_sync_list(db, batch.fellowship_attendance, crud_fellowship_attendance, current_user, scope_cache)
+    fel_off_res = await process_sync_list(db, batch.fellowship_offerings, crud_fellowship_offering, current_user, scope_cache)
     
     return SyncBatchResponse(
         counts=counts_res,
@@ -263,6 +361,7 @@ async def get_incremental_changes(
     *,
     db: AsyncSession = Depends(deps.get_db),
     since: str = Query(..., description="ISO timestamp of last sync"),
+    limit: int = Query(500, ge=1, le=1000, description="Maximum changed records per bucket"),
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Dict[str, Any]:
     """
@@ -276,7 +375,7 @@ async def get_incremental_changes(
     from app.models.offerings import Offering
     from app.models.records import Record
     from app.models.attendance import WorkerAttendance
-    from sqlalchemy import and_, text
+    from app.models.fellowship_activities import FellowshipMember, FellowshipAttendance, FellowshipOffering
     
     try:
         since_dt = datetime.fromisoformat(since.replace('Z', '+00:00'))
@@ -286,39 +385,44 @@ async def get_incremental_changes(
     # Get user's scope path
     scope_path = str(current_user.path)
     
-    # Query each table for changes
-    counts_query = select(Count).where(
-        and_(
-            Count.created_at > since_dt,
-            text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
-        )
-    ).limit(1000)
-    
-    offerings_query = select(Offering).where(
-        and_(
-            Offering.created_at > since_dt,
-            text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
-        )
-    ).limit(1000)
-    
-    records_query = select(Record).where(
-        and_(
-            Record.created_at > since_dt,
-            text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
-        )
-    ).limit(1000)
-    
-    # Execute queries
-    counts = (await db.execute(counts_query)).scalars().all()
-    offerings = (await db.execute(offerings_query)).scalars().all()
-    records = (await db.execute(records_query)).scalars().all()
+    counts = await _fetch_changes(db, Count, since_dt, scope_path, limit)
+    offerings = await _fetch_changes(db, Offering, since_dt, scope_path, limit)
+    records = await _fetch_changes(db, Record, since_dt, scope_path, limit)
+    worker_attendance = await _fetch_changes(db, WorkerAttendance, since_dt, scope_path, limit)
+    fellowship_members = await _fetch_changes(db, FellowshipMember, since_dt, scope_path, limit)
+    fellowship_attendance = await _fetch_changes(db, FellowshipAttendance, since_dt, scope_path, limit)
+    fellowship_offerings = await _fetch_changes(db, FellowshipOffering, since_dt, scope_path, limit)
     
     return {
         "since": since,
-        "counts": [{"id": str(c.id), "client_id": c.client_id, "date": str(c.date)} for c in counts],
-        "offerings": [{"id": str(o.id), "client_id": o.client_id, "date": str(o.date)} for o in offerings],
-        "records": [{"id": str(r.id), "client_id": r.client_id} for r in records],
-        "total_changes": len(counts) + len(offerings) + len(records)
+        "counts": [_sync_payload(c, date=str(c.date), location_id=c.location_id) for c in counts],
+        "offerings": [_sync_payload(o, date=str(o.date), location_id=o.location_id) for o in offerings],
+        "records": [_sync_payload(r, location_id=r.location_id, record_type=r.record_type) for r in records],
+        "worker_attendance": [
+            _sync_payload(a, location_id=a.location_id, worker_id=str(a.worker_id), event_id=str(a.event_id))
+            for a in worker_attendance
+        ],
+        "fellowship_members": [
+            _sync_payload(m, fellowship_id=m.fellowship_id)
+            for m in fellowship_members
+        ],
+        "fellowship_attendance": [
+            _sync_payload(a, fellowship_id=a.fellowship_id, date=str(a.date))
+            for a in fellowship_attendance
+        ],
+        "fellowship_offerings": [
+            _sync_payload(o, fellowship_id=o.fellowship_id, date=str(o.date))
+            for o in fellowship_offerings
+        ],
+        "total_changes": (
+            len(counts)
+            + len(offerings)
+            + len(records)
+            + len(worker_attendance)
+            + len(fellowship_members)
+            + len(fellowship_attendance)
+            + len(fellowship_offerings)
+        ),
     }
 
 
@@ -424,7 +528,7 @@ async def resolve_conflict(
             raise HTTPException(status_code=400, detail="Invalid client_id format")
         query = select(model).where(
             model.client_id == client_uuid,
-            text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
+            text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
         )
         records = (await db.execute(query)).scalars().all()
         if len(records) < 2:
@@ -452,7 +556,7 @@ async def resolve_conflict(
                 Count.location_id == location_id,
                 Count.date == date_val,
                 Count.event_id == event_val,
-                text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path),
+                text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path),
             )
             records = (await db.execute(query)).scalars().all()
         elif model_key == "offerings":
@@ -467,7 +571,7 @@ async def resolve_conflict(
                 Offering.date == date_val,
                 Offering.event_id == event_val,
                 Offering.fund_type == fund_type,
-                text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path),
+                text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path),
             )
             records = (await db.execute(query)).scalars().all()
         elif model_key == "worker_attendance":
@@ -478,7 +582,7 @@ async def resolve_conflict(
             query = select(WorkerAttendance).where(
                 WorkerAttendance.worker_id == UUID(worker_id),
                 WorkerAttendance.event_id == UUID(event_id),
-                text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path),
+                text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path),
             )
             records = (await db.execute(query)).scalars().all()
         else:

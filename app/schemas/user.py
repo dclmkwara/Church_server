@@ -4,7 +4,7 @@ Pydantic schemas for Worker and User models.
 from datetime import datetime
 from typing import Optional, List
 from uuid import UUID
-from pydantic import BaseModel, EmailStr, Field, validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 # --- Role & Permission Schemas ---
@@ -21,9 +21,8 @@ class PermissionCreate(PermissionBase):
 
 class PermissionResponse(PermissionBase):
     id: int
-    
-    class Config:
-        from_attributes = True
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class RoleBase(BaseModel):
@@ -39,9 +38,8 @@ class RoleCreate(RoleBase):
 class RoleResponse(RoleBase):
     id: int
     score_value: Optional[int] = None  # Helper to show actual score
-    
-    class Config:
-        from_attributes = True
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 # --- Worker Schemas ---
@@ -82,15 +80,20 @@ class WorkerUpdate(BaseModel):
 
 
 class WorkerResponse(WorkerBase):
+    email: str
     id: int
     worker_id: UUID
     path: Optional[str] = None  # Use string representation of ltree
     created_at: datetime
+    approval_status: Optional[str] = None
+    approved_by: Optional[UUID] = None
+    approved_at: Optional[datetime] = None
+    rejection_reason: Optional[str] = None
     
-    class Config:
-        from_attributes = True
-    
-    @validator('path', pre=True)
+    model_config = ConfigDict(from_attributes=True)
+
+    @field_validator("path", mode="before")
+    @classmethod
     def path_to_str(cls, v):
         """Convert ltree object to string if needed."""
         return str(v) if v is not None else None
@@ -106,7 +109,12 @@ class UserBase(BaseModel):
 class UserCreate(UserBase):
     worker_id: UUID
     password: str
-    roles: Optional[List[int]] = []  # List of Role IDs
+    roles: Optional[List[int]] = Field(default_factory=list)  # List of Role IDs
+
+
+class UserSelfRegistrationRequest(BaseModel):
+    worker_id: UUID
+    password: str = Field(..., min_length=8)
 
 
 class UserUpdate(UserBase):
@@ -117,13 +125,14 @@ class UserUpdate(UserBase):
 
 
 class UserResponse(UserBase):
+    email: str
     user_id: UUID
     worker_id: UUID
     location_id: str
     name: str
     phone: str
     created_at: datetime
-    roles: List[RoleResponse] = []
+    roles: List[RoleResponse] = Field(default_factory=list)
     path: Optional[str] = None
     
     # Approval workflow fields
@@ -132,10 +141,10 @@ class UserResponse(UserBase):
     approved_at: Optional[datetime] = None
     rejection_reason: Optional[str] = None
 
-    class Config:
-        from_attributes = True
-        
-    @validator('path', pre=True)
+    model_config = ConfigDict(from_attributes=True)
+
+    @field_validator("path", mode="before")
+    @classmethod
     def path_to_str(cls, v):
         """Convert ltree object to string if needed."""
         return str(v) if v is not None else None
@@ -167,6 +176,8 @@ class AutoCreateUserResponse(BaseModel):
     """Response for auto-created user accounts."""
     user: UserResponse
     temporary_password: str
+
+
 
 
 # --- Auth Schemas ---

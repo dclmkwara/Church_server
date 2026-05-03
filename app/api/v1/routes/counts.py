@@ -4,7 +4,7 @@ Count submission and retrieval routes.
 Handles population count data collection with offline sync support.
 """
 from typing import Any, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -40,6 +40,12 @@ async def create_count(
     Supports offline sync via client_id for idempotency.
     If a count with the same client_id already exists, returns the existing record.
     """
+    await deps.get_location_in_scope(
+        db,
+        current_user=current_user,
+        location_id=count_in.location_id,
+        detail="Count location outside your scope",
+    )
     created = await crud_count.create(db, obj_in=count_in, user_id=current_user.user_id)
     await _broadcast_event("count_created", {"id": str(created.id), "location_id": created.location_id})
     return created
@@ -70,13 +76,16 @@ async def read_counts(
     """
     Retrieve counts with hierarchical scope filtering.
     """
-    search_scope = scope_path if scope_path else str(current_user.path)
+    search_scope = deps.resolve_scope_path(current_user, scope_path)
     
     return await crud_count.get_multi_by_scope(
         db, scope_path=search_scope, skip=skip, limit=limit
     )
 
-@router.get("/aggregate")
+@router.get(
+    "/aggregate",
+    dependencies=[Depends(deps.PermissionChecker("counts:read"))],
+)
 async def aggregate_counts(
     program_domain: Optional[str] = Query(None, description="Program domain name or slug"),
     program_type: Optional[str] = Query(None, description="Program type name or slug"),
@@ -100,7 +109,7 @@ async def aggregate_counts(
         func.sum(Count.girls).label("girls"),
         func.sum(Count.total).label("total"),
     ).where(
-        text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path),
+        text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path),
         Count.is_deleted == False
     )
 
@@ -125,7 +134,10 @@ async def aggregate_counts(
     return [dict(row._mapping) for row in result.all()]
 
 
-@router.get("/aggregate-flex")
+@router.get(
+    "/aggregate-flex",
+    dependencies=[Depends(deps.PermissionChecker("counts:read"))],
+)
 async def aggregate_counts_flexible(
     view_level: str = Query(..., description="state, region, group, location"),
     program_domain: Optional[str] = Query(None, description="Program domain name or slug"),
@@ -163,7 +175,7 @@ async def aggregate_counts_flexible(
         func.sum(Count.girls).label("girls"),
         func.sum(Count.total).label("total"),
     ).where(
-        text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path),
+        text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path),
         Count.is_deleted == False
     )
 
@@ -201,6 +213,7 @@ async def read_count(
     count = await crud_count.get(db, id=count_id)
     if not count:
         raise HTTPException(status_code=404, detail="Count not found")
+    deps.ensure_path_in_scope(current_user, count.path, detail="Count outside your scope")
     return count
 
 
@@ -220,6 +233,7 @@ async def update_count(
     count = await crud_count.get(db, id=count_id)
     if not count:
         raise HTTPException(status_code=404, detail="Count not found")
+    deps.ensure_path_in_scope(current_user, count.path, detail="Count outside your scope")
     
     updated_count = await crud_count.update(db, db_obj=count, obj_in=count_in)
     
@@ -250,26 +264,106 @@ async def batch_create_counts(
     items: List[CountCreate],
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
-    """Batch submit counts (offline sync convenience)."""
-    result = SyncResult()
+    """
+    Batch submit counts (offline sync convenience).
+
+    Performance changes:
+    - All client_id duplicates are resolved in a single WHERE IN query
+      before the loop — was one DB round-trip per item.
+    - All unique location IDs are scope-validated in a single batch call
+      before the loop — was one DB round-trip per item.
+    - Items for out-of-scope locations are rejected immediately without
+      attempting an insert.
+    """
+    from sqlalchemy import select as _select
+    from app.models.counts import Count as _Count
+    from app.models.location import Location
+
+    sync_result = SyncResult()
     details = []
-    for item in items:
+
+    if not items:
+        return sync_result
+
+    # ── 1. Pre-fetch existing client_ids in ONE query ─────────────────────
+    client_ids_in = [i.client_id for i in items if i.client_id]
+    existing_by_client_id: dict = {}
+    if client_ids_in:
+        rows = (await db.execute(
+            _select(_Count.client_id, _Count.id).where(
+                _Count.client_id.in_(client_ids_in)
+            )
+        )).all()
+        existing_by_client_id = {str(row.client_id): str(row.id) for row in rows}
+
+    # ── 2. Pre-validate all unique location IDs in scope ─────────────────
+    unique_location_ids = {i.location_id for i in items}
+    locations = (await db.execute(
+        _select(Location.location_id, Location.path).where(
+            Location.location_id.in_(unique_location_ids)
+        )
+    )).all()
+    valid_location_ids: set = set()
+    for loc in locations:
         try:
-            existing = None
-            if item.client_id:
-                existing = await crud_count.get_by_client_id(db, client_id=item.client_id)
-            if existing:
-                result.duplicates += 1
-                details.append({"client_id": item.client_id, "id": existing.id, "status": "duplicate"})
+            deps.ensure_path_in_scope(
+                current_user, loc.path, detail="Count location outside your scope"
+            )
+            valid_location_ids.add(str(loc.location_id))
+        except Exception:
+            pass  # location is out of scope — will be caught per item below
+
+    # ── 3. Process items — only CRUD inserts remain in the loop ──────────
+    for item in items:
+        client_id_str = str(item.client_id) if item.client_id else None
+        try:
+            # Duplicate check (O(1) dict lookup, not a DB call)
+            if client_id_str and client_id_str in existing_by_client_id:
+                sync_result.duplicates += 1
+                details.append({
+                    "client_id": client_id_str,
+                    "id": existing_by_client_id[client_id_str],
+                    "status": "duplicate",
+                })
                 continue
+
+            # Scope check (O(1) set lookup, not a DB call)
+            if str(item.location_id) not in valid_location_ids:
+                sync_result.errors += 1
+                details.append({
+                    "client_id": client_id_str,
+                    "error": "Count location outside your scope",
+                    "status": "error",
+                })
+                continue
+
+            # The only remaining DB call per item is the actual insert
             created = await crud_count.create(db, obj_in=item, user_id=current_user.user_id)
-            result.synced += 1
-            details.append({"client_id": item.client_id, "id": created.id, "status": "synced"})
-        except Exception as e:
-            result.errors += 1
-            details.append({"client_id": item.client_id, "error": str(e), "status": "error"})
-    result.details = details
-    return result
+            sync_result.synced += 1
+            details.append({
+                "client_id": client_id_str,
+                "id": str(created.id),
+                "status": "synced",
+            })
+        except HTTPException as exc:
+            await db.rollback()
+            sync_result.errors += 1
+            details.append({
+                "client_id": client_id_str,
+                "error": exc.detail,
+                "status": "error",
+            })
+        except Exception as exc:
+            await db.rollback()
+            sync_result.errors += 1
+            details.append({
+                "client_id": client_id_str,
+                "error": str(exc),
+                "status": "error",
+            })
+
+    sync_result.details = details
+    return sync_result
 
 
 @router.get(
@@ -318,10 +412,11 @@ async def delete_count(
     count = await crud_count.get(db, id=count_id)
     if not count:
         raise HTTPException(status_code=404, detail="Count not found")
+    deps.ensure_path_in_scope(current_user, count.path, detail="Count outside your scope")
     
     await crud_count.update(
         db,
         db_obj=count,
-        obj_in={"is_deleted": True, "operation": "DELETE", "last_modify": datetime.utcnow()}
+        obj_in={"is_deleted": True, "operation": "DELETE", "last_modify": datetime.now(timezone.utc)}
     )
     return None

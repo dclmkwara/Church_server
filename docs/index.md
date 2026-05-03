@@ -1,34 +1,95 @@
-﻿# Welcome
+# DCLM Church Management System — Documentation Index
 
-The DCLM Church Management System is the backend service for Deeper Christian Life Ministry, specifically the Kwara State branch. It powers church administration, attendance, offerings, reporting, and public information.
+## For Church Leadership
 
-## What This Server Can Do
-- Organize the church structure from nation down to fellowship.
-- Register workers and manage user accounts with permissions.
-- Collect attendance counts, offerings, tithes, and worker attendance.
-- Track newcomers and converts.
-- Publish announcements and information.
-- Manage media galleries and items.
-- Provide reports, statistics, and exports.
-- Support offline data collection with sync.
-- Provide public endpoints for events, locations, galleries, and contact/prayer forms.
-
-## Who This Is For
-- **Administrators**: manage structure, users, and data.
-- **Workers and Leaders**: submit counts, attendance, and offerings.
-- **Developers**: integrate apps, dashboards, and websites.
-
-## Quick Links
-- API Docs: `API_DOCUMENTATION.md`
-- Route Examples: `ROUTE_DETAILS.md`
-- Architecture: `ARCHITECTURE.md`
-- Security & RBAC: `SECURITY.md`
-- Data Governance: `DATA_GOVERNANCE.md`
-
-## Support
-- Email: support@dclm.org
-- GitHub: https://github.com/your-org/dclm-backend
+| Document | Description |
+|---|---|
+| [System Overview](OVERVIEW.md) | What the system is, who uses it, the church hierarchy, and a map of all features |
+| [Executive Summary](../COMPREHENSIVE_PROJECT_REVIEW.md) | Non-technical summary of the entire system for pastors and leadership |
 
 ---
 
-Documentation updated: 2026-03-11
+## For Developers Integrating with the API
+
+| Document | Description |
+|---|---|
+| [Overview & Quick Reference](OVERVIEW.md) | API base URL, authentication summary, all endpoint categories |
+| [Authentication & Authorization](AUTHENTICATION.md) | Login flow, JWT claims, scope paths, permissions, recovery |
+| [API Documentation](API_DOCUMENTATION.md) | Every endpoint with request/response examples and error codes |
+| [Permissions Matrix](PERMISSIONS_MATRIX.md) | Who can do what — role scores, permission strings, approval chains |
+| [Data Governance](DATA_GOVERNANCE.md) | Data flows, approval policies, offline sync, soft-delete rules |
+
+---
+
+## For Developers Contributing to the Codebase
+
+| Document | Description |
+|---|---|
+| [Architecture](ARCHITECTURE.md) | System design, directory structure, request lifecycle, database connections |
+| [Database Schema](DATABASE_SCHEMA.md) | All tables, columns, types, foreign keys, and relationships |
+| [Setup Guide](SETUP.md) | Installation, virtual env, database setup, Alembic migrations, first admin |
+| [Tech Stack](TECH_STACK.md) | All technologies used — why they were chosen and how they're used |
+| [Deployment](DEPLOYMENT.md) | Cloud deployment to FastAPI Cloud + Supabase PostgreSQL |
+| [Security](SECURITY.md) | Security implementation details, bcrypt, JWT, RLS, CORS |
+| [Troubleshooting](TROUBLESHOOTING.md) | Common errors and their fixes |
+
+---
+
+## Feature-Specific Documentation
+
+| Document | Description |
+|---|---|
+| [Data Flow](DATA_FLOW.md) | How data moves through the system, from mobile entry to reports |
+| [Role Scores Seed](ROLE_SCORES_SEED.md) | The 9 role scores and their initial seeded values |
+| [Permissions Seed](PERMISSIONS_SEED.md) | Initial permission strings and their assignments to roles |
+| [Comprehensive Analysis](COMPREHENSIVE_ANALYSIS.md) | Deep-dive analysis comparing old and new system design decisions |
+
+---
+
+## Mobile & Website Docs
+
+| Document | Description |
+|---|---|
+| [Mobile Apps](mobile/) | API usage guide for mobile app developers |
+| [Public Website](website/) | Public endpoint reference for the church website |
+
+---
+
+## Quick Start
+
+**To run locally in 5 steps:**
+
+```bash
+# 1. Clone and enter
+git clone <repo-url> && cd Church_server
+
+# 2. Create and activate virtual environment
+python -m venv .venv && .venv\Scripts\activate  # Windows
+# OR: source .venv/bin/activate                  # macOS/Linux
+
+# 3. Install dependencies
+pip install -r requirements.txt
+
+# 4. Set up .env (copy example and edit)
+cp .env.example .env
+
+# 5. Database + start server
+python scripts/setup_db.py --skip-create-db
+uvicorn app.main:app --reload --port 8000
+```
+
+**Then visit:** http://localhost:8000/docs
+
+---
+
+## API Base URL
+
+| Environment | URL |
+|---|---|
+| Local dev | `http://localhost:8000/api/v1` |
+| Production | `https://your-fastapi-cloud-domain/api/v1` |
+
+All endpoints (except `/public/*`, `/health`, `/`) require:
+```
+Authorization: Bearer <access_token>
+```

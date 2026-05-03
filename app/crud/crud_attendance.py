@@ -30,17 +30,40 @@ class CRUDWorkerAttendance(CRUDBase[WorkerAttendance, WorkerAttendanceCreate, Wo
             raise HTTPException(status_code=404, detail="Event not found")
             
         # Verify worker exists and get details
-        from app.crud.crud_worker import worker as crud_worker
-        worker = await crud_worker.get(db, id=obj_in.worker_id)
+        from app.models.user import Worker
+        worker_result = await db.execute(
+            select(Worker).where(
+                Worker.worker_id == obj_in.worker_id,
+                Worker.is_deleted == False,
+            )
+        )
+        worker = worker_result.scalars().first()
         if not worker:
             raise HTTPException(status_code=404, detail="Worker not found")
-        
-        path_str = str(event.path)
+
+        from app.crud.crud_location import location as crud_location
+        location = await crud_location.get(db, obj_in.location_id)
+        if not location:
+            raise HTTPException(status_code=404, detail="Location not found")
+
+        if worker.location_id != obj_in.location_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Attendance location must match the worker's assigned location",
+            )
+
+        event_path = str(event.path)
+        location_path = str(location.path)
+        if not (location_path == event_path or location_path.startswith(f"{event_path}.")):
+            raise HTTPException(
+                status_code=400,
+                detail="Location must fall within the selected event scope",
+            )
         
         db_obj = WorkerAttendance(
             event_id=obj_in.event_id,
             location_id=obj_in.location_id,
-            path=path_str,
+            path=location_path,
             client_id=obj_in.client_id,
             worker_id=obj_in.worker_id,
             worker_name=worker.name,
@@ -73,7 +96,8 @@ class CRUDWorkerAttendance(CRUDBase[WorkerAttendance, WorkerAttendanceCreate, Wo
     ) -> List[WorkerAttendance]:
         """Get records within scope."""
         query = select(WorkerAttendance).where(
-            text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
+            text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path),
+            WorkerAttendance.is_deleted == False,
         ).offset(skip).limit(limit).order_by(WorkerAttendance.created_at.desc())
         
         result = await db.execute(query)

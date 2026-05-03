@@ -34,6 +34,12 @@ async def create_tithe(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Submit a new tithe record."""
+    await deps.get_location_in_scope(
+        db,
+        current_user=current_user,
+        location_id=tithe_in.location_id,
+        detail="Tithe location outside your scope",
+    )
     created = await crud_offering.create(
         db, obj_in=_force_tithe(tithe_in), user_id=current_user.user_id
     )
@@ -57,7 +63,7 @@ async def read_tithes(
     amount: float = Query(None, description="Filter by exact amount"),
 ) -> Any:
     """Retrieve tithes with scope filtering."""
-    search_scope = scope_path if scope_path else str(current_user.path)
+    search_scope = deps.resolve_scope_path(current_user, scope_path)
     return await crud_offering.get_multi_by_scope(
         db,
         scope_path=search_scope,
@@ -86,6 +92,7 @@ async def read_tithe(
     tithe = await crud_offering.get(db, id=tithe_id)
     if not tithe or tithe.fund_type != "tithe":
         raise HTTPException(status_code=404, detail="Tithe not found")
+    deps.ensure_path_in_scope(current_user, tithe.path, detail="Tithe outside your scope")
     return tithe
 
 
@@ -105,6 +112,7 @@ async def update_tithe(
     tithe = await crud_offering.get(db, id=tithe_id)
     if not tithe or tithe.fund_type != "tithe":
         raise HTTPException(status_code=404, detail="Tithe not found")
+    deps.ensure_path_in_scope(current_user, tithe.path, detail="Tithe outside your scope")
     if tithe_in.fund_type and tithe_in.fund_type != "tithe":
         raise HTTPException(status_code=400, detail="fund_type must be tithe for this endpoint")
     tithe_in = tithe_in.model_copy(update={"fund_type": "tithe"})
@@ -135,10 +143,17 @@ async def batch_create_tithes(
                 result.duplicates += 1
                 details.append({"client_id": item.client_id, "id": existing.id, "status": "duplicate"})
                 continue
+            await deps.get_location_in_scope(
+                db,
+                current_user=current_user,
+                location_id=item.location_id,
+                detail="Tithe location outside your scope",
+            )
             created = await crud_offering.create(db, obj_in=item, user_id=current_user.user_id)
             result.synced += 1
             details.append({"client_id": item.client_id, "id": created.id, "status": "synced"})
         except Exception as e:
+            await db.rollback()
             result.errors += 1
             details.append({"client_id": item.client_id, "error": str(e), "status": "error"})
     result.details = details
@@ -162,7 +177,7 @@ async def get_tithe_stats(
         func.count(Offering.id).label("count"),
         func.coalesce(func.sum(Offering.amount), 0).label("total_amount")
     ).where(
-        text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path),
+        text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path),
         Offering.fund_type == "tithe"
     )
     if start_date:
@@ -189,6 +204,7 @@ async def delete_tithe(
     tithe = await crud_offering.get(db, id=tithe_id)
     if not tithe or tithe.fund_type != "tithe":
         raise HTTPException(status_code=404, detail="Tithe not found")
+    deps.ensure_path_in_scope(current_user, tithe.path, detail="Tithe outside your scope")
     await crud_offering.update(
         db,
         db_obj=tithe,

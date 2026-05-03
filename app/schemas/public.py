@@ -1,25 +1,23 @@
 from typing import Optional, List
 from uuid import UUID
 from datetime import date, datetime
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 class PublicLocationResponse(BaseModel):
     id: str 
     name: str 
     type: str 
     address: Optional[str] = None
-    
-    class Config:
-        orm_mode = True
+
+    model_config = ConfigDict(from_attributes=True)
 
 class PublicEventResponse(BaseModel):
     id: UUID
     title: Optional[str] = None
     date: date
     type_name: str # Resolved name e.g. "Sunday Service"
-    
-    class Config:
-        orm_mode = True
+
+    model_config = ConfigDict(from_attributes=True)
 
 class PublicGalleryResponse(BaseModel):
     id: UUID
@@ -28,9 +26,8 @@ class PublicGalleryResponse(BaseModel):
     slug: Optional[str] = None
     created_at: datetime
     # We could include a cover image URL derived from items
-    
-    class Config:
-        orm_mode = True
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class PublicGalleryItemResponse(BaseModel):
@@ -43,12 +40,11 @@ class PublicGalleryItemResponse(BaseModel):
     is_cover: bool = False
     created_at: datetime
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class PublicGalleryDetailResponse(PublicGalleryResponse):
-    items: List[PublicGalleryItemResponse] = []
+    items: List[PublicGalleryItemResponse] = Field(default_factory=list)
 
 
 class PublicAnnouncementResponse(BaseModel):
@@ -62,8 +58,7 @@ class PublicAnnouncementResponse(BaseModel):
     sts_study: Optional[str] = None
     published_at: Optional[datetime] = None
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # Public Form Schemas

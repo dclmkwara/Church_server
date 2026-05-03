@@ -251,7 +251,7 @@ Score 9:   Global Admin     → Entire organization
 
 - **Database:** Supabase (PostgreSQL + Storage)
 - **File Storage:** Supabase Storage
-- **Deployment:** Render (free tier) / VPS
+- **Deployment:** FastAPI Cloud / VPS
 - **Background Jobs:** APScheduler
 
 ---
@@ -279,7 +279,7 @@ Score 9:   Global Admin     → Entire organization
 
 ### 🚧 Next Steps
 
-- [ ] Deploy to Render (via `render.yaml`)
+- [ ] Deploy to FastAPI Cloud
 - [ ] Mobile Applications (Usher, Fellowship, Admin)
 - [ ] Public Website
 - [ ] Worker Transfer Workflows

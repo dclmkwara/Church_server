@@ -23,17 +23,35 @@ Example hierarchy path:
                         └── Fellowship: F001
 """
 from typing import List, Any
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from app.api import deps
 from app.crud import crud_location
 from app.schemas import location as schemas
 from app.models.user import User
-from app.models.location import Location, Group, Region, State
+from app.models.location import Fellowship, Location, Group, Nation, Region, State
 
 router = APIRouter()
+
+
+def _ensure_hierarchy_visible(current_user: User, node: Any, *, detail: str = "Hierarchy node outside your scope") -> None:
+    node_path = getattr(node, "path", None)
+    if not (
+        deps.path_in_scope(current_user.path, node_path)
+        or deps.path_in_scope(node_path, current_user.path)
+    ):
+        raise HTTPException(status_code=403, detail=detail)
+
+
+def _ensure_hierarchy_mutable(current_user: User, node: Any, *, detail: str = "Hierarchy node outside your scope") -> None:
+    deps.ensure_path_in_scope(current_user, getattr(node, "path", None), detail=detail)
+
+
+def _hierarchy_visible_filter(path_column: Any, current_user: User):
+    scope = str(current_user.path)
+    return or_(path_column.op("<@")(scope), path_column.op("@>")(scope))
 
 
 # =============================================================================
@@ -100,8 +118,8 @@ async def create_nation(
 @router.get("/nations/", response_model=List[schemas.NationResponse])
 async def read_nations(
     db: AsyncSession = Depends(deps.get_db),
-    skip: int = 0,
-    limit: int = 100,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
@@ -125,7 +143,13 @@ async def read_nations(
         - Results are not filtered by scope (all nations visible)
         - Consider adding scope filtering for large deployments
     """
-    return await crud_location.nation.get_multi(db=db, skip=skip, limit=limit)
+    result = await db.execute(
+        select(Nation)
+        .where(_hierarchy_visible_filter(Nation.path, current_user))
+        .offset(skip)
+        .limit(limit)
+    )
+    return result.scalars().all()
 
 
 @router.get("/nations/{nation_id}", response_model=schemas.NationResponse)
@@ -157,10 +181,15 @@ async def read_nation(
     node = await crud_location.nation.get(db=db, id=nation_id)
     if not node:
         raise HTTPException(status_code=404, detail="Nation not found")
+    _ensure_hierarchy_visible(current_user, node, detail="Nation outside your scope")
     return node
 
 
-@router.put("/nations/{nation_id}", response_model=schemas.NationResponse)
+@router.put(
+    "/nations/{nation_id}",
+    response_model=schemas.NationResponse,
+    dependencies=[Depends(deps.PermissionChecker("hierarchy:update"))],
+)
 async def update_nation(
     *,
     db: AsyncSession = Depends(deps.get_db),
@@ -172,10 +201,15 @@ async def update_nation(
     node = await crud_location.nation.get(db=db, id=nation_id)
     if not node:
         raise HTTPException(status_code=404, detail="Nation not found")
+    _ensure_hierarchy_mutable(current_user, node, detail="Nation outside your scope")
     return await crud_location.nation.update(db, db_obj=node, obj_in=nation_in)
 
 
-@router.delete("/nations/{nation_id}", status_code=status.HTTP_200_OK)
+@router.delete(
+    "/nations/{nation_id}",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(deps.PermissionChecker("hierarchy:delete"))],
+)
 async def delete_nation(
     *,
     db: AsyncSession = Depends(deps.get_db),
@@ -186,6 +220,7 @@ async def delete_nation(
     node = await crud_location.nation.get(db=db, id=nation_id)
     if not node:
         raise HTTPException(status_code=404, detail="Nation not found")
+    _ensure_hierarchy_mutable(current_user, node, detail="Nation outside your scope")
     await crud_location.nation.remove(db, id=nation_id)
     return None
 
@@ -253,8 +288,8 @@ async def create_state(
 @router.get("/states/", response_model=List[schemas.StateResponse])
 async def read_states(
     db: AsyncSession = Depends(deps.get_db),
-    skip: int = 0,
-    limit: int = 100,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
@@ -274,7 +309,13 @@ async def read_states(
         GET /api/v1/states/?skip=0&limit=100
         ```
     """
-    return await crud_location.state.get_multi(db=db, skip=skip, limit=limit)
+    result = await db.execute(
+        select(State)
+        .where(_hierarchy_visible_filter(State.path, current_user))
+        .offset(skip)
+        .limit(limit)
+    )
+    return result.scalars().all()
 
 
 @router.get("/states/{state_id}", response_model=schemas.StateResponse)
@@ -306,6 +347,7 @@ async def read_state(
     node = await crud_location.state.get(db=db, id=state_id)
     if not node:
         raise HTTPException(status_code=404, detail="State not found")
+    _ensure_hierarchy_visible(current_user, node, detail="State outside your scope")
     return node
 
 
@@ -325,6 +367,7 @@ async def update_state(
     node = await crud_location.state.get(db=db, id=state_id)
     if not node:
         raise HTTPException(status_code=404, detail="State not found")
+    _ensure_hierarchy_mutable(current_user, node, detail="State outside your scope")
     return await crud_location.state.update(db, db_obj=node, obj_in=state_in)
 
 
@@ -343,6 +386,7 @@ async def delete_state(
     node = await crud_location.state.get(db=db, id=state_id)
     if not node:
         raise HTTPException(status_code=404, detail="State not found")
+    _ensure_hierarchy_mutable(current_user, node, detail="State outside your scope")
     await crud_location.state.remove(db, id=state_id)
     return None
 
@@ -404,8 +448,8 @@ async def create_region(
 @router.get("/regions/", response_model=List[schemas.RegionResponse])
 async def read_regions(
     db: AsyncSession = Depends(deps.get_db),
-    skip: int = 0,
-    limit: int = 100,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
@@ -420,7 +464,13 @@ async def read_regions(
     Returns:
         List[RegionResponse]: List of regions with paths
     """
-    return await crud_location.region.get_multi(db=db, skip=skip, limit=limit)
+    result = await db.execute(
+        select(Region)
+        .where(_hierarchy_visible_filter(Region.path, current_user))
+        .offset(skip)
+        .limit(limit)
+    )
+    return result.scalars().all()
 
 
 @router.get("/regions/{region_id}", response_model=schemas.RegionResponse)
@@ -447,6 +497,7 @@ async def read_region(
     node = await crud_location.region.get(db=db, id=region_id)
     if not node:
         raise HTTPException(status_code=404, detail="Region not found")
+    _ensure_hierarchy_visible(current_user, node, detail="Region outside your scope")
     return node
 
 
@@ -466,6 +517,7 @@ async def update_region(
     node = await crud_location.region.get(db=db, id=region_id)
     if not node:
         raise HTTPException(status_code=404, detail="Region not found")
+    _ensure_hierarchy_mutable(current_user, node, detail="Region outside your scope")
     return await crud_location.region.update(db, db_obj=node, obj_in=region_in)
 
 
@@ -484,6 +536,7 @@ async def delete_region(
     node = await crud_location.region.get(db=db, id=region_id)
     if not node:
         raise HTTPException(status_code=404, detail="Region not found")
+    _ensure_hierarchy_mutable(current_user, node, detail="Region outside your scope")
     await crud_location.region.remove(db, id=region_id)
     return None
 
@@ -545,8 +598,8 @@ async def create_group(
 @router.get("/groups/", response_model=List[schemas.GroupResponse])
 async def read_groups(
     db: AsyncSession = Depends(deps.get_db),
-    skip: int = 0,
-    limit: int = 100,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
@@ -561,7 +614,13 @@ async def read_groups(
     Returns:
         List[GroupResponse]: List of groups with paths
     """
-    return await crud_location.group.get_multi(db=db, skip=skip, limit=limit)
+    result = await db.execute(
+        select(Group)
+        .where(_hierarchy_visible_filter(Group.path, current_user))
+        .offset(skip)
+        .limit(limit)
+    )
+    return result.scalars().all()
 
 
 @router.get("/groups/{group_id}", response_model=schemas.GroupResponse)
@@ -588,6 +647,7 @@ async def read_group(
     node = await crud_location.group.get(db=db, id=group_id)
     if not node:
         raise HTTPException(status_code=404, detail="Group not found")
+    _ensure_hierarchy_visible(current_user, node, detail="Group outside your scope")
     return node
 
 
@@ -607,6 +667,7 @@ async def update_group(
     node = await crud_location.group.get(db=db, id=group_id)
     if not node:
         raise HTTPException(status_code=404, detail="Group not found")
+    _ensure_hierarchy_mutable(current_user, node, detail="Group outside your scope")
     return await crud_location.group.update(db, db_obj=node, obj_in=group_in)
 
 
@@ -625,6 +686,7 @@ async def delete_group(
     node = await crud_location.group.get(db=db, id=group_id)
     if not node:
         raise HTTPException(status_code=404, detail="Group not found")
+    _ensure_hierarchy_mutable(current_user, node, detail="Group outside your scope")
     await crud_location.group.remove(db, id=group_id)
     return None
 
@@ -691,8 +753,8 @@ async def create_location(
 @router.get("/locations/", response_model=List[schemas.LocationResponse])
 async def read_locations(
     db: AsyncSession = Depends(deps.get_db),
-    skip: int = 0,
-    limit: int = 100,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
     current_user: User = Depends(deps.get_current_active_user),
     group_id: str = None,
 ) -> Any:
@@ -719,11 +781,24 @@ async def read_locations(
         ```
     """
     if group_id:
-        from app.models.location import Location
-        query = select(Location).where(Location.group_id == group_id).offset(skip).limit(limit)
+        query = (
+            select(Location)
+            .where(
+                Location.group_id == group_id,
+                _hierarchy_visible_filter(Location.path, current_user),
+            )
+            .offset(skip)
+            .limit(limit)
+        )
         res = await db.execute(query)
         return res.scalars().all()
-    return await crud_location.location.get_multi(db=db, skip=skip, limit=limit)
+    result = await db.execute(
+        select(Location)
+        .where(_hierarchy_visible_filter(Location.path, current_user))
+        .offset(skip)
+        .limit(limit)
+    )
+    return result.scalars().all()
 
 
 @router.get("/locations/{location_id}", response_model=schemas.LocationResponse)
@@ -750,6 +825,7 @@ async def read_location(
     loc = await crud_location.location.get(db=db, id=location_id)
     if not loc:
         raise HTTPException(status_code=404, detail="Location not found")
+    _ensure_hierarchy_visible(current_user, loc, detail="Location outside your scope")
     return loc
 
 
@@ -769,6 +845,7 @@ async def update_location(
     loc = await crud_location.location.get(db=db, id=location_id)
     if not loc:
         raise HTTPException(status_code=404, detail="Location not found")
+    _ensure_hierarchy_mutable(current_user, loc, detail="Location outside your scope")
     return await crud_location.location.update(db, db_obj=loc, obj_in=location_in)
 
 
@@ -787,6 +864,7 @@ async def delete_location(
     loc = await crud_location.location.get(db=db, id=location_id)
     if not loc:
         raise HTTPException(status_code=404, detail="Location not found")
+    _ensure_hierarchy_mutable(current_user, loc, detail="Location outside your scope")
     await crud_location.location.remove(db, id=location_id)
     return None
 
@@ -799,6 +877,10 @@ async def get_location_details(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Get location details with state/region/group names."""
+    loc = await crud_location.location.get(db=db, id=location_id)
+    if not loc:
+        raise HTTPException(status_code=404, detail="Location not found")
+    _ensure_hierarchy_visible(current_user, loc, detail="Location outside your scope")
     stmt = (
         select(
             Location.location_id,
@@ -885,8 +967,8 @@ async def create_fellowship(
 @router.get("/fellowships/", response_model=List[schemas.FellowshipResponse])
 async def read_fellowships(
     db: AsyncSession = Depends(deps.get_db),
-    skip: int = 0,
-    limit: int = 100,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
     current_user: User = Depends(deps.get_current_active_user),
     location_id: str = None,
 ) -> Any:
@@ -913,11 +995,24 @@ async def read_fellowships(
         ```
     """
     if location_id:
-        from app.models.location import Fellowship
-        query = select(Fellowship).where(Fellowship.location_id == location_id).offset(skip).limit(limit)
+        query = (
+            select(Fellowship)
+            .where(
+                Fellowship.location_id == location_id,
+                _hierarchy_visible_filter(Fellowship.path, current_user),
+            )
+            .offset(skip)
+            .limit(limit)
+        )
         res = await db.execute(query)
         return res.scalars().all()
-    return await crud_location.fellowship.get_multi(db=db, skip=skip, limit=limit)
+    result = await db.execute(
+        select(Fellowship)
+        .where(_hierarchy_visible_filter(Fellowship.path, current_user))
+        .offset(skip)
+        .limit(limit)
+    )
+    return result.scalars().all()
 
 
 @router.get("/fellowships/{fellowship_id}", response_model=schemas.FellowshipResponse)
@@ -944,6 +1039,7 @@ async def read_fellowship(
     node = await crud_location.fellowship.get(db=db, id=fellowship_id)
     if not node:
         raise HTTPException(status_code=404, detail="Fellowship not found")
+    _ensure_hierarchy_visible(current_user, node, detail="Fellowship outside your scope")
     return node
 
 
@@ -963,6 +1059,7 @@ async def update_fellowship(
     node = await crud_location.fellowship.get(db=db, id=fellowship_id)
     if not node:
         raise HTTPException(status_code=404, detail="Fellowship not found")
+    _ensure_hierarchy_mutable(current_user, node, detail="Fellowship outside your scope")
     return await crud_location.fellowship.update(db, db_obj=node, obj_in=fellowship_in)
 
 
@@ -981,6 +1078,7 @@ async def delete_fellowship(
     node = await crud_location.fellowship.get(db=db, id=fellowship_id)
     if not node:
         raise HTTPException(status_code=404, detail="Fellowship not found")
+    _ensure_hierarchy_mutable(current_user, node, detail="Fellowship outside your scope")
     await crud_location.fellowship.remove(db, id=fellowship_id)
     return None
 
@@ -1035,19 +1133,44 @@ async def get_hierarchy_tree(
         ```
         
     Notes:
-        - Fetches ALL nodes (use with caution on large datasets)
-        - Consider adding scope filtering for production
+        - Fetches only nodes visible to the current user's scope
         - Tree is constructed in-memory (efficient for <10k nodes)
     """
-    from app.models.location import Nation, State, Region, Group, Location, Fellowship
-    
-    # Fetch all nodes from all levels
-    nations = (await db.execute(select(Nation))).scalars().all()
-    states = (await db.execute(select(State))).scalars().all()
-    regions = (await db.execute(select(Region))).scalars().all()
-    groups = (await db.execute(select(Group))).scalars().all()
-    locations = (await db.execute(select(Location))).scalars().all()
-    fellowships = (await db.execute(select(Fellowship))).scalars().all()
+
+    # Fetch only ancestors/descendants visible to this user's scope.
+    nations = (await db.execute(
+        select(Nation)
+        .where(_hierarchy_visible_filter(Nation.path, current_user))
+        .order_by(Nation.path)
+    )).scalars().all()
+    states = (await db.execute(
+        select(State)
+        .where(_hierarchy_visible_filter(State.path, current_user))
+        .order_by(State.path)
+    )).scalars().all()
+    regions = (await db.execute(
+        select(Region)
+        .where(_hierarchy_visible_filter(Region.path, current_user))
+        .order_by(Region.path)
+    )).scalars().all()
+    groups = (await db.execute(
+        select(Group)
+        .where(_hierarchy_visible_filter(Group.path, current_user))
+        .order_by(Group.path)
+    )).scalars().all()
+    locations = (await db.execute(
+        select(Location)
+        .where(_hierarchy_visible_filter(Location.path, current_user))
+        .order_by(Location.path)
+    )).scalars().all()
+    fellowships = (await db.execute(
+        select(Fellowship)
+        .where(_hierarchy_visible_filter(Fellowship.path, current_user))
+        .order_by(Fellowship.path)
+    )).scalars().all()
+
+    def is_visible(path: object) -> bool:
+        return deps.path_in_scope(current_user.path, path) or deps.path_in_scope(path, current_user.path)
 
     # Map nodes into TreeNode objects
     nodes_map = {}  # path -> TreeNode
@@ -1055,6 +1178,8 @@ async def get_hierarchy_tree(
     
     # Build tree from top to bottom
     for n in nations:
+        if not is_visible(n.path):
+            continue
         node = schemas.TreeNode(
             id=n.nation_id,
             name=n.country_name,
@@ -1067,6 +1192,8 @@ async def get_hierarchy_tree(
         result.append(node)
         
     for s in states:
+        if not is_visible(s.path):
+            continue
         node = schemas.TreeNode(
             id=s.state_id,
             name=s.state_name,
@@ -1081,6 +1208,8 @@ async def get_hierarchy_tree(
             nodes_map[parent_path].children.append(node)
 
     for r in regions:
+        if not is_visible(r.path):
+            continue
         node = schemas.TreeNode(
             id=r.region_id,
             name=r.region_name,
@@ -1095,6 +1224,8 @@ async def get_hierarchy_tree(
             nodes_map[parent_path].children.append(node)
 
     for g in groups:
+        if not is_visible(g.path):
+            continue
         node = schemas.TreeNode(
             id=g.group_id,
             name=g.group_name,
@@ -1109,6 +1240,8 @@ async def get_hierarchy_tree(
             nodes_map[parent_path].children.append(node)
 
     for l in locations:
+        if not is_visible(l.path):
+            continue
         node = schemas.TreeNode(
             id=l.location_id,
             name=l.location_name,
@@ -1123,6 +1256,8 @@ async def get_hierarchy_tree(
             nodes_map[parent_path].children.append(node)
 
     for f in fellowships:
+        if not is_visible(f.path):
+            continue
         node = schemas.TreeNode(
             id=f.fellowship_id,
             name=f.fellowship_name,
@@ -1142,7 +1277,8 @@ async def get_hierarchy_tree(
 async def search_hierarchy(
     *,
     db: AsyncSession = Depends(deps.get_db),
-    query: str,
+    query: str = Query(..., min_length=2, max_length=100),
+    limit: int = Query(50, ge=1, le=200),
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
@@ -1186,17 +1322,23 @@ async def search_hierarchy(
         ```
         
     Notes:
-        - Searches across ALL hierarchy levels
+        - Searches across hierarchy levels visible to the current user's scope
         - Case-insensitive partial matching
         - Results are flat (children array is empty)
-        - Consider adding scope filtering for production
     """
-    from app.models.location import Nation, State, Region, Group, Location, Fellowship
-    
+    search_term = f"%{query.strip()}%"
     results = []
-    
+
     # Search nations
-    n_res = await db.execute(select(Nation).where(Nation.country_name.ilike(f"%{query}%")))
+    n_res = await db.execute(
+        select(Nation)
+        .where(
+            Nation.country_name.ilike(search_term),
+            _hierarchy_visible_filter(Nation.path, current_user),
+        )
+        .order_by(Nation.country_name)
+        .limit(limit)
+    )
     for n in n_res.scalars().all():
         results.append(schemas.TreeNode(
             id=n.nation_id,
@@ -1206,9 +1348,21 @@ async def search_hierarchy(
             formatted_id=n.formatted_id,
             children=[]
         ))
-        
+
+    if len(results) >= limit:
+        return results[:limit]
+
     # Search states
-    s_res = await db.execute(select(State).where(State.state_name.ilike(f"%{query}%")))
+    remaining = limit - len(results)
+    s_res = await db.execute(
+        select(State)
+        .where(
+            State.state_name.ilike(search_term),
+            _hierarchy_visible_filter(State.path, current_user),
+        )
+        .order_by(State.state_name)
+        .limit(remaining)
+    )
     for s in s_res.scalars().all():
         results.append(schemas.TreeNode(
             id=s.state_id,
@@ -1218,9 +1372,21 @@ async def search_hierarchy(
             formatted_id=s.formatted_id,
             children=[]
         ))
-        
+
+    if len(results) >= limit:
+        return results[:limit]
+
     # Search regions
-    r_res = await db.execute(select(Region).where(Region.region_name.ilike(f"%{query}%")))
+    remaining = limit - len(results)
+    r_res = await db.execute(
+        select(Region)
+        .where(
+            Region.region_name.ilike(search_term),
+            _hierarchy_visible_filter(Region.path, current_user),
+        )
+        .order_by(Region.region_name)
+        .limit(remaining)
+    )
     for r in r_res.scalars().all():
         results.append(schemas.TreeNode(
             id=r.region_id,
@@ -1230,9 +1396,21 @@ async def search_hierarchy(
             formatted_id=r.formatted_id,
             children=[]
         ))
-        
+
+    if len(results) >= limit:
+        return results[:limit]
+
     # Search groups
-    g_res = await db.execute(select(Group).where(Group.group_name.ilike(f"%{query}%")))
+    remaining = limit - len(results)
+    g_res = await db.execute(
+        select(Group)
+        .where(
+            Group.group_name.ilike(search_term),
+            _hierarchy_visible_filter(Group.path, current_user),
+        )
+        .order_by(Group.group_name)
+        .limit(remaining)
+    )
     for g in g_res.scalars().all():
         results.append(schemas.TreeNode(
             id=g.group_id,
@@ -1242,9 +1420,21 @@ async def search_hierarchy(
             formatted_id=g.formatted_id,
             children=[]
         ))
-        
+
+    if len(results) >= limit:
+        return results[:limit]
+
     # Search locations
-    l_res = await db.execute(select(Location).where(Location.location_name.ilike(f"%{query}%")))
+    remaining = limit - len(results)
+    l_res = await db.execute(
+        select(Location)
+        .where(
+            Location.location_name.ilike(search_term),
+            _hierarchy_visible_filter(Location.path, current_user),
+        )
+        .order_by(Location.location_name)
+        .limit(remaining)
+    )
     for l in l_res.scalars().all():
         results.append(schemas.TreeNode(
             id=l.location_id,
@@ -1254,9 +1444,21 @@ async def search_hierarchy(
             formatted_id=l.formatted_id,
             children=[]
         ))
-        
+
+    if len(results) >= limit:
+        return results[:limit]
+
     # Search fellowships
-    f_res = await db.execute(select(Fellowship).where(Fellowship.fellowship_name.ilike(f"%{query}%")))
+    remaining = limit - len(results)
+    f_res = await db.execute(
+        select(Fellowship)
+        .where(
+            Fellowship.fellowship_name.ilike(search_term),
+            _hierarchy_visible_filter(Fellowship.path, current_user),
+        )
+        .order_by(Fellowship.fellowship_name)
+        .limit(remaining)
+    )
     for f in f_res.scalars().all():
         results.append(schemas.TreeNode(
             id=f.fellowship_id,

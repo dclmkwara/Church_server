@@ -130,7 +130,7 @@ class Worker(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
         index=True
     )
     location_name = Column(String, nullable=False, index=True)  # Denormalized for quick access
-    church_type = Column(String, nullable=False, index=True)  # DLBC, DLCF, DLSO
+    church_type = Column(String, nullable=False, index=True)  # DLBC, DLCF, DLSO, YPF
     state = Column(String, nullable=False)
     region = Column(String, nullable=False, index=True)
     group = Column(String, nullable=False, index=True)
@@ -147,9 +147,25 @@ class Worker(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     # Worker details
     unit = Column(String, nullable=False)  # Ushering, Choir, etc.
     status = Column(String, nullable=True, index=True)  # Active, Inactive, Suspended
+
+    # Registration approval workflow
+    approval_status = Column(
+        String,
+        nullable=False,
+        default="approved",  # approved, pending_verification, rejected
+        index=True
+    )
+    approved_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True)
+    approved_at = Column(DateTime(timezone=True), nullable=True)
+    rejection_reason = Column(String, nullable=True)
     
     # Relationships
-    user = relationship("User", back_populates="worker", uselist=False)  # One-to-one
+    user = relationship(
+        "User",
+        back_populates="worker",
+        uselist=False,
+        foreign_keys="User.worker_id",
+    )  # One-to-one
     location = relationship("Location", foreign_keys=[location_id])  # Link to Location table
     # attendance_records = relationship("WorkerAttendance", back_populates="worker")
     

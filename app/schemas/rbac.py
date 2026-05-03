@@ -1,5 +1,5 @@
 from typing import List, Optional
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from uuid import UUID
 
 # Permission Schemas
@@ -46,7 +46,7 @@ class RoleBase(BaseModel):
     score_id: int
 
 class RoleCreate(RoleBase):
-    permission_ids: Optional[List[int]] = []
+    permission_ids: Optional[List[int]] = Field(default_factory=list)
 
 class RoleUpdate(BaseModel):
     role_name: Optional[str] = None
@@ -57,6 +57,6 @@ class RoleUpdate(BaseModel):
 class RoleResponse(RoleBase):
     id: int
     score_value: int
-    permissions: List[PermissionResponse] = []
+    permissions: List[PermissionResponse] = Field(default_factory=list)
     
     model_config = ConfigDict(from_attributes=True)

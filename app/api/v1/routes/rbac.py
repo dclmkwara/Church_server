@@ -1,6 +1,8 @@
 from typing import Any, List
 from fastapi import APIRouter, Depends, HTTPException, Query, Body, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.api import deps
 from app.crud.crud_rbac import role, permission, role_score
@@ -9,7 +11,7 @@ from app.schemas.rbac import (
     PermissionCreate, PermissionUpdate, PermissionResponse,
     RoleScoreCreate, RoleScoreUpdate, RoleScoreResponse
 )
-from app.models.user import User
+from app.models.user import Role as RoleModel, User
 
 router = APIRouter()
 
@@ -155,9 +157,6 @@ async def read_role(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Get a single role."""
-    from sqlalchemy import select
-    from sqlalchemy.orm import selectinload
-    from app.models.user import Role as RoleModel
     stmt = select(RoleModel).where(RoleModel.id == role_id).options(selectinload(RoleModel.permissions))
     result = await db.execute(stmt)
     db_role = result.scalars().first()
@@ -246,13 +245,15 @@ async def remove_role_permission(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Remove a single permission from a role."""
-    db_role = await role.get(db, id=role_id)
+    stmt = select(RoleModel).where(RoleModel.id == role_id).options(selectinload(RoleModel.permissions))
+    result = await db.execute(stmt)
+    db_role = result.scalars().first()
     if not db_role:
         raise HTTPException(status_code=404, detail="Role not found")
     db_role.permissions = [p for p in db_role.permissions if p.id != permission_id]
     await db.commit()
-    await db.refresh(db_role)
-    return db_role
+    role_with_permissions = await role.get_with_permissions(db, role_id)
+    return role_with_permissions or db_role
 
 # ==========================================
 # Scores Endpoints

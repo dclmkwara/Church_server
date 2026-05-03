@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.crud.crud_attendance import attendance as crud_attendance
-from app.schemas.attendance import WorkerAttendanceCreate, WorkerAttendanceResponse, WorkerAttendanceUpdate
+from app.schemas.attendance import WorkerAttendanceCreate, WorkerAttendanceResponse, WorkerAttendanceUpdate, WorkerLookupResponse
 from app.schemas.user import WorkerResponse
 from app.schemas.sync import SyncResult
 from sqlalchemy import select, func, text, case
@@ -34,7 +34,41 @@ async def list_workers_for_attendance(
 ) -> Any:
     """List workers eligible for attendance at a location."""
     from app.models.user import Worker
-    query = select(Worker).where(Worker.location_id == location_id).offset(skip).limit(limit)
+    query = select(Worker).where(
+        Worker.location_id == location_id,
+        Worker.approval_status == "approved",
+        Worker.is_deleted == False,
+    ).offset(skip).limit(limit)
+    result = await db.execute(query)
+    return result.scalars().all()
+
+
+@router.get(
+    "/workers/search",
+    response_model=List[WorkerLookupResponse],
+    dependencies=[Depends(deps.PermissionChecker("attendance:read"))],
+)
+async def search_workers_for_attendance(
+    db: AsyncSession = Depends(deps.get_db),
+    prefix: str = Query(..., min_length=1, description="Prefix search (e.g., 'A' for A-names)"),
+    scope_path: str = Query(None, description="Optional scope path (must be within your scope)"),
+    location_id: str = Query(None, description="Optional location filter"),
+    limit: int = 20,
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Prefix search for workers within scope, optimized for attendance UI."""
+    effective_scope = deps.resolve_scope_path(current_user, scope_path)
+
+    from app.models.user import Worker
+    query = select(Worker).where(
+        text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=effective_scope),
+        Worker.approval_status == "approved",
+        Worker.is_deleted == False,
+        Worker.name.ilike(f"{prefix}%"),
+    )
+    if location_id:
+        query = query.where(Worker.location_id == location_id)
+    query = query.order_by(Worker.name.asc()).limit(limit)
     result = await db.execute(query)
     return result.scalars().all()
 
@@ -51,6 +85,12 @@ async def create_attendance(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Submit a worker attendance record."""
+    await deps.get_location_in_scope(
+        db,
+        current_user=current_user,
+        location_id=attendance_in.location_id,
+        detail="Attendance location outside your scope",
+    )
     created = await crud_attendance.create(db, obj_in=attendance_in, user_id=current_user.user_id)
     try:
         from app.api.v1.routes.websocket import manager
@@ -74,7 +114,7 @@ async def read_attendance(
     scope_path: str = Query(None, description="Filter by scope path"),
 ) -> Any:
     """Retrieve attendance records with scope filtering."""
-    search_scope = scope_path if scope_path else str(current_user.path)
+    search_scope = deps.resolve_scope_path(current_user, scope_path)
     return await crud_attendance.get_multi_by_scope(
         db, scope_path=search_scope, skip=skip, limit=limit
     )
@@ -95,6 +135,7 @@ async def read_attendance_record(
     record = await crud_attendance.get(db, id=attendance_id)
     if not record:
         raise HTTPException(status_code=404, detail="Attendance record not found")
+    deps.ensure_path_in_scope(current_user, record.path, detail="Attendance record outside your scope")
     return record
 
 
@@ -114,6 +155,7 @@ async def update_attendance_record(
     record = await crud_attendance.get(db, id=attendance_id)
     if not record:
         raise HTTPException(status_code=404, detail="Attendance record not found")
+    deps.ensure_path_in_scope(current_user, record.path, detail="Attendance record outside your scope")
     
     return await crud_attendance.update(db, db_obj=record, obj_in=attendance_in)
 
@@ -141,10 +183,17 @@ async def batch_create_attendance(
                 result.duplicates += 1
                 details.append({"client_id": item.client_id, "id": existing.id, "status": "duplicate"})
                 continue
+            await deps.get_location_in_scope(
+                db,
+                current_user=current_user,
+                location_id=item.location_id,
+                detail="Attendance location outside your scope",
+            )
             created = await crud_attendance.create(db, obj_in=item, user_id=current_user.user_id)
             result.synced += 1
             details.append({"client_id": item.client_id, "id": created.id, "status": "synced"})
         except Exception as e:
+            await db.rollback()
             result.errors += 1
             details.append({"client_id": item.client_id, "error": str(e), "status": "error"})
     result.details = details
@@ -171,7 +220,7 @@ async def get_attendance_stats(
         func.sum(case((WorkerAttendance.status == "late", 1), else_=0)).label("late"),
         func.sum(case((WorkerAttendance.status == "excused", 1), else_=0)).label("excused"),
     ).where(
-        text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
+        text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
     )
     if start_date:
         query = query.where(WorkerAttendance.created_at >= start_date)
@@ -203,6 +252,7 @@ async def delete_attendance_record(
     record = await crud_attendance.get(db, id=attendance_id)
     if not record:
         raise HTTPException(status_code=404, detail="Attendance record not found")
+    deps.ensure_path_in_scope(current_user, record.path, detail="Attendance record outside your scope")
     
     await crud_attendance.update(
         db,

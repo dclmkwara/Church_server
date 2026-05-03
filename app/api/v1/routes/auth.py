@@ -1,253 +1,271 @@
 """
 Authentication API routes.
 
-This module handles user authentication including:
-- Login with phone/password
-- Token refresh
-- Current user profile retrieval
+Handles user login, token refresh, and current-user profile retrieval.
 
-Authentication uses JWT tokens with role-based claims including:
-- User ID, phone, role name
-- Role score (1-9 hierarchy level)
-- Home path (user's location)
-- Scope path (calculated access scope based on role)
-
-The scope path determines what data the user can access across the hierarchy.
+Security improvements over the original:
+- Login returns HTTP 401 (not 400) for wrong credentials per RFC 6749.
+- Brute-force protection via the in-process sliding-window rate limiter.
+- Refresh tokens are now rotated on every use: old JTI is revoked in Postgres,
+  a new token with a fresh JTI is issued.  Stealing a refresh token gives an
+  attacker at most one use window before the legitimate holder invalidates it.
+- Broad `except Exception` replaced with specific exception types.
 """
-from datetime import timedelta
+import logging
+import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
+from jose import JWTError
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.core import security
 from app.core.config import settings
+from app.core.rate_limiter import check_rate_limit
 from app.crud.crud_user import user as crud_user
-from app.schemas.user import Token, UserResponse
+from app.db.session import get_db
+from app.models.refresh_token import RefreshToken
 from app.models.user import User
+from app.schemas.user import Token, UserResponse
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+def _best_role(user: User) -> tuple[int, str]:
+    """Return (score, role_name) for the user's highest-ranked role."""
+    score, role_name = 0, "Worker"
+    if user.roles:
+        best = max(user.roles, key=lambda r: r.score.score if r.score else 0)
+        if best.score:
+            score = best.score.score
+            role_name = best.role_name
+    return score, role_name
+
+
+def _build_access_token(user: User, score: int, role_name: str, scope_path: str) -> str:
+    return security.create_access_token(
+        data={
+            "sub": str(user.user_id),
+            "email": user.email,
+            "role": role_name,
+            "score": score,
+            "home_path": str(user.path),
+            "scope_path": str(scope_path),
+        },
+        expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
+    )
+
+
+async def _store_refresh_token(db: AsyncSession, user_id: str, jti: str) -> None:
+    """Persist a newly issued refresh token JTI to Postgres."""
+    expires_at = datetime.now(timezone.utc) + timedelta(
+        minutes=settings.REFRESH_TOKEN_EXPIRE_MINUTES
+    )
+    record = RefreshToken(
+        jti=uuid.UUID(jti),
+        user_id=uuid.UUID(user_id),
+        expires_at=expires_at,
+    )
+    db.add(record)
+    await db.commit()
+
+
+async def _rotate_refresh_token(
+    db: AsyncSession,
+    old_jti: str,
+    old_record: RefreshToken,
+    user_id: str,
+) -> tuple[str, str]:
+    """
+    Revoke old_record and issue a brand-new refresh token.
+
+    Returns (new_token_string, new_jti).
+    """
+    # Revoke old token
+    old_record.revoked = True
+    old_record.revoked_at = datetime.now(timezone.utc)
+    db.add(old_record)
+
+    # Issue and persist new token
+    new_token, new_jti = security.create_refresh_token(user_id=user_id)
+    expires_at = datetime.now(timezone.utc) + timedelta(
+        minutes=settings.REFRESH_TOKEN_EXPIRE_MINUTES
+    )
+    new_record = RefreshToken(
+        jti=uuid.UUID(new_jti),
+        user_id=uuid.UUID(user_id),
+        expires_at=expires_at,
+    )
+    db.add(new_record)
+    await db.commit()
+    return new_token, new_jti
+
+
+# ── Routes ─────────────────────────────────────────────────────────────────────
+
 @router.post("/login", response_model=Token)
 async def login_access_token(
-    db: AsyncSession = Depends(deps.get_db),
-    form_data: OAuth2PasswordRequestForm = Depends()
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    form_data: OAuth2PasswordRequestForm = Depends(),
 ) -> Any:
     """
     OAuth2 compatible token login.
-    
-    Authenticates a user with phone number and password, returning JWT
-    access and refresh tokens. The access token includes role-based claims
-    for authorization and scope filtering.
-    
-    Args:
-        db: Database session dependency
-        form_data: OAuth2 form with username (phone) and password
-        
-    Returns:
-        Token: Object containing access_token, refresh_token, and token_type
-        
+
+    Rate limited to 5 attempts per minute per IP address.
+    Returns access + refresh tokens on success.
+
     Raises:
-        HTTPException 400: Invalid credentials or inactive user
-        HTTPException 401: User account pending approval
-        
-    Example:
-        ```python
-        POST /api/v1/auth/login
-        Content-Type: application/x-www-form-urlencoded
-        
-        username=user@example.com&password=SecurePass123!
-        
-        Response:
-        {
-            "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-            "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-            "token_type": "bearer"
-        }
-        ```
-        
-    Token Claims:
-        - sub: User ID (UUID)
-        - email: User's email address
-        - role: Role name (e.g., "GroupPastor")
-        - score: Role score (1-9)
-        - home_path: User's location path (e.g., "org.234.KW.ILN.ILE.001")
-        - scope_path: Calculated access scope (e.g., "org.234.KW.ILN.ILE")
-        
-    Notes:
-        - Username field expects email address (not phone number)
-        - Password is verified using bcrypt
-        - User must be active (is_active=True)
-        - User must be approved (approval_status='approved')
-        - Highest role score is used if user has multiple roles
-        - Scope path is calculated based on role score
+        429 — rate limit exceeded.
+        401 — incorrect credentials or inactive / unapproved account.
     """
-    # Authenticate user
+    # ── Rate limit: 5 attempts / 60 s per IP ──────────────────────────────────
+    client_ip = request.client.host if request.client else "unknown"
+    await check_rate_limit(
+        f"login:{client_ip}",
+        max_requests=5,
+        window_seconds=60,
+    )
+
+    # ── Authenticate ──────────────────────────────────────────────────────────
     user = await crud_user.authenticate(
         db, email=form_data.username, password=form_data.password
     )
     if not user:
+        # Use 401 (not 400) — per RFC 6749 §5.2 "invalid_client"
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Incorrect email or password"
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
         )
-    
-    # Check if user is active
+
     if not user.is_active:
         raise HTTPException(
-            status_code=400,
-            detail="Your account has been deactivated. Please contact your administrator."
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Your account has been deactivated. Please contact your administrator.",
+            headers={"WWW-Authenticate": "Bearer"},
         )
-    
-    # Check approval status
+
     if user.approval_status == "pending":
         raise HTTPException(
-            status_code=401,
-            detail="Your account is awaiting admin approval. Please contact your location pastor."
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Your account is awaiting admin approval. Please contact your location pastor.",
         )
-    elif user.approval_status == "rejected":
+    if user.approval_status == "rejected":
         reason = user.rejection_reason or "No reason provided"
         raise HTTPException(
-            status_code=401,
-            detail=f"Your account was rejected. Reason: {reason}"
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Your account was rejected. Reason: {reason}",
         )
-        
-    # Calculate role score and scope
-    score = 0
-    role_name = "Worker"
-    if user.roles:
-        # Use highest score role
-        best_role = max(user.roles, key=lambda r: r.score.score if r.score else 0)
-        if best_role.score:
-            score = best_role.score.score
-            role_name = best_role.role_name
-            
-    # Calculate scope path based on role score
+
+    # ── Build tokens ──────────────────────────────────────────────────────────
+    score, role_name = _best_role(user)
     scope_path = security.create_admin_access_id(user_path=str(user.path), score=score)
-    
-    # Create tokens
-    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    
-    access_token = security.create_access_token(
-        data={
-            "sub": str(user.user_id),
-            "email": user.email,
-            "role": role_name,
-            "score": score,
-            "home_path": str(user.path),
-            "scope_path": str(scope_path)
-        },
-        expires_delta=access_token_expires,
-    )
-    
-    refresh_token = security.create_refresh_token(user_id=str(user.user_id))
-    
+
+    access_token = _build_access_token(user, score, role_name, scope_path)
+    refresh_token_str, jti = security.create_refresh_token(user_id=str(user.user_id))
+
+    await _store_refresh_token(db, str(user.user_id), jti)
+
+    logger.info("Login successful for user_id=%s scope=%s", user.user_id, scope_path)
+
     return {
         "access_token": access_token,
         "token_type": "bearer",
-        "refresh_token": refresh_token
+        "refresh_token": refresh_token_str,
     }
 
 
 @router.post("/refresh", response_model=Token)
-async def refresh_token(
-    refresh_token: str,
-    db: AsyncSession = Depends(deps.get_db)
+async def refresh_token_endpoint(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
 ) -> Any:
     """
-    Refresh access token using refresh token.
-    
-    Generates a new access token using a valid refresh token. This allows
-    clients to maintain authentication without requiring the user to login
-    again. The new access token includes updated role/scope information.
-    
-    Args:
-        refresh_token: Valid JWT refresh token
-        db: Database session dependency
-        
-    Returns:
-        Token: New access token and same refresh token
-        
+    Rotate a refresh token and issue a new access token.
+
+    The refresh token must be passed in the Authorization header as
+    ``Bearer <token>`` (same as access tokens).  On success the old token is
+    revoked and a new refresh token is returned — stolen tokens become useless
+    after the legitimate holder refreshes once.
+
     Raises:
-        HTTPException 401: Invalid or expired refresh token
-        HTTPException 404: User not found
-        HTTPException 400: User inactive
-        
-    Example:
-        ```python
-        POST /api/v1/auth/refresh
-        {
-            "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-        }
-        
-        Response:
-        {
-            "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-            "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-            "token_type": "bearer"
-        }
-        ```
-        
-    Notes:
-        - Refresh token must have type='refresh' in claims
-        - User roles/scope are recalculated (picks up any changes)
-        - Same refresh token is returned (no rotation for MVP)
-        - Access token expiration is reset
-        - User must still be active and approved
+        401 — missing / invalid / expired / already-revoked token.
+        404 — user no longer exists.
     """
-    try:
-        payload = security.verify_token(refresh_token)
-        if payload.get("type") != "refresh":
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token type"
-            )
-        user_id = payload["sub"]
-    except Exception:
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.lower().startswith("bearer "):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid refresh token"
+            detail="Refresh token must be provided as a Bearer token",
+            headers={"WWW-Authenticate": "Bearer"},
         )
-        
-    # Fetch user and recalculate claims
+    raw_token = auth_header.split(" ", 1)[1].strip()
+
+    # ── Decode & validate claims ──────────────────────────────────────────────
+    try:
+        payload = security.verify_token(raw_token)
+        if payload.get("type") != "refresh":
+            raise ValueError("Not a refresh token")
+        user_id: str = payload["sub"]
+        jti_str: str = payload["jti"]
+    except (JWTError, KeyError, ValueError, ValidationError):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired refresh token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # ── Verify JTI against DB (rotation check) ────────────────────────────────
+    try:
+        jti_uuid = uuid.UUID(jti_str)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Malformed refresh token",
+        )
+
+    token_record: RefreshToken | None = await db.get(RefreshToken, jti_uuid)
+    if token_record is None or not token_record.is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token has been revoked or expired",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # ── Load user (always fresh — no cache on refresh) ────────────────────────
     user = await crud_user.get(db, id=user_id)
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     if not user.is_active:
-        raise HTTPException(status_code=400, detail="Inactive user")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Account is inactive",
+        )
 
-    # Recalculate role score and scope (in case they changed)
-    score = 0
-    role_name = "Worker"
-    if user.roles:
-        best_role = max(user.roles, key=lambda r: r.score.score if r.score else 0)
-        if best_role.score:
-            score = best_role.score.score
-            role_name = best_role.role_name
-
+    # ── Rotate token ──────────────────────────────────────────────────────────
+    score, role_name = _best_role(user)
     scope_path = security.create_admin_access_id(user_path=str(user.path), score=score)
 
-    # Create new access token
-    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    new_access_token = security.create_access_token(
-        data={
-            "sub": str(user.user_id),
-            "email": user.email,
-            "role": role_name,
-            "score": score,
-            "home_path": str(user.path),
-            "scope_path": str(scope_path)
-        },
-        expires_delta=access_token_expires,
-    )
-    
+    new_refresh_token, _ = await _rotate_refresh_token(db, jti_str, token_record, user_id)
+    new_access_token = _build_access_token(user, score, role_name, scope_path)
+
+    # Evict cached user so fresh role data is picked up immediately
+    deps.invalidate_user_cache(user_id)
+
+    logger.info("Token rotated for user_id=%s", user_id)
+
     return {
         "access_token": new_access_token,
         "token_type": "bearer",
-        "refresh_token": refresh_token
+        "refresh_token": new_refresh_token,
     }
 
 
@@ -255,50 +273,5 @@ async def refresh_token(
 async def read_users_me(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
-    """
-    Get current authenticated user's profile.
-    
-    Returns the profile information for the currently authenticated user
-    based on the JWT token. Useful for clients to fetch user details
-    after login.
-    
-    Args:
-        current_user: Currently authenticated user (from JWT token)
-        
-    Returns:
-        UserResponse: Current user's profile with roles and scores
-        
-    Example:
-        ```python
-        GET /api/v1/auth/me
-        Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-        
-        Response:
-        {
-            "user_id": "550e8400-e29b-41d4-a716-446655440000",
-            "worker_id": "660e8400-e29b-41d4-a716-446655440001",
-            "name": "John Doe",
-            "email": "john@example.com",
-            "phone": "+2349012345678",
-            "location_id": "001",
-            "is_active": true,
-            "approval_status": "approved",
-            "roles": [
-                {
-                    "id": 1,
-                    "role_name": "GroupPastor",
-                    "score_value": 4
-                }
-            ],
-            "path": "org.234.KW.ILN.ILE.001",
-            "created_at": "2026-01-20T10:30:00Z"
-        }
-        ```
-        
-    Notes:
-        - Requires valid access token in Authorization header
-        - Returns user with eagerly loaded roles
-        - Includes approval status and location information
-        - Path shows user's position in hierarchy
-    """
+    """Return the authenticated user's profile (roles and location included)."""
     return current_user

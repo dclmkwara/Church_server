@@ -37,6 +37,8 @@ class CRUDMediaGallery(CRUDBase[MediaGallery, MediaGalleryCreate, MediaGalleryUp
              description=obj_in.description,
              event_id=obj_in.event_id,
              slug=obj_in.slug,
+             is_public=obj_in.is_public,
+             published_at=obj_in.published_at,
              path=str(loc.path),
              created_by_id=user_id
         )
@@ -55,7 +57,7 @@ class CRUDMediaGallery(CRUDBase[MediaGallery, MediaGalleryCreate, MediaGalleryUp
     ) -> List[MediaGallery]:
         """Get galleries within scope."""
         query = select(MediaGallery).where(
-            text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
+            text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
         ).offset(skip).limit(limit).order_by(MediaGallery.created_at.desc())
         
         result = await db.execute(query)

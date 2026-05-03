@@ -2,7 +2,7 @@
 Pydantic schemas for hierarchy locations.
 """
 from typing import Optional, List
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from datetime import datetime
 
 # --- Shared Base Classes ---
@@ -13,8 +13,9 @@ class HierarchyCreateBase(BaseModel):
 class HierarchyResponseBase(BaseModel):
     """Base schema for hierarchy responses - includes auto-generated path."""
     path: str
-    
-    @validator('path', pre=True)
+
+    @field_validator("path", mode="before")
+    @classmethod
     def path_to_str(cls, v):
         """Convert ltree object to string if needed."""
         return str(v) if v is not None else None
@@ -45,14 +46,13 @@ class NationUpdate(BaseModel):
 
 class NationResponse(NationBase):
     """Schema for Nation response."""
+    model_config = ConfigDict(from_attributes=True)
+
     nation_id: str
     path: str
     formatted_id: str
     created_at: datetime
     # states: List['StateResponse'] = [] # Avoid circularity or heavy loading default
-
-    class Config:
-        from_attributes = True
 
 
 # --- State Schemas ---
@@ -79,14 +79,13 @@ class StateUpdate(BaseModel):
 
 class StateResponse(StateBase):
     """Schema for State response."""
+    model_config = ConfigDict(from_attributes=True)
+
     state_id: str
     nation_id: str
     path: str
     formatted_id: str
     created_at: datetime
-
-    class Config:
-        from_attributes = True
 
 
 # --- Region Schemas ---
@@ -109,14 +108,13 @@ class RegionUpdate(BaseModel):
 
 class RegionResponse(RegionBase):
     """Schema for Region response."""
+    model_config = ConfigDict(from_attributes=True)
+
     region_id: str
     state_id: str
     path: str
     formatted_id: str
     created_at: datetime
-
-    class Config:
-        from_attributes = True
 
 
 # --- Group Schemas ---
@@ -139,21 +137,20 @@ class GroupUpdate(BaseModel):
 
 class GroupResponse(GroupBase):
     """Schema for Group response."""
+    model_config = ConfigDict(from_attributes=True)
+
     group_id: str
     region_id: str
     path: str
     formatted_id: str
     created_at: datetime
 
-    class Config:
-        from_attributes = True
-
 
 # --- Location Schemas ---
 class LocationBase(BaseModel):
     """Base fields for Location."""
     location_name: str
-    church_type: str # DLBC, DLCF...
+    church_type: str # DLBC, DLCF, YPF...
     address: Optional[str] = None
     associate_cord: Optional[str] = None
     latitude: Optional[float] = None
@@ -175,18 +172,19 @@ class LocationUpdate(BaseModel):
 
 class LocationResponse(LocationBase):
     """Schema for Location response."""
+    model_config = ConfigDict(from_attributes=True)
+
     location_id: str
     group_id: str
     path: str
     formatted_id: str
     created_at: datetime
 
-    class Config:
-        from_attributes = True
-
 
 class LocationDetailResponse(BaseModel):
     """Schema for detailed location info with hierarchy names."""
+    model_config = ConfigDict(from_attributes=True)
+
     location_id: str
     location_name: str
     church_type: str
@@ -196,9 +194,6 @@ class LocationDetailResponse(BaseModel):
     region_name: str
     state_id: str
     state_name: str
-
-    class Config:
-        from_attributes = True
 
 
 # --- Fellowship Schemas ---
@@ -225,6 +220,8 @@ class FellowshipUpdate(BaseModel):
 
 class FellowshipResponse(FellowshipBase):
     """Schema for Fellowship response."""
+    model_config = ConfigDict(from_attributes=True)
+
     fellowship_id: str
     location_id: str
     location_name: Optional[str] = None
@@ -233,20 +230,16 @@ class FellowshipResponse(FellowshipBase):
     formatted_id: str
     created_at: datetime
 
-    class Config:
-        from_attributes = True
-
 # --- Tree View Schema ---
 class TreeNode(BaseModel):
     """Recursive schema for hierarchy tree view."""
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     name: str
     type: str # 'nation', 'state', etc.
     path: str
     formatted_id: str
-    children: List['TreeNode'] = []
+    children: List['TreeNode'] = Field(default_factory=list)
 
-    class Config:
-        from_attributes = True
-
-TreeNode.update_forward_refs()
+TreeNode.model_rebuild()

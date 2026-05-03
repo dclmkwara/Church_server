@@ -1,7 +1,7 @@
 from typing import List, Optional
 from datetime import datetime, date
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, text
 from sqlalchemy.orm import selectinload
 from uuid import UUID
 
@@ -32,10 +32,10 @@ class CRUDAnnouncement:
             is_active=announcement_in.is_active,
             path=path
         )
-        
+
         db.add(announcement)
         await db.flush()
-        
+
         # Add items
         for item_data in announcement_in.items:
             item = AnnouncementItem(
@@ -44,7 +44,7 @@ class CRUDAnnouncement:
                 text=item_data.text
             )
             db.add(item)
-        
+
         await db.commit()
         await db.refresh(announcement)
         return announcement
@@ -71,12 +71,12 @@ class CRUDAnnouncement:
     ) -> List[Announcement]:
         """Get announcements filtered by scope and active status."""
         stmt = select(Announcement).options(selectinload(Announcement.items))
-        
+
         # Scope filtering using ltree
         stmt = stmt.where(
             (Announcement.path.op('<@')(scope_path)) | (Announcement.path == scope_path)
         )
-        
+
         if is_active is not None:
             stmt = stmt.where(Announcement.is_active == is_active)
         if region_id:
@@ -87,14 +87,14 @@ class CRUDAnnouncement:
             stmt = stmt.where(Announcement.date >= start_date)
         if end_date:
             stmt = stmt.where(Announcement.date <= end_date)
-        
+
         stmt = stmt.order_by(Announcement.date.desc())
 
         if get_last:
             stmt = stmt.limit(100)
         else:
             stmt = stmt.offset(skip).limit(limit)
-        
+
         result = await db.execute(stmt)
         return list(result.scalars().all())
 
@@ -108,20 +108,20 @@ class CRUDAnnouncement:
         announcement = await CRUDAnnouncement.get_by_id(db, announcement_id)
         if not announcement:
             return None
-        
+
         update_data = announcement_in.model_dump(exclude_unset=True)
-        
+
         # Handle items separately
         items_data = update_data.pop('items', None)
-        
+
         for field, value in update_data.items():
             setattr(announcement, field, value)
-        
+
         if items_data is not None:
             # Delete existing items and create new ones
             for item in announcement.items:
                 await db.delete(item)
-            
+
             for item_data in items_data:
                 item = AnnouncementItem(
                     announcement_id=announcement.id,
@@ -129,7 +129,7 @@ class CRUDAnnouncement:
                     text=item_data.text
                 )
                 db.add(item)
-        
+
         await db.commit()
         await db.refresh(announcement)
         return announcement
@@ -140,10 +140,10 @@ class CRUDAnnouncement:
         announcement = await CRUDAnnouncement.get_by_id(db, announcement_id)
         if not announcement:
             return None
-        
+
         announcement.published_at = datetime.utcnow()
         announcement.is_active = True
-        
+
         await db.commit()
         await db.refresh(announcement)
         return announcement

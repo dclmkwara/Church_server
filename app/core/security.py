@@ -1,188 +1,146 @@
 """
-Security utilities for authentication and authorization.
+Security utilities for authentication and authorisation.
+
+datetime.utcnow() is deprecated in Python 3.12+.
+All token timestamps now use datetime.now(timezone.utc).
 """
-from datetime import datetime, timedelta
+import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
+
 from jose import JWTError, jwt
 from passlib.context import CryptContext
+
 from app.core.config import settings
 
 
-# Password hashing context
+# ── Password hashing ───────────────────────────────────────────────────────────
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def hash_password(password: str) -> str:
-    """
-    Hash a password using bcrypt.
-    
-    Args:
-        password: Plain text password
-    
-    Returns:
-        str: Hashed password
-    """
+    """Hash a plain-text password with bcrypt."""
     return pwd_context.hash(password)
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """
-    Verify a password against its hash.
-    
-    Args:
-        plain_password: Plain text password
-        hashed_password: Hashed password
-    
-    Returns:
-        bool: True if password matches
-    """
+    """Verify a plain-text password against its bcrypt hash."""
     return pwd_context.verify(plain_password, hashed_password)
 
 
+# ── Access token ───────────────────────────────────────────────────────────────
+
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     """
-    Create JWT access token with custom claims.
-    
+    Create a signed JWT access token with custom claims.
+
     Args:
-        data: Token payload data (should include user info, scope_path, score, etc.)
-        expires_delta: Token expiration time delta
-    
+        data: Token payload (must include 'sub', and typically includes
+              role, score, home_path, scope_path).
+        expires_delta: Custom expiry; defaults to ACCESS_TOKEN_EXPIRE_MINUTES.
+
     Returns:
-        str: Encoded JWT token
-    
-    Example:
-        >>> token_data = {
-        ...     "sub": str(user_id),
-        ...     "phone": "+2349029952120",
-        ...     "role": "GroupPastor",
-        ...     "score": 4,
-        ...     "home_path": "org.234.kw.iln.ile.001",
-        ...     "scope_path": "org.234.kw.iln.ile"
-        ... }
-        >>> token = create_access_token(token_data)
+        Encoded JWT string.
     """
-    to_encode = data.copy()
-    
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    
-    to_encode.update({"exp": expire, "iat": datetime.utcnow()})
-    
-    encoded_jwt = jwt.encode(
-        to_encode,
-        settings.SECRET_KEY,
-        algorithm=settings.ALGORITHM
-    )
-    
-    return encoded_jwt
+    now = datetime.now(timezone.utc)
+    expire = now + (expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES))
+    payload = {**data, "exp": expire, "iat": now}
+    return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 
-def create_refresh_token(user_id: str) -> str:
+# ── Refresh token ──────────────────────────────────────────────────────────────
+# Refresh tokens have their OWN signing path so that changes to access-token
+# structure do not silently affect them.  Each token carries a unique `jti`
+# (JWT ID) so it can be tracked and rotated in the database.
+
+def create_refresh_token(user_id: str) -> tuple[str, str]:
     """
-    Create JWT refresh token.
-    
+    Create a signed JWT refresh token.
+
+    The token embeds a unique `jti` (JWT ID) that must be stored in the
+    database.  On each use the old jti is revoked and a new token is issued.
+
     Args:
-        user_id: User ID
-    
-    Returns:
-        str: Encoded JWT refresh token
-    """
-    data = {"sub": user_id, "type": "refresh"}
-    expires_delta = timedelta(minutes=settings.REFRESH_TOKEN_EXPIRE_MINUTES)
-    
-    return create_access_token(data, expires_delta)
+        user_id: UUID string of the authenticated user.
 
+    Returns:
+        Tuple of (encoded_token_string, jti_string).
+        The caller is responsible for persisting the jti to the DB.
+    """
+    now = datetime.now(timezone.utc)
+    expire = now + timedelta(minutes=settings.REFRESH_TOKEN_EXPIRE_MINUTES)
+    jti = str(uuid.uuid4())
+    payload = {
+        "sub": user_id,
+        "type": "refresh",
+        "jti": jti,
+        "iat": now,
+        "exp": expire,
+    }
+    token = jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    return token, jti
+
+
+# ── Token verification ─────────────────────────────────────────────────────────
 
 def verify_token(token: str) -> dict:
     """
-    Verify and decode JWT token.
-    
+    Verify and decode any JWT token issued by this application.
+
     Args:
-        token: JWT token string
-    
+        token: Raw JWT string.
+
     Returns:
-        dict: Decoded token payload
-    
+        Decoded payload dict.
+
     Raises:
-        JWTError: If token is invalid or expired
+        JWTError: If the token is invalid, expired, or tampered with.
     """
     try:
-        payload = jwt.decode(
-            token,
-            settings.SECRET_KEY,
-            algorithms=[settings.ALGORITHM]
-        )
-        return payload
-    except JWTError as e:
-        raise JWTError(f"Invalid token: {str(e)}")
+        return jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+    except JWTError as exc:
+        raise JWTError(f"Invalid token: {exc}") from exc
 
+
+# ── Scope helpers ──────────────────────────────────────────────────────────────
 
 def create_admin_access_id(user_path: str, score: int) -> str:
     """
-    Generate scope path based on user's home path and role score.
-    
-    This determines what data the user can access based on their role hierarchy.
-    
+    Derive a scope path from a user's home path and role score.
+
+    Score → scope depth mapping:
+        1-3  → full path (location only)
+        4    → group level  (5 segments)
+        5    → region level (4 segments)
+        6    → state level  (3 segments)
+        7    → national     (2 segments)
+        8-9  → root         (1 segment, 'org')
+
     Args:
-        user_path: User's home location path (e.g., 'org.234.kw.iln.ile.001')
-        score: Role score (1-9)
-    
+        user_path: e.g. 'org.234.kw.iln.ile.001'
+        score: Role score 1-9.
+
     Returns:
-        str: Scope path for data filtering
-    
-    Score mapping:
-        1-2: Worker/Usher → org.234.kw.iln.ile.001 (location only)
-        3: Location Pastor → org.234.kw.iln.ile.001 (location only)
-        4: Group Pastor → org.234.kw.iln.ile (all locations in group)
-        5: Regional Pastor → org.234.kw.iln (all groups in region)
-        6: State Pastor → org.234.kw (all regions in state)
-        7: National Admin → org.234 (all states in nation)
-        8: Continental Leader → org (all nations in continent)
-        9: Global Admin → org (entire organization)
-    
-    Example:
-        >>> create_admin_access_id('org.234.kw.iln.ile.001', 4)
-        'org.234.kw.iln.ile'
-        >>> create_admin_access_id('org.234.kw.iln.ile.001', 6)
-        'org.234.kw'
+        Effective scope path string.
     """
-    segments = user_path.split('.')
-    
-    if score <= 3:  # Location level (Worker, Usher, Location Pastor)
-        return user_path  # Full path (location only)
-    elif score == 4:  # Group level
-        return '.'.join(segments[:5]) if len(segments) >= 5 else user_path
-    elif score == 5:  # Regional level
-        return '.'.join(segments[:4]) if len(segments) >= 4 else user_path
-    elif score == 6:  # State level
-        return '.'.join(segments[:3]) if len(segments) >= 3 else user_path
-    elif score == 7:  # National level
-        return '.'.join(segments[:2]) if len(segments) >= 2 else user_path
-    elif score >= 8:  # Continental/Global level
-        return segments[0]  # 'org'
-    
-    return user_path  # Fallback
+    segments = user_path.split(".")
+    if score <= 3:
+        return user_path
+    if score == 4:
+        return ".".join(segments[:5]) if len(segments) >= 5 else user_path
+    if score == 5:
+        return ".".join(segments[:4]) if len(segments) >= 4 else user_path
+    if score == 6:
+        return ".".join(segments[:3]) if len(segments) >= 3 else user_path
+    if score == 7:
+        return ".".join(segments[:2]) if len(segments) >= 2 else user_path
+    # score >= 8
+    return segments[0]
 
 
 def can_assign_role(assigner_score: int, target_score: int) -> bool:
     """
-    Check if a user can assign a role based on score hierarchy.
-    
-    Users can only assign roles with scores lower than their own.
-    
-    Args:
-        assigner_score: Score of user trying to assign role
-        target_score: Score of role being assigned
-    
-    Returns:
-        bool: True if assignment is allowed
-    
-    Example:
-        >>> can_assign_role(6, 4)  # State pastor assigning group pastor
-        True
-        >>> can_assign_role(4, 6)  # Group pastor trying to assign state pastor
-        False
+    Return True when the assigner's score is strictly above the target score.
+    Users may only assign roles with a lower hierarchy score than their own.
     """
     return assigner_score > target_score

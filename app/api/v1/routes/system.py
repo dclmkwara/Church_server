@@ -1,14 +1,21 @@
-from typing import List
+from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from datetime import datetime
 
 from app.api import deps
+from app.core.config import settings
+from app.models.public_intake import PublicContactSubmission, PublicPrayerSubmission
 from app.models.user import User
 from app.models.audit import AuditLog
 from app.models.programs import ProgramDomain, ProgramType
 from pydantic import BaseModel
+from app.schemas.public_intake import (
+    PublicContactSubmissionResponse,
+    PublicPrayerSubmissionResponse,
+    PublicIntakeReviewUpdate,
+)
 
 router = APIRouter()
 
@@ -23,7 +30,7 @@ class AuditLogResponse(BaseModel):
     action: str
     resource_type: str
     resource_id: str
-    ts_utc: datetime
+    timestamp: datetime
     ip_address: str | None
     
     class Config:
@@ -78,11 +85,116 @@ async def get_audit_logs(
         action=log.action,
         resource_type=log.resource_type,
         resource_id=str(log.resource_id) if log.resource_id else "",
-        ts_utc=log.ts_utc,
+        timestamp=log.timestamp,
         ip_address=log.ip_address
     ) for log in logs]
     
     return audit_logs
+
+
+@router.get(
+    "/public-contact-submissions",
+    response_model=List[PublicContactSubmissionResponse],
+    dependencies=[Depends(deps.PermissionChecker("system:read_public_intake"))],
+)
+async def get_public_contact_submissions(
+    status: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+):
+    stmt = select(PublicContactSubmission).order_by(PublicContactSubmission.created_at.desc()).offset(skip).limit(limit)
+    if status and status != "all":
+        stmt = stmt.where(PublicContactSubmission.status == status)
+    if search:
+        like = f"%{search}%"
+        stmt = stmt.where(
+            (PublicContactSubmission.name.ilike(like))
+            | (PublicContactSubmission.email.ilike(like))
+            | (PublicContactSubmission.subject.ilike(like))
+        )
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+
+@router.post(
+    "/public-contact-submissions/{submission_id}/review",
+    response_model=PublicContactSubmissionResponse,
+    dependencies=[Depends(deps.PermissionChecker("system:manage_public_intake"))],
+)
+async def review_public_contact_submission(
+    submission_id: str,
+    review_in: PublicIntakeReviewUpdate,
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+):
+    submission = await db.get(PublicContactSubmission, submission_id)
+    if not submission:
+        raise HTTPException(status_code=404, detail="Public contact submission not found")
+    submission.status = review_in.status
+    submission.review_note = review_in.review_note
+    submission.reviewed_by_id = current_user.user_id
+    submission.reviewed_at = datetime.utcnow()
+    db.add(submission)
+    await db.commit()
+    await db.refresh(submission)
+    return submission
+
+
+@router.get(
+    "/public-prayer-submissions",
+    response_model=List[PublicPrayerSubmissionResponse],
+    dependencies=[Depends(deps.PermissionChecker("system:read_public_intake"))],
+)
+async def get_public_prayer_submissions(
+    status: Optional[str] = Query(None),
+    urgent: Optional[bool] = Query(None),
+    search: Optional[str] = Query(None),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+):
+    stmt = select(PublicPrayerSubmission).order_by(PublicPrayerSubmission.created_at.desc()).offset(skip).limit(limit)
+    if status and status != "all":
+        stmt = stmt.where(PublicPrayerSubmission.status == status)
+    if urgent is not None:
+        stmt = stmt.where(PublicPrayerSubmission.is_urgent == urgent)
+    if search:
+        like = f"%{search}%"
+        stmt = stmt.where(
+            (PublicPrayerSubmission.name.ilike(like))
+            | (PublicPrayerSubmission.email.ilike(like))
+            | (PublicPrayerSubmission.request.ilike(like))
+        )
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+
+@router.post(
+    "/public-prayer-submissions/{submission_id}/review",
+    response_model=PublicPrayerSubmissionResponse,
+    dependencies=[Depends(deps.PermissionChecker("system:manage_public_intake"))],
+)
+async def review_public_prayer_submission(
+    submission_id: str,
+    review_in: PublicIntakeReviewUpdate,
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+):
+    submission = await db.get(PublicPrayerSubmission, submission_id)
+    if not submission:
+        raise HTTPException(status_code=404, detail="Public prayer submission not found")
+    submission.status = review_in.status
+    submission.review_note = review_in.review_note
+    submission.reviewed_by_id = current_user.user_id
+    submission.reviewed_at = datetime.utcnow()
+    db.add(submission)
+    await db.commit()
+    await db.refresh(submission)
+    return submission
 
 
 # System Utilities
@@ -112,7 +224,7 @@ async def get_system_metrics(
     offerings_total = await db.execute(select(func.count(Offering.id)))
     users_total = await db.execute(select(func.count(UserModel.user_id)))
     workers_total = await db.execute(select(func.count(Worker.worker_id)))
-    locations_total = await db.execute(select(func.count(Location.id)))
+    locations_total = await db.execute(select(func.count(Location.location_id)))
     
     return {
         "database": {
@@ -125,7 +237,7 @@ async def get_system_metrics(
             }
         },
         "api": {
-            "version": "1.0.0",
+            "version": settings.VERSION,
             "total_endpoints": 130
         },
         "system": {

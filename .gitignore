@@ -59,9 +59,7 @@ Thumbs.db
 *.sqlite
 *.sqlite3
 
-# Alembic
-alembic/versions/*.py
-!alembic/versions/__init__.py
+# Alembic migration files are deployment artifacts and must be committed.
 
 # Logs
 *.log
@@ -72,6 +70,7 @@ app/logs/*.log
 # Temporary files
 *.tmp
 *.temp
+Screenshot/
 
  # Others
  api_routes.py

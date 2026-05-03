@@ -18,7 +18,7 @@ from fastapi import HTTPException
 from app.crud.base import CRUDBase
 from app.models.user import Worker
 from app.schemas.user import WorkerCreate, WorkerUpdate
-from app.models.core import parse_display_id
+from app.models.core import generate_public_person_code
 
 
 class CRUDWorker(CRUDBase[Worker, WorkerCreate, WorkerUpdate]):
@@ -31,7 +31,7 @@ class CRUDWorker(CRUDBase[Worker, WorkerCreate, WorkerUpdate]):
         Create a new worker with auto-generated ID and ltree path.
         
         The worker's path is automatically derived from the location_id.
-        User-friendly IDs (e.g., W1234) are generated based on phone number.
+        Public-facing IDs (for example, KW9029952120) are generated from the worker's state and phone number.
         
         Args:
             db: Database session
@@ -45,12 +45,11 @@ class CRUDWorker(CRUDBase[Worker, WorkerCreate, WorkerUpdate]):
             worker = await crud_worker.create(db, obj_in=worker_data)
             ```
         """
-        # Generate unique user_id from phone (last 4 digits + random)
-        base = obj_in.phone[-4:] if obj_in.phone else "0000"
+        # Generate the public worker code from state + phone (for example, KW9029952120).
+        base_code = generate_public_person_code(obj_in.state, obj_in.phone)
         generated_user_id = None
-        import random
-        for _ in range(10):
-            candidate = f"W{base}{random.randint(100,999)}"
+        for index in range(1, 100):
+            candidate = base_code if index == 1 else f"{base_code}{index:02d}"
             exists = (await db.execute(select(Worker).where(Worker.user_id == candidate))).scalars().first()
             if not exists:
                 generated_user_id = candidate
@@ -160,7 +159,8 @@ class CRUDWorker(CRUDBase[Worker, WorkerCreate, WorkerUpdate]):
             ```
         """
         query = select(Worker).where(
-            text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
+            text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path),
+            Worker.is_deleted == False,
         ).offset(skip).limit(limit)
         
         result = await db.execute(query)

@@ -2,12 +2,12 @@
 Test database connection.
 """
 import asyncio
-from app.db.session import test_connection
+from app.db.session import test_connection as db_test_connection
 
 
 async def main():
     print("Testing database connection...")
-    result = await test_connection()
+    result = await db_test_connection()
     if result:
         print("✅ Database connection SUCCESS")
     else:

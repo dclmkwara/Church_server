@@ -10,14 +10,20 @@ This module handles the user registration approval workflow, allowing:
 The workflow ensures that only authorized workers get application access.
 """
 from typing import Any, List
+from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update
+from sqlalchemy import select, text
 from datetime import datetime
 
 from app.api import deps
 from app.models.user import User, Worker
-from app.schemas.user import UserResponse, UserApprovalRequest, BulkApprovalRequest
+from app.schemas.user import (
+    UserResponse,
+    UserApprovalRequest,
+    BulkApprovalRequest,
+    UserSelfRegistrationRequest,
+)
 from app.core.security import hash_password
 
 router = APIRouter()
@@ -27,8 +33,7 @@ router = APIRouter()
 async def request_user_account(
     *,
     db: AsyncSession = Depends(deps.get_db),
-    worker_id: str,
-    password: str,
+    payload: UserSelfRegistrationRequest,
 ) -> Any:
     """
     Worker self-registration for user account.
@@ -65,19 +70,28 @@ async def request_user_account(
     """
     # Verify worker exists
     worker_result = await db.execute(
-        select(Worker).where(Worker.worker_id == worker_id)
+        select(Worker).where(
+            Worker.worker_id == payload.worker_id,
+            Worker.is_deleted == False,
+        )
     )
     worker = worker_result.scalar_one_or_none()
     
     if not worker:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Worker with ID {worker_id} not found"
+            detail=f"Worker with ID {payload.worker_id} not found"
+        )
+
+    if worker.approval_status != "approved":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only approved workers can request user accounts",
         )
     
     # Check if user already exists
     existing_user = await db.execute(
-        select(User).where(User.worker_id == worker_id)
+        select(User).where(User.worker_id == payload.worker_id)
     )
     if existing_user.scalar_one_or_none():
         raise HTTPException(
@@ -86,7 +100,7 @@ async def request_user_account(
         )
     
     # Create pending user
-    hashed_password = hash_password(password)
+    hashed_password = hash_password(payload.password)
     new_user = User(
         worker_id=worker.worker_id,
         password=hashed_password,
@@ -94,6 +108,7 @@ async def request_user_account(
         name=worker.name,
         phone=worker.phone,
         email=worker.email,
+        path=worker.path,
         approval_status="pending",  # Requires admin approval
         is_active=False,  # Inactive until approved
     )
@@ -151,8 +166,11 @@ async def list_pending_users(
     # Filter by location scope using ltree path
     query = (
         select(User)
-        .where(User.approval_status == "pending")
-        .where(User.path.descendant_of(current_user.path))  # Scope to admin's hierarchy
+        .where(
+            User.approval_status == "pending",
+            User.is_deleted == False,
+            text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=str(current_user.path)),
+        )
         .offset(skip)
         .limit(limit)
         .order_by(User.created_at)
@@ -170,7 +188,7 @@ async def list_pending_users(
 async def approve_user(
     *,
     db: AsyncSession = Depends(deps.get_db),
-    user_id: str,
+    user_id: UUID,
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
@@ -215,19 +233,7 @@ async def approve_user(
             detail=f"User with ID {user_id} not found"
         )
     
-    # Check if user is within admin's scope
-    # Enforce scope with ltree path
-    from sqlalchemy import select, text
-    scope_stmt = select(User.user_id).where(
-        User.user_id == user.user_id,
-        text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=str(current_user.path))
-    )
-    scope_result = await db.execute(scope_stmt)
-    if scope_result.scalar_one_or_none() is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You can only approve users within your scope"
-        )
+    deps.ensure_path_in_scope(current_user, user.path, detail="You can only approve users within your scope")
     
     # Check if already processed
     if user.approval_status != "pending":
@@ -256,8 +262,8 @@ async def approve_user(
 async def reject_user(
     *,
     db: AsyncSession = Depends(deps.get_db),
-    user_id: str,
-    reason: str,
+    user_id: UUID,
+    payload: UserApprovalRequest,
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
@@ -294,7 +300,7 @@ async def reject_user(
         - Records rejection reason for worker to view
         - Worker can reapply after addressing concerns
     """
-    if not reason or len(reason.strip()) < 10:
+    if not payload.reason or len(payload.reason.strip()) < 10:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Rejection reason must be at least 10 characters"
@@ -312,12 +318,7 @@ async def reject_user(
             detail=f"User with ID {user_id} not found"
         )
     
-    # Check scope
-    if user.location_id != current_user.location_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You can only reject users in your location"
-        )
+    deps.ensure_path_in_scope(current_user, user.path, detail="You can only reject users within your scope")
     
     # Check if already processed
     if user.approval_status != "pending":
@@ -331,7 +332,7 @@ async def reject_user(
     user.is_active = False
     user.approved_by = current_user.user_id
     user.approved_at = datetime.utcnow()
-    user.rejection_reason = reason
+    user.rejection_reason = payload.reason
     
     await db.commit()
     await db.refresh(user)
@@ -347,7 +348,7 @@ async def reject_user(
 async def bulk_approve_users(
     *,
     db: AsyncSession = Depends(deps.get_db),
-    user_ids: List[str],
+    request: BulkApprovalRequest,
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
@@ -392,7 +393,7 @@ async def bulk_approve_users(
         - Continues processing even if some approvals fail
         - Returns detailed failure information
     """
-    if not user_ids:
+    if not request.user_ids:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="user_ids list cannot be empty"
@@ -401,7 +402,7 @@ async def bulk_approve_users(
     approved_count = 0
     failed = []
     
-    for user_id in user_ids:
+    for user_id in request.user_ids:
         try:
             # Fetch user
             user_result = await db.execute(
@@ -413,9 +414,8 @@ async def bulk_approve_users(
                 failed.append({"user_id": user_id, "reason": "User not found"})
                 continue
             
-            # Check scope
-            if user.location_id != current_user.location_id:
-                failed.append({"user_id": user_id, "reason": "Outside your location scope"})
+            if not deps.path_in_scope(current_user.path, user.path):
+                failed.append({"user_id": user_id, "reason": "Outside your scope"})
                 continue
             
             # Check status
@@ -450,8 +450,8 @@ async def bulk_approve_users(
 async def deactivate_user(
     *,
     db: AsyncSession = Depends(deps.get_db),
-    user_id: str,
-    reason: str,
+    user_id: UUID,
+    payload: UserApprovalRequest,
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
@@ -488,7 +488,7 @@ async def deactivate_user(
         - Can be reactivated later
         - User cannot login while deactivated
     """
-    if not reason or len(reason.strip()) < 10:
+    if not payload.reason or len(payload.reason.strip()) < 10:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Deactivation reason must be at least 10 characters"
@@ -506,12 +506,7 @@ async def deactivate_user(
             detail=f"User with ID {user_id} not found"
         )
     
-    # Check scope
-    if user.location_id != current_user.location_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You can only deactivate users in your location"
-        )
+    deps.ensure_path_in_scope(current_user, user.path, detail="You can only deactivate users within your scope")
     
     if not user.is_active:
         raise HTTPException(
@@ -521,7 +516,7 @@ async def deactivate_user(
     
     # Deactivate
     user.is_active = False
-    user.rejection_reason = reason  # Reuse field for deactivation reason
+    user.rejection_reason = payload.reason  # Reuse field for deactivation reason
     
     await db.commit()
     await db.refresh(user)
@@ -537,7 +532,7 @@ async def deactivate_user(
 async def reactivate_user(
     *,
     db: AsyncSession = Depends(deps.get_db),
-    user_id: str,
+    user_id: UUID,
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
@@ -582,12 +577,7 @@ async def reactivate_user(
             detail=f"User with ID {user_id} not found"
         )
     
-    # Check scope
-    if user.location_id != current_user.location_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You can only reactivate users in your location"
-        )
+    deps.ensure_path_in_scope(current_user, user.path, detail="You can only reactivate users within your scope")
     
     if user.approval_status != "approved":
         raise HTTPException(

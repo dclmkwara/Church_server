@@ -1,100 +1,96 @@
-# Deploying DCLM API to Render
+# Deploying DCLM API to FastAPI Cloud with Supabase
 
 ## Prerequisites
 
-1. A [Render](https://render.com) account
-2. This repo pushed to GitHub (public or private)
-3. A Supabase project **or** a Render PostgreSQL database
+1. A FastAPI Cloud account
+2. This repo pushed to GitHub, or the FastAPI Cloud CLI available locally
+3. A Supabase project
 
----
+## Project Entry Point
 
-## Option A: One-Click Deploy (Render Blueprint)
+The app entry point is declared in `pyproject.toml`:
 
-1. Push this repo to GitHub.
-2. Go to [Render Dashboard](https://dashboard.render.com) → **New** → **Blueprint**.
-3. Connect your GitHub repo.
-4. Render reads `render.yaml` and creates:
-   - A **PostgreSQL** database (`dclm-db`)
-   - A **Web Service** (`dclm-api`)
-5. Render auto-injects `DATABASE_URL` and generates a `SECRET_KEY`.
-6. Deployment starts automatically.
+```toml
+[tool.fastapi]
+entrypoint = "app.main:app"
+```
 
----
+FastAPI Cloud should deploy the backend as `app.main:app`.
 
-## Option B: Manual Setup with Supabase
+## Environment Variables
 
-### 1. Create Render Web Service
-
-1. Go to **Render Dashboard** → **New** → **Web Service**.
-2. Connect your GitHub repo.
-3. Settings:
-   - **Runtime:** Python 3
-   - **Build Command:** `pip install -r requirements.txt`
-   - **Start Command:** `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
-
-### 2. Set Environment Variables
-
-In Render → your service → **Environment**:
+Set these in FastAPI Cloud before the first production deploy:
 
 | Variable | Value |
 |----------|-------|
 | `APP_NAME` | `DCLM Server` |
 | `DEBUG` | `false` |
-| `SECRET_KEY` | *(generate: `openssl rand -hex 32`)* |
+| `SECRET_KEY` | Generate with `python -c "import secrets; print(secrets.token_hex(32))"` |
 | `ALGORITHM` | `HS256` |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `60` |
-| `DATABASE_URL` | `postgresql+asyncpg://postgres:PASSWORD@db.PROJECT.supabase.co:5432/postgres` |
+| `DATABASE_URL` | Supabase transaction pooler URL, for example `postgresql+asyncpg://postgres.PROJECT:PASSWORD@aws-0-REGION.pooler.supabase.com:6543/postgres?sslmode=require` |
+| `SYNC_DATABASE_URL` | Optional psycopg2 URL for migrations |
+| `DB_POOL_SIZE` | `5` |
+| `DB_MAX_OVERFLOW` | `10` |
+| `DB_POOL_RECYCLE_SECONDS` | `3600` |
+| `BACKEND_CORS_ORIGINS` | JSON array of allowed frontend origins |
 
-> **Important:** The `DATABASE_URL` must use the `postgresql+asyncpg://` prefix.
-> If you paste a `postgresql://` or `postgres://` URL, the app auto-converts it.
-
-### 3. Deploy
-
-Click **Create Web Service**. Render builds and deploys automatically.
-
----
-
-## Post-Deployment
-
-### Verify
-
-```
-https://your-service.onrender.com/health
-https://your-service.onrender.com/docs
-```
-
-### Run Migrations
-
-SSH into Render shell or add to build command:
-
-```bash
-pip install -r requirements.txt && python -m alembic upgrade head
-```
-
-### Seed Initial Data
-
-Hit the seed endpoint (admin only) or use the Render shell:
-
-```bash
-python -c "from app.db.init_rbac import seed_rbac; import asyncio; asyncio.run(seed_rbac())"
-```
-
----
+If the password contains `#`, encode it as `%23` when possible. The app also normalizes raw passwords before parsing, but encoded URLs are safer in dashboards and shells.
 
 ## Supabase Setup
 
-1. Create a project at [supabase.com](https://supabase.com).
-2. Enable the `ltree` extension: **Database** → **Extensions** → search `ltree` → Enable.
-3. Copy the connection string from **Settings** → **Database** → **Connection string** → **URI**.
-4. Replace `postgresql://` with `postgresql+asyncpg://` in your `.env`.
+1. Create a Supabase project.
+2. Copy the Transaction pooler connection string from Supabase Database settings.
+3. Use port `6543` for the pooler.
+4. Keep `sslmode=require` on the URL.
+5. The migration bootstrap creates the `ltree` extension and schema on a fresh database.
 
----
+## Deploy
+
+From the project root:
+
+```bash
+fastapi deploy
+```
+
+Or connect the GitHub repo in the FastAPI Cloud dashboard and select `app.main:app` as the application entry point.
+
+## Migrations
+
+Run migrations against the production Supabase database before opening the app to users:
+
+```bash
+python -m alembic upgrade head
+```
+
+The Alembic environment uses sync `psycopg2` for migrations while runtime traffic remains async with `asyncpg`.
+
+## Initial Data
+
+After migrations, seed safe metadata only:
+
+```bash
+python scripts/seed_admin_bootstrap.py --metadata-only
+```
+
+Do not run the full starter bootstrap against production unless you intentionally want it to create the starter pastor accounts. If you use it, pass a strong unique password:
+
+```bash
+python scripts/seed_admin_bootstrap.py --password "use-a-strong-unique-password"
+```
+
+## Verify
+
+```text
+https://your-fastapi-cloud-domain/health
+https://your-fastapi-cloud-domain/docs
+```
 
 ## Troubleshooting
 
 | Issue | Fix |
 |-------|-----|
-| `getaddrinfo failed` | Supabase project is paused. Resume it from dashboard. |
-| `relation does not exist` | Run `python -m alembic upgrade head` first. |
-| Port binding error | Use `$PORT` env variable (Render sets it automatically). |
-| CORS errors | Add frontend URL to `BACKEND_CORS_ORIGINS` in env. |
+| `getaddrinfo failed` | Supabase project may be paused, or the host in `DATABASE_URL` is wrong. |
+| `relation does not exist` | Run `python -m alembic upgrade head`. |
+| `prepared statement already exists` | Use the transaction pooler URL; prepared statement cache is disabled automatically for Supabase pooler hosts. |
+| CORS errors | Add the frontend URL to `BACKEND_CORS_ORIGINS`. |

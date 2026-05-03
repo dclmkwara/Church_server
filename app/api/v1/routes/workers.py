@@ -13,10 +13,11 @@ Key concepts:
 All operations respect hierarchical scope based on the current user's role.
 """
 from typing import Any, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
 
@@ -26,6 +27,15 @@ from app.schemas.user import WorkerCreate, WorkerResponse, WorkerUpdate
 from app.models.user import Worker, User
 
 router = APIRouter()
+
+
+async def _get_worker_or_404(db: AsyncSession, worker_id: UUID) -> Worker:
+    """Fetch a Worker by UUID or raise HTTP 404."""
+    result = await db.execute(select(Worker).where(Worker.worker_id == worker_id))
+    worker = result.scalars().first()
+    if not worker:
+        raise HTTPException(status_code=404, detail="Worker not found")
+    return worker
 
 
 @router.get(
@@ -74,7 +84,7 @@ async def read_workers(
         - Results limited by user's role score
         - Workers include location information (denormalized)
     """
-    search_scope = scope_path if scope_path else str(current_user.path)
+    search_scope = deps.resolve_scope_path(current_user, scope_path)
     
     workers = await crud_worker.get_multi_by_scope(
         db, scope_path=search_scope, skip=skip, limit=limit
@@ -103,9 +113,10 @@ async def search_workers(
     location_id: Optional[str] = None,
 ) -> Any:
     """Search workers with optional filters."""
-    search_scope = scope_path if scope_path else str(current_user.path)
+    search_scope = deps.resolve_scope_path(current_user, scope_path)
     query = select(Worker).where(
-        text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=search_scope)
+        text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=search_scope),
+        Worker.is_deleted == False,
     )
     if user_id:
         query = query.where(Worker.user_id == user_id)
@@ -125,6 +136,29 @@ async def search_workers(
         query = query.where(Worker.location_id == location_id)
 
     query = query.offset(skip).limit(limit)
+    result = await db.execute(query)
+    return result.scalars().all()
+
+
+@router.get(
+    "/pending",
+    response_model=List[WorkerResponse],
+    dependencies=[Depends(deps.PermissionChecker("workers:approve"))],
+)
+async def list_pending_workers(
+    db: AsyncSession = Depends(deps.get_db),
+    skip: int = 0,
+    limit: int = 100,
+    current_user: User = Depends(deps.get_current_active_user),
+    scope_path: str = Query(None, description="Filter by scope path"),
+) -> Any:
+    """List pending worker registrations within scope."""
+    search_scope = deps.resolve_scope_path(current_user, scope_path)
+    query = select(Worker).where(
+        Worker.approval_status == "pending_verification",
+        text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=search_scope),
+        Worker.is_deleted == False,
+    ).offset(skip).limit(limit)
     result = await db.execute(query)
     return result.scalars().all()
 
@@ -191,16 +225,18 @@ async def create_worker(
         - user_id (string) is auto-generated (e.g., W001, W002)
         - Worker can request user account after registration
     """
-    # Check for duplicate phone
-    worker = await crud_worker.get_by_phone(db, phone=worker_in.phone)
-    if worker:
+    await deps.get_location_in_scope(
+        db, current_user=current_user, location_id=worker_in.location_id,
+        detail="You can only create workers within your scope",
+    )
+    try:
+        worker = await crud_worker.create(db, obj_in=worker_in)
+    except IntegrityError:
+        await db.rollback()
         raise HTTPException(
             status_code=400,
-            detail="The worker with this phone already exists in the system.",
+            detail="A worker with this phone number or email already exists.",
         )
-    
-    # Create worker (CRUD will validate location exists)
-    worker = await crud_worker.create(db, obj_in=worker_in)
     return worker
 
 
@@ -238,24 +274,8 @@ async def read_worker_by_id(
         - Uses worker_id (UUID), not the user_id (string like "W001")
         - Validates worker is within current user's scope
     """
-    query = select(Worker).where(Worker.worker_id == worker_id)
-    result = await db.execute(query)
-    worker = result.scalars().first()
-        
-    if not worker:
-        raise HTTPException(status_code=404, detail="Worker not found")
-    
-    if str(worker.path) and str(current_user.path):
-        scope_stmt = select(Worker.worker_id).where(
-            Worker.worker_id == worker_id,
-            text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=str(current_user.path))
-        )
-        scope_result = await db.execute(scope_stmt)
-        if scope_result.scalar_one_or_none() is None:
-            raise HTTPException(status_code=403, detail="Worker outside your scope")
-    # if not worker.path.descendant_of(current_user.path):
-    #     raise HTTPException(status_code=403, detail="Worker outside your scope")
-        
+    worker = await _get_worker_or_404(db, worker_id)
+    deps.ensure_path_in_scope(current_user, worker.path, detail="Worker outside your scope")
     return worker
 
 
@@ -307,24 +327,65 @@ async def update_worker(
         - Phone and email must remain unique
         - Cannot update worker outside your scope
     """
-    # Fetch worker by UUID
-    query = select(Worker).where(Worker.worker_id == worker_id)
-    result = await db.execute(query)
-    worker = result.scalars().first()
-    
-    if not worker:
-        raise HTTPException(status_code=404, detail="Worker not found")
-    
-    if str(worker.path) and str(current_user.path):
-        scope_stmt = select(Worker.worker_id).where(
-            Worker.worker_id == worker_id,
-            text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=str(current_user.path))
-        )
-        scope_result = await db.execute(scope_stmt)
-        if scope_result.scalar_one_or_none() is None:
-            raise HTTPException(status_code=403, detail="Worker outside your scope")
-        
+    worker = await _get_worker_or_404(db, worker_id)
+    deps.ensure_path_in_scope(current_user, worker.path, detail="Worker outside your scope")
     worker = await crud_worker.update(db, db_obj=worker, obj_in=worker_in)
+    return worker
+
+
+@router.post(
+    "/{worker_id}/approve",
+    response_model=WorkerResponse,
+    dependencies=[Depends(deps.PermissionChecker("workers:approve"))],
+)
+async def approve_worker_registration(
+    *,
+    db: AsyncSession = Depends(deps.get_db),
+    worker_id: UUID,
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Approve a pending worker registration."""
+    worker = await _get_worker_or_404(db, worker_id)
+    deps.ensure_path_in_scope(current_user, worker.path, detail="Worker outside your scope")
+    if worker.approval_status != "pending_verification":
+        raise HTTPException(status_code=400, detail=f"Worker is already {worker.approval_status}")
+    worker.approval_status = "approved"
+    worker.status = "Active"
+    worker.approved_by = current_user.user_id
+    worker.approved_at = datetime.now(timezone.utc)
+    worker.rejection_reason = None
+    await db.commit()
+    await db.refresh(worker)
+    return worker
+
+
+@router.post(
+    "/{worker_id}/reject",
+    response_model=WorkerResponse,
+    dependencies=[Depends(deps.PermissionChecker("workers:approve"))],
+)
+async def reject_worker_registration(
+    *,
+    db: AsyncSession = Depends(deps.get_db),
+    worker_id: UUID,
+    reason: str,
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Reject a pending worker registration."""
+    if not reason or len(reason.strip()) < 10:
+        raise HTTPException(status_code=400, detail="Rejection reason must be at least 10 characters")
+
+    worker = await _get_worker_or_404(db, worker_id)
+    deps.ensure_path_in_scope(current_user, worker.path, detail="Worker outside your scope")
+    if worker.approval_status != "pending_verification":
+        raise HTTPException(status_code=400, detail=f"Worker is already {worker.approval_status}")
+    worker.approval_status = "rejected"
+    worker.status = "Rejected"
+    worker.rejection_reason = reason
+    worker.approved_by = current_user.user_id
+    worker.approved_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(worker)
     return worker
 
 
@@ -340,23 +401,11 @@ async def delete_worker(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Soft delete a worker."""
-    query = select(Worker).where(Worker.worker_id == worker_id)
-    result = await db.execute(query)
-    worker = result.scalars().first()
-    
-    if not worker:
-        raise HTTPException(status_code=404, detail="Worker not found")
-    
-    await crud_worker.update(
-        db,
-        db_obj=worker,
-        obj_in={"is_deleted": True, "operation": "DELETE", "last_modify": datetime.utcnow()}
-    )
+    worker = await _get_worker_or_404(db, worker_id)
+    deps.ensure_path_in_scope(current_user, worker.path, detail="Worker outside your scope")
+    now = datetime.now(timezone.utc)
+    await crud_worker.update(db, db_obj=worker, obj_in={"is_deleted": True, "operation": "DELETE", "last_modify": now})
     if worker.user:
         from app.crud.crud_user import user as crud_user
-        await crud_user.update(
-            db,
-            db_obj=worker.user,
-            obj_in={"is_deleted": True, "operation": "DELETE", "last_modify": datetime.utcnow()}
-        )
+        await crud_user.update(db, db_obj=worker.user, obj_in={"is_deleted": True, "operation": "DELETE", "last_modify": now})
     return None

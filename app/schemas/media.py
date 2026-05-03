@@ -1,7 +1,7 @@
 from typing import Optional, List
 from uuid import UUID
 from datetime import datetime
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 class MediaItemBase(BaseModel):
     file_path: str
@@ -24,15 +24,16 @@ class MediaItemResponse(MediaItemBase):
     gallery_id: UUID
     uploaded_by_id: UUID
     created_at: datetime
-    
-    class Config:
-        orm_mode = True
+
+    model_config = ConfigDict(from_attributes=True)
 
 class MediaGalleryBase(BaseModel):
     title: str
     description: Optional[str] = None
     event_id: Optional[UUID] = None
     slug: Optional[str] = None
+    is_public: bool = False
+    published_at: Optional[datetime] = None
 
 class MediaGalleryCreate(MediaGalleryBase):
     location_id: str
@@ -48,7 +49,6 @@ class MediaGalleryResponse(MediaGalleryBase):
     path: str
     created_by_id: UUID
     created_at: datetime
-    items: List[MediaItemResponse] = []
-    
-    class Config:
-        orm_mode = True
+    items: List[MediaItemResponse] = Field(default_factory=list)
+
+    model_config = ConfigDict(from_attributes=True)

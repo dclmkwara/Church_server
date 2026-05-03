@@ -24,9 +24,18 @@ from app.schemas.fellowship_activities import (
     PrayerRequestCreate, PrayerRequestUpdate, PrayerRequestResponse,
     AttendanceSummaryCreate, AttendanceSummaryUpdate, AttendanceSummaryResponse
 )
+from app.models.location import Fellowship
 from app.models.user import User
 
 router = APIRouter()
+
+
+async def _ensure_fellowship_in_scope(db: AsyncSession, current_user: User, fellowship_id: str) -> Fellowship:
+    fellowship = await db.get(Fellowship, fellowship_id)
+    if not fellowship:
+        raise HTTPException(status_code=404, detail="Fellowship not found")
+    deps.ensure_path_in_scope(current_user, fellowship.path, detail="Fellowship outside your scope")
+    return fellowship
 
 
 # ==========================================
@@ -44,6 +53,7 @@ async def create_fellowship_member(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Register a new fellowship member."""
+    await _ensure_fellowship_in_scope(db, current_user, member_in.fellowship_id)
     return await crud_member.create(db, obj_in=member_in)
 
 
@@ -60,6 +70,7 @@ async def read_fellowship_members(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """List members of a specific fellowship."""
+    await _ensure_fellowship_in_scope(db, current_user, fellowship_id)
     return await crud_member.get_by_fellowship(db, fellowship_id=fellowship_id, skip=skip, limit=limit)
 
 
@@ -79,6 +90,7 @@ async def update_fellowship_member(
     member = await crud_member.get(db, id=member_id)
     if not member:
         raise HTTPException(status_code=404, detail="Member not found")
+    deps.ensure_path_in_scope(current_user, member.path, detail="Fellowship member outside your scope")
     return await crud_member.update(db, db_obj=member, obj_in=member_in)
 
 
@@ -97,6 +109,7 @@ async def delete_fellowship_member(
     member = await crud_member.get(db, id=member_id)
     if not member:
         raise HTTPException(status_code=404, detail="Member not found")
+    deps.ensure_path_in_scope(current_user, member.path, detail="Fellowship member outside your scope")
     await crud_member.update(
         db,
         db_obj=member,
@@ -120,6 +133,7 @@ async def create_fellowship_attendance(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Submit fellowship attendance."""
+    await _ensure_fellowship_in_scope(db, current_user, attendance_in.fellowship_id)
     return await crud_attendance.create(db, obj_in=attendance_in, user_id=current_user.user_id)
 
 
@@ -136,6 +150,7 @@ async def read_fellowship_attendance(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """List attendance records of a specific fellowship."""
+    await _ensure_fellowship_in_scope(db, current_user, fellowship_id)
     from app.models.fellowship_activities import FellowshipAttendance
     from sqlalchemy import select
     query = select(FellowshipAttendance).where(FellowshipAttendance.fellowship_id == fellowship_id).offset(skip).limit(limit)
@@ -158,6 +173,7 @@ async def update_fellowship_attendance(
     record = await crud_attendance.get(db, id=attendance_id)
     if not record:
         raise HTTPException(status_code=404, detail="Attendance record not found")
+    deps.ensure_path_in_scope(current_user, record.path, detail="Fellowship attendance outside your scope")
     updated = await crud_attendance.update(db, db_obj=record, obj_in=attendance_in)
     if any(
         v is not None for v in [
@@ -185,6 +201,7 @@ async def delete_fellowship_attendance(
     record = await crud_attendance.get(db, id=attendance_id)
     if not record:
         raise HTTPException(status_code=404, detail="Attendance record not found")
+    deps.ensure_path_in_scope(current_user, record.path, detail="Fellowship attendance outside your scope")
     await crud_attendance.update(
         db,
         db_obj=record,
@@ -208,6 +225,7 @@ async def create_fellowship_offering(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Submit fellowship offering."""
+    await _ensure_fellowship_in_scope(db, current_user, offering_in.fellowship_id)
     return await crud_offering.create(db, obj_in=offering_in, user_id=current_user.user_id)
 
 
@@ -224,6 +242,7 @@ async def read_fellowship_offerings(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """List offerings of a specific fellowship."""
+    await _ensure_fellowship_in_scope(db, current_user, fellowship_id)
     from app.models.fellowship_activities import FellowshipOffering
     from sqlalchemy import select
     query = select(FellowshipOffering).where(FellowshipOffering.fellowship_id == fellowship_id).offset(skip).limit(limit)
@@ -246,6 +265,7 @@ async def update_fellowship_offering(
     record = await crud_offering.get(db, id=offering_id)
     if not record:
         raise HTTPException(status_code=404, detail="Offering record not found")
+    deps.ensure_path_in_scope(current_user, record.path, detail="Fellowship offering outside your scope")
     return await crud_offering.update(db, db_obj=record, obj_in=offering_in)
 
 
@@ -264,6 +284,7 @@ async def delete_fellowship_offering(
     record = await crud_offering.get(db, id=offering_id)
     if not record:
         raise HTTPException(status_code=404, detail="Offering record not found")
+    deps.ensure_path_in_scope(current_user, record.path, detail="Fellowship offering outside your scope")
     await crud_offering.update(
         db,
         db_obj=record,
@@ -287,6 +308,7 @@ async def create_fellowship_testimony(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Submit fellowship testimony."""
+    await _ensure_fellowship_in_scope(db, current_user, testimony_in.fellowship_id)
     return await crud_testimony.create(db, obj_in=testimony_in, user_id=current_user.user_id)
 
 @router.get(
@@ -302,6 +324,7 @@ async def read_fellowship_testimonies(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """List testimonies of a specific fellowship."""
+    await _ensure_fellowship_in_scope(db, current_user, fellowship_id)
     # Note: Basic filtering for now, enhancing with complex search later
     from app.models.fellowship_activities import Testimony
     from sqlalchemy import select
@@ -325,6 +348,7 @@ async def update_fellowship_testimony(
     record = await crud_testimony.get(db, id=testimony_id)
     if not record:
         raise HTTPException(status_code=404, detail="Testimony not found")
+    deps.ensure_path_in_scope(current_user, record.path, detail="Fellowship testimony outside your scope")
     return await crud_testimony.update(db, db_obj=record, obj_in=testimony_in)
 
 
@@ -343,6 +367,7 @@ async def delete_fellowship_testimony(
     record = await crud_testimony.get(db, id=testimony_id)
     if not record:
         raise HTTPException(status_code=404, detail="Testimony not found")
+    deps.ensure_path_in_scope(current_user, record.path, detail="Fellowship testimony outside your scope")
     await crud_testimony.update(
         db,
         db_obj=record,
@@ -366,6 +391,7 @@ async def create_fellowship_prayer(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Submit fellowship prayer request."""
+    await _ensure_fellowship_in_scope(db, current_user, prayer_in.fellowship_id)
     return await crud_prayer.create(db, obj_in=prayer_in, user_id=current_user.user_id)
 
 @router.get(
@@ -381,6 +407,7 @@ async def read_fellowship_prayers(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """List prayer requests of a specific fellowship."""
+    await _ensure_fellowship_in_scope(db, current_user, fellowship_id)
     from app.models.fellowship_activities import PrayerRequest
     from sqlalchemy import select
     query = select(PrayerRequest).where(PrayerRequest.fellowship_id == fellowship_id).offset(skip).limit(limit)
@@ -403,6 +430,7 @@ async def update_fellowship_prayer(
     record = await crud_prayer.get(db, id=prayer_id)
     if not record:
         raise HTTPException(status_code=404, detail="Prayer request not found")
+    deps.ensure_path_in_scope(current_user, record.path, detail="Fellowship prayer outside your scope")
     return await crud_prayer.update(db, db_obj=record, obj_in=prayer_in)
 
 
@@ -421,6 +449,7 @@ async def delete_fellowship_prayer(
     record = await crud_prayer.get(db, id=prayer_id)
     if not record:
         raise HTTPException(status_code=404, detail="Prayer request not found")
+    deps.ensure_path_in_scope(current_user, record.path, detail="Fellowship prayer outside your scope")
     await crud_prayer.update(
         db,
         db_obj=record,
@@ -444,6 +473,7 @@ async def create_fellowship_summary(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Submit fellowship attendance summary."""
+    await _ensure_fellowship_in_scope(db, current_user, summary_in.fellowship_id)
     return await crud_summary.create(db, obj_in=summary_in, user_id=current_user.user_id)
 
 @router.get(
@@ -459,6 +489,7 @@ async def read_fellowship_summaries(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """List attendance summaries of a specific fellowship."""
+    await _ensure_fellowship_in_scope(db, current_user, fellowship_id)
     from app.models.fellowship_activities import AttendanceSummary
     from sqlalchemy import select
     query = select(AttendanceSummary).where(AttendanceSummary.fellowship_id == fellowship_id).offset(skip).limit(limit)
@@ -481,6 +512,7 @@ async def update_fellowship_summary(
     record = await crud_summary.get(db, id=summary_id)
     if not record:
         raise HTTPException(status_code=404, detail="Attendance summary not found")
+    deps.ensure_path_in_scope(current_user, record.path, detail="Fellowship summary outside your scope")
     return await crud_summary.update(db, db_obj=record, obj_in=summary_in)
 
 
@@ -499,6 +531,7 @@ async def delete_fellowship_summary(
     record = await crud_summary.get(db, id=summary_id)
     if not record:
         raise HTTPException(status_code=404, detail="Attendance summary not found")
+    deps.ensure_path_in_scope(current_user, record.path, detail="Fellowship summary outside your scope")
     await crud_summary.update(
         db,
         db_obj=record,

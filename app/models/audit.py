@@ -6,7 +6,7 @@ This module contains models for:
 2. AuditLog: Tracks significant system actions for security and debugging.
 3. ClientSyncQueue: Manages batch synchronization status (optional/advanced).
 """
-from sqlalchemy import Column, String, ForeignKey, Integer, DateTime, Boolean, Text
+from sqlalchemy import Column, String, ForeignKey, Integer, DateTime, Boolean, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 import uuid
@@ -36,6 +36,29 @@ class IdempotencyKey(Base):
     
     def __repr__(self):
         return f"<IdempotencyKey(client_id='{self.client_id}', resource='{self.resource_type}')>"
+
+
+class NotificationReadState(Base, TimestampMixin):
+    """
+    Per-user read state for aggregated notification items.
+
+    Notification items are derived from domain records like counts, offerings,
+    prayer requests, approvals, and fellowship activity. This table keeps the
+    user's read/unread decision without duplicating the underlying notification
+    source record.
+    """
+
+    __tablename__ = "notification_read_states"
+    __table_args__ = (
+        UniqueConstraint("user_id", "notification_key", name="uq_notification_read_state_user_key"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False, index=True)
+    notification_key = Column(String, nullable=False, index=True)
+    read_at = Column(DateTime(timezone=True), nullable=True, index=True)
+
+    user = relationship("User")
 
 
 class AuditLog(Base):

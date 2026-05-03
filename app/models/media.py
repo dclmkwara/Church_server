@@ -4,7 +4,7 @@ Media Management Models.
 This module defines models for handling media galleries and file uploads (photos/videos).
 """
 import uuid
-from sqlalchemy import Column, String, ForeignKey, Integer, Boolean, Text
+from sqlalchemy import Column, String, ForeignKey, Integer, Boolean, Text, DateTime
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -31,6 +31,8 @@ class MediaGallery(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     
     # Optional URL friendly slug
     slug = Column(String, index=True, nullable=True)
+    is_public = Column(Boolean, nullable=False, default=False, index=True)
+    published_at = Column(DateTime(timezone=True), nullable=True, index=True)
     
     # Optional link to event
     event_id = Column(UUID(as_uuid=True), ForeignKey("program_events.id"), nullable=True, index=True)

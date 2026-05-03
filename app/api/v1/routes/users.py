@@ -75,14 +75,15 @@ async def read_users(
         - Scope defaults to current user's path if not specified
         - Results are limited by user's role score (higher score = broader scope)
     """
-    search_scope = scope_path if scope_path else str(current_user.path)
+    search_scope = deps.resolve_scope_path(current_user, scope_path)
     
     from sqlalchemy import select, text
     from sqlalchemy.orm import selectinload
     from app.models.user import Role
     
     query = select(User).where(
-        text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=search_scope)
+        text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=search_scope),
+        User.is_deleted == False,
     ).options(
         selectinload(User.roles).selectinload(Role.score)
     ).offset(skip).limit(limit)
@@ -146,6 +147,18 @@ async def create_user(
             status_code=400,
             detail="The user with this email already exists in the system.",
         )
+
+    from app.models.user import Worker
+    worker_result = await db.execute(
+        select(Worker).where(
+            Worker.worker_id == user_in.worker_id,
+            Worker.is_deleted == False,
+        )
+    )
+    worker = worker_result.scalars().first()
+    if not worker:
+        raise HTTPException(status_code=404, detail="Worker not found")
+    deps.ensure_path_in_scope(current_user, worker.path, detail="Worker outside your scope")
     
     # Create user (CRUD will validate worker exists)
     user = await crud_user.create(db, obj_in=user_in)
@@ -174,6 +187,7 @@ async def auto_create_user(
     worker = worker_result.scalars().first()
     if not worker:
         raise HTTPException(status_code=404, detail="Worker with this email not found")
+    deps.ensure_path_in_scope(current_user, worker.path, detail="Worker outside your scope")
 
     existing = await crud_user.get_by_email(db, email=email)
     if existing:
@@ -262,14 +276,7 @@ async def read_user(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    if str(user.path) and str(current_user.path):
-        scope_stmt = select(User.user_id).where(
-            User.user_id == user_id,
-            text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=str(current_user.path))
-        )
-        scope_result = await db.execute(scope_stmt)
-        if scope_result.scalar_one_or_none() is None:
-            raise HTTPException(status_code=403, detail="User outside your scope")
+    deps.ensure_path_in_scope(current_user, user.path, detail="User outside your scope")
     
     return user
 
@@ -325,8 +332,7 @@ async def update_user(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    # Scope validated in read_user; permission enforced via PermissionChecker ("users:update")
-    
+    deps.ensure_path_in_scope(current_user, user.path, detail="User outside your scope")
     user = await crud_user.update(db, db_obj=user, obj_in=user_in)
     return user
 
@@ -381,6 +387,7 @@ async def assign_roles_to_user(
     user = await crud_user.get(db, id=user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    deps.ensure_path_in_scope(current_user, user.path, detail="User outside your scope")
     
     # Validate current user can assign these roles by score
     if current_user.roles:
@@ -424,6 +431,7 @@ async def read_user_details(
     user = result.scalars().first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    deps.ensure_path_in_scope(current_user, user.path, detail="User outside your scope")
     return user
 
 
@@ -448,9 +456,10 @@ async def search_users(
     from sqlalchemy import select, text
     from sqlalchemy.orm import selectinload
     from app.models.user import Role
-    search_scope = scope_path if scope_path else str(current_user.path)
+    search_scope = deps.resolve_scope_path(current_user, scope_path)
     query = select(User).where(
-        text("path <@ CAST(:scope_path AS ltree)").bindparams(scope_path=search_scope)
+        text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=search_scope),
+        User.is_deleted == False,
     ).options(selectinload(User.roles).selectinload(Role.score)).offset(skip).limit(limit)
     if name:
         query = query.where(User.name.ilike(f"%{name}%"))
@@ -481,7 +490,10 @@ async def list_users_with_roles(
     from sqlalchemy import select
     from sqlalchemy.orm import selectinload
     from app.models.user import Role
-    query = select(User).options(selectinload(User.roles).selectinload(Role.score)).offset(skip).limit(limit)
+    query = select(User).where(
+        text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=str(current_user.path)),
+        User.is_deleted == False,
+    ).options(selectinload(User.roles).selectinload(Role.score)).offset(skip).limit(limit)
     result = await db.execute(query)
     return result.scalars().all()
 
@@ -501,6 +513,7 @@ async def delete_user(
     user = await crud_user.get(db, id=user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    deps.ensure_path_in_scope(current_user, user.path, detail="User outside your scope")
     
     await crud_user.update(
         db,
