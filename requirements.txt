@@ -1,6 +1,6 @@
 alembic
 bcrypt
-email_validator
+email-validator
 fastapi[standard]
 httpx>=0.27.0
 Jinja2
