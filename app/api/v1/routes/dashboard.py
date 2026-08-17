@@ -2,15 +2,20 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from typing import Any, Optional
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import and_, cast, func, select, Integer, DateTime
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
+from app.core import analytics_cache
+from app.db.filters import ltree_subpath as _ltree_subpath
 from app.db.filters import scope_filter as _scope_filter
+from app.models.core import _LTREE
 from app.models.attendance import WorkerAttendance
 from app.models.counts import Count
+from app.models.location import Location
 from app.models.offerings import Offering
 from app.models.programs import ProgramEvent
 from app.models.user import User, Worker
@@ -18,6 +23,22 @@ from app.services.dashboard_service import DashboardService
 from app.services.statistics_service import StatisticsService
 
 router = APIRouter()
+_DASHBOARD_CACHE_TTL = 20.0
+
+DEFAULT_BOOTSTRAP_SECTIONS = (
+    'summary',
+    'member_analytics',
+    'population_statistics',
+    'worker_analytics',
+    'program_comparison',
+    'worker_meeting_comparison',
+    'newcomer_analytics',
+    'church_statistics',
+    'user_statistics',
+    'attendance_summary',
+    'trend_series',
+    'scope_snapshot',
+)
 
 
 def _effective_scope(current_user: User, scope_path: Optional[str]) -> str:
@@ -51,6 +72,32 @@ def _breakdown_level(scope_path: str) -> str:
     }
     return mapping.get(kind, 'location')
 
+
+async def _resolve_location_id(
+    db: AsyncSession,
+    scope_path: str,
+    location_id: Optional[str],
+) -> Optional[str]:
+    """Accept either a UUID location_id or the human location_code for dashboard filters."""
+    if not location_id:
+        return None
+    raw = str(location_id).strip()
+    if not raw:
+        return None
+    try:
+        UUID(raw)
+        return raw
+    except ValueError:
+        pass
+
+    result = await db.execute(
+        select(Location.location_id).where(
+            Location.location_code == raw,
+            _scope_filter(Location.path, scope_path),
+        )
+    )
+    resolved = result.scalars().first()
+    return str(resolved) if resolved else None
 
 
 
@@ -133,7 +180,7 @@ async def _get_scope_snapshot(db: AsyncSession, scope_path: str) -> list[dict[st
         'region': 4,
         'state': 3,
     }.get(level, 6)
-    group_expr = func.subpath(cast(Count.path, _LTREE()), 0, segment_count).label('group_path')
+    group_expr = _ltree_subpath(Count.path, segment_count).label('group_path')
     stmt = select(
         group_expr,
         func.coalesce(func.sum(Count.total), 0).label('total'),
@@ -154,46 +201,88 @@ async def get_dashboard_bootstrap(
     scope_path: Optional[str] = Query(None),
     location_id: Optional[str] = Query(None),
     months: int = Query(12, ge=1, le=24),
+    sections: Optional[list[str]] = Query(None),
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ):
     effective_scope = _effective_scope(current_user, scope_path)
+    effective_location_id = await _resolve_location_id(db, effective_scope, location_id)
+    requested_sections = tuple(dict.fromkeys(sections or list(DEFAULT_BOOTSTRAP_SECTIONS)))
 
-    summary = await DashboardService.get_summary(db, effective_scope, location_id=location_id)
-    member_analytics = await DashboardService.get_member_analytics(db, effective_scope, location_id=location_id, months=months)
-    worker_analytics = await DashboardService.get_worker_analytics(db, effective_scope, location_id=location_id)
-    program_comparison = await DashboardService.get_program_comparison(db, effective_scope, location_id=location_id, limit=6)
-    worker_meeting_comparison = await DashboardService.get_worker_meeting_comparison(db, effective_scope, location_id=location_id, limit=6)
-    newcomer_analytics = await DashboardService.get_newcomer_analytics(db, effective_scope, location_id=location_id, months=months)
-    population_statistics = await StatisticsService.get_population_statistics(db, effective_scope, location_id=location_id)
-    church_statistics = await StatisticsService.get_church_statistics(db, effective_scope)
-    user_statistics = await StatisticsService.get_user_statistics(db, effective_scope)
-    attendance_summary = await _get_attendance_summary(db, effective_scope, location_id=location_id)
-    ts_counts = await _get_timeseries(db, effective_scope, metric='counts')
-    ts_finance = await _get_timeseries(db, effective_scope, metric='offerings')
-    ts_attendance = await _get_timeseries(db, effective_scope, metric='attendance')
-    scope_snapshot = await _get_scope_snapshot(db, effective_scope)
+    async def _build_payload() -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            'scope_path': effective_scope,
+            'scope_kind': _scope_kind(effective_scope),
+        }
 
-    return {
-        'scope_path': effective_scope,
-        'scope_kind': _scope_kind(effective_scope),
-        'summary': summary,
-        'member_analytics': member_analytics,
-        'population_statistics': population_statistics,
-        'worker_analytics': worker_analytics,
-        'program_comparison': program_comparison,
-        'worker_meeting_comparison': worker_meeting_comparison,
-        'newcomer_analytics': newcomer_analytics,
-        'church_statistics': church_statistics,
-        'user_statistics': user_statistics,
-        'attendance_summary': attendance_summary,
-        'trend_series': {
-            'counts': ts_counts,
-            'finance': ts_finance,
-            'attendance': ts_attendance,
-        },
-        'scope_snapshot': scope_snapshot,
-    }
+        if 'summary' in requested_sections:
+            payload['summary'] = await DashboardService.get_summary(db, effective_scope, location_id=effective_location_id)
+        if 'member_analytics' in requested_sections:
+            payload['member_analytics'] = await DashboardService.get_member_analytics(
+                db,
+                effective_scope,
+                location_id=effective_location_id,
+                months=months,
+            )
+        if 'population_statistics' in requested_sections:
+            payload['population_statistics'] = await StatisticsService.get_population_statistics(
+                db,
+                effective_scope,
+                location_id=effective_location_id,
+            )
+        if 'worker_analytics' in requested_sections:
+            payload['worker_analytics'] = await DashboardService.get_worker_analytics(
+                db,
+                effective_scope,
+                location_id=effective_location_id,
+            )
+        if 'program_comparison' in requested_sections:
+            payload['program_comparison'] = await DashboardService.get_program_comparison(
+                db,
+                effective_scope,
+                location_id=effective_location_id,
+                limit=6,
+            )
+        if 'worker_meeting_comparison' in requested_sections:
+            payload['worker_meeting_comparison'] = await DashboardService.get_worker_meeting_comparison(
+                db,
+                effective_scope,
+                location_id=effective_location_id,
+                limit=6,
+            )
+        if 'newcomer_analytics' in requested_sections:
+            payload['newcomer_analytics'] = await DashboardService.get_newcomer_analytics(
+                db,
+                effective_scope,
+                location_id=effective_location_id,
+                months=months,
+            )
+        if 'church_statistics' in requested_sections:
+            payload['church_statistics'] = await StatisticsService.get_church_statistics(db, effective_scope)
+        if 'user_statistics' in requested_sections:
+            payload['user_statistics'] = await StatisticsService.get_user_statistics(db, effective_scope)
+        if 'attendance_summary' in requested_sections:
+            payload['attendance_summary'] = await _get_attendance_summary(
+                db,
+                effective_scope,
+                location_id=effective_location_id,
+            )
+        if 'trend_series' in requested_sections:
+            payload['trend_series'] = {
+                'counts': await _get_timeseries(db, effective_scope, metric='counts'),
+                'finance': await _get_timeseries(db, effective_scope, metric='offerings'),
+                'attendance': await _get_timeseries(db, effective_scope, metric='attendance'),
+            }
+        if 'scope_snapshot' in requested_sections:
+            payload['scope_snapshot'] = await _get_scope_snapshot(db, effective_scope)
+
+        return payload
+
+    return await analytics_cache.get_or_set(
+        ('dashboard', 'bootstrap', effective_scope, effective_location_id, months, requested_sections),
+        _build_payload,
+        ttl=_DASHBOARD_CACHE_TTL,
+    )
 
 
 
@@ -208,7 +297,12 @@ async def get_dashboard_summary(
     current_user: User = Depends(deps.get_current_active_user),
 ):
     effective_scope = _effective_scope(current_user, scope_path)
-    return await DashboardService.get_summary(db, effective_scope, location_id=location_id)
+    effective_location_id = await _resolve_location_id(db, effective_scope, location_id)
+    return await analytics_cache.get_or_set(
+        ('dashboard', 'summary', effective_scope, effective_location_id),
+        lambda: DashboardService.get_summary(db, effective_scope, location_id=effective_location_id),
+        ttl=_DASHBOARD_CACHE_TTL,
+    )
 
 
 @router.get(
@@ -223,11 +317,16 @@ async def get_member_analytics(
     current_user: User = Depends(deps.get_current_active_user),
 ):
     effective_scope = _effective_scope(current_user, scope_path)
-    return await DashboardService.get_member_analytics(
-        db,
-        effective_scope,
-        location_id=location_id,
-        months=months,
+    effective_location_id = await _resolve_location_id(db, effective_scope, location_id)
+    return await analytics_cache.get_or_set(
+        ('dashboard', 'member_analytics', effective_scope, effective_location_id, months),
+        lambda: DashboardService.get_member_analytics(
+            db,
+            effective_scope,
+            location_id=effective_location_id,
+            months=months,
+        ),
+        ttl=_DASHBOARD_CACHE_TTL,
     )
 
 
@@ -242,7 +341,12 @@ async def get_worker_analytics(
     current_user: User = Depends(deps.get_current_active_user),
 ):
     effective_scope = _effective_scope(current_user, scope_path)
-    return await DashboardService.get_worker_analytics(db, effective_scope, location_id=location_id)
+    effective_location_id = await _resolve_location_id(db, effective_scope, location_id)
+    return await analytics_cache.get_or_set(
+        ('dashboard', 'worker_analytics', effective_scope, effective_location_id),
+        lambda: DashboardService.get_worker_analytics(db, effective_scope, location_id=effective_location_id),
+        ttl=_DASHBOARD_CACHE_TTL,
+    )
 
 
 @router.get(
@@ -257,11 +361,16 @@ async def get_program_comparison(
     current_user: User = Depends(deps.get_current_active_user),
 ):
     effective_scope = _effective_scope(current_user, scope_path)
-    return await DashboardService.get_program_comparison(
-        db,
-        effective_scope,
-        location_id=location_id,
-        limit=limit,
+    effective_location_id = await _resolve_location_id(db, effective_scope, location_id)
+    return await analytics_cache.get_or_set(
+        ('dashboard', 'program_comparison', effective_scope, effective_location_id, limit),
+        lambda: DashboardService.get_program_comparison(
+            db,
+            effective_scope,
+            location_id=effective_location_id,
+            limit=limit,
+        ),
+        ttl=_DASHBOARD_CACHE_TTL,
     )
 
 
@@ -277,11 +386,16 @@ async def get_worker_meeting_comparison(
     current_user: User = Depends(deps.get_current_active_user),
 ):
     effective_scope = _effective_scope(current_user, scope_path)
-    return await DashboardService.get_worker_meeting_comparison(
-        db,
-        effective_scope,
-        location_id=location_id,
-        limit=limit,
+    effective_location_id = await _resolve_location_id(db, effective_scope, location_id)
+    return await analytics_cache.get_or_set(
+        ('dashboard', 'worker_meeting_comparison', effective_scope, effective_location_id, limit),
+        lambda: DashboardService.get_worker_meeting_comparison(
+            db,
+            effective_scope,
+            location_id=effective_location_id,
+            limit=limit,
+        ),
+        ttl=_DASHBOARD_CACHE_TTL,
     )
 
 
@@ -297,9 +411,14 @@ async def get_newcomer_analytics(
     current_user: User = Depends(deps.get_current_active_user),
 ):
     effective_scope = _effective_scope(current_user, scope_path)
-    return await DashboardService.get_newcomer_analytics(
-        db,
-        effective_scope,
-        location_id=location_id,
-        months=months,
+    effective_location_id = await _resolve_location_id(db, effective_scope, location_id)
+    return await analytics_cache.get_or_set(
+        ('dashboard', 'newcomer_analytics', effective_scope, effective_location_id, months),
+        lambda: DashboardService.get_newcomer_analytics(
+            db,
+            effective_scope,
+            location_id=effective_location_id,
+            months=months,
+        ),
+        ttl=_DASHBOARD_CACHE_TTL,
     )

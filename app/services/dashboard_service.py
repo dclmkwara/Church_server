@@ -15,12 +15,13 @@ from sqlalchemy import and_, case, cast, extract, func, select, Integer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.filters import scope_filter as _scope_filter
+from app.models.approvals import StatusChangeRequest, TransferRequest, WorkerRemovalRequest
 from app.models.attendance import WorkerAttendance
 from app.models.church_member import ChurchMember
 from app.models.counts import Count
 from app.models.programs import ProgramDomain, ProgramEvent, ProgramType
 from app.models.records import Record
-from app.models.user import Worker
+from app.models.user import User, Worker
 
 
 def _status_case(column, expected: str):
@@ -35,11 +36,17 @@ class DashboardService:
         wf = [_scope_filter(Worker.path, scope_path), Worker.is_deleted == False]
         rf = [_scope_filter(Record.path, scope_path), Record.is_deleted == False]
         cf = [_scope_filter(Count.path, scope_path), Count.is_deleted == False]
+        uf = [_scope_filter(User.path, scope_path), User.is_deleted == False]
+        tf = [_scope_filter(TransferRequest.path, scope_path), TransferRequest.status == "pending"]
+        sf = [_scope_filter(StatusChangeRequest.path, scope_path), StatusChangeRequest.status == "pending"]
+        rmf = [_scope_filter(WorkerRemovalRequest.path, scope_path), WorkerRemovalRequest.status.in_(("pending", "escalated"))]
         if location_id:
             mf.append(ChurchMember.location_id == location_id)
             wf.append(Worker.location_id == location_id)
             rf.append(Record.location_id == location_id)
             cf.append(Count.location_id == location_id)
+            uf.append(User.location_id == location_id)
+            tf.append(TransferRequest.from_location_id == location_id)
 
         member_r = await db.execute(select(
             func.count(ChurchMember.id).label("members_total"),
@@ -58,11 +65,31 @@ class DashboardService:
             func.coalesce(func.max(Count.total), 0).label("latest_total"),
             func.count(func.distinct(Count.location_id)).label("locations_reporting"),
         ).where(and_(*cf)))
+        pending_user_r = await db.execute(select(func.count(User.user_id).label("pending_users")).where(and_(*uf, User.approval_status == "pending")))
+        pending_transfer_r = await db.execute(select(func.count(TransferRequest.id).label("pending_transfers")).where(and_(*tf)))
+        pending_status_r = await db.execute(select(func.count(StatusChangeRequest.id).label("pending_status_changes")).where(and_(*sf)))
+        pending_removal_r = await db.execute(select(func.count(WorkerRemovalRequest.id).label("pending_removals")).where(and_(*rmf)))
         mr, wr, rr, cr = member_r.one(), worker_r.one(), record_r.one(), count_r.one()
+        pur = pending_user_r.one()
+        ptr = pending_transfer_r.one()
+        psr = pending_status_r.one()
+        pmr = pending_removal_r.one()
+        pending_items = (
+            int(wr.pending_workers or 0)
+            + int(pur.pending_users or 0)
+            + int(ptr.pending_transfers or 0)
+            + int(psr.pending_status_changes or 0)
+            + int(pmr.pending_removals or 0)
+        )
         return {
             "members_total": int(mr.members_total or 0), "active_members": int(mr.active_members or 0),
             "workers_total": int(wr.workers_total or 0), "active_workers": int(wr.active_workers or 0),
             "pending_workers": int(wr.pending_workers or 0),
+            "pending_users": int(pur.pending_users or 0),
+            "pending_transfers": int(ptr.pending_transfers or 0),
+            "pending_status_changes": int(psr.pending_status_changes or 0),
+            "pending_removals": int(pmr.pending_removals or 0),
+            "pending_items": pending_items,
             "newcomers_total": int(rr.newcomers_total or 0), "converts_total": int(rr.converts_total or 0),
             "latest_total": int(cr.latest_total or 0), "locations_reporting": int(cr.locations_reporting or 0),
         }

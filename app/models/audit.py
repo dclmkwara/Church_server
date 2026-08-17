@@ -25,13 +25,22 @@ class IdempotencyKey(Base):
     """
     __tablename__ = "idempotency_keys"
     
+    """
+    Idempotency Key for offline synchronization.
+    
+    When a mobile client creates a record offline, it generates a UUID (client_id).
+    Upon sync, if this client_id exists in this table, the server returns the existing 
+    record instead of creating a new one (duplicate prevention).
+    """
+    __tablename__ = "idempotency_keys"
+    
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     client_id = Column(UUID(as_uuid=True), unique=True, index=True, nullable=False)
     
     resource_type = Column(String, nullable=False, index=True) # e.g., 'count', 'offering'
     resource_id = Column(UUID(as_uuid=True), nullable=False) # The server-side generated ID
     
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     expires_at = Column(DateTime, nullable=True) # Optional TTL
     
     def __repr__(self):

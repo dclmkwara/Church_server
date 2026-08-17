@@ -26,6 +26,7 @@
 | Document | Description |
 |---|---|
 | [Architecture](ARCHITECTURE.md) | System design, directory structure, request lifecycle, database connections |
+| [Scaling Decision](SCALING_DECISION.md) | Current decision on modular monolith vs microservices, and the active performance-first scaling roadmap |
 | [Database Schema](DATABASE_SCHEMA.md) | All tables, columns, types, foreign keys, and relationships |
 | [Setup Guide](SETUP.md) | Installation, virtual env, database setup, Alembic migrations, first admin |
 | [Tech Stack](TECH_STACK.md) | All technologies used — why they were chosen and how they're used |

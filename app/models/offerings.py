@@ -28,7 +28,7 @@ class Offering(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     
     # Hierarchy Scope
     path = Column(LtreeType, nullable=False, index=True)
-    location_id = Column(String, nullable=False, index=True)
+    location_id = Column(UUID(as_uuid=False), nullable=False, index=True)
 
     # Partitioning Key
     date = Column(DateTime(timezone=True), nullable=False, index=True)
@@ -46,7 +46,7 @@ class Offering(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     note = Column(Text, nullable=True)
     
     # Audit
-    entered_by_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
+    entered_by_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False, index=True)
     
     # Relationships
     event = relationship("ProgramEvent")

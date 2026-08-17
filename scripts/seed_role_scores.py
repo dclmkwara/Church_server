@@ -1,4 +1,4 @@
-﻿"""
+"""
 Seed role scores (1-9).
 
 Run:

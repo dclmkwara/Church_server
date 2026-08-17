@@ -41,7 +41,7 @@ class MediaGallery(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     # created_by from TimestampMixin? No, AuditMixin usually has it. 
     # But checking core.py, AuditMixin was defined but not imported/used in others consistently.
     # We'll explicitly add created_by_id like others.
-    created_by_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
+    created_by_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False, index=True)
     
     # Relationships
     items = relationship("MediaItem", back_populates="gallery", cascade="all, delete-orphan")
@@ -75,7 +75,7 @@ class MediaItem(Base, TimestampMixin, SoftDeleteMixin):
     caption = Column(String, nullable=True)
     is_cover = Column(Boolean, default=False, index=True) # Is this the cover image for the gallery?
     
-    uploaded_by_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
+    uploaded_by_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False, index=True)
     
     # Relationships
     gallery = relationship("MediaGallery", back_populates="items")

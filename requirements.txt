@@ -2,7 +2,7 @@ alembic
 bcrypt
 email_validator
 fastapi[standard]
-httpx
+httpx>=0.27.0
 Jinja2
 passlib
 pillow
@@ -20,5 +20,7 @@ pytest-asyncio
 asyncpg
 psycopg2-binary
 APScheduler>=3.10.0
-openpyxl
+openpyxl>=3.1.0
 reportlab
+python-fasthtml>=0.6.0
+faststrap>=0.8.0

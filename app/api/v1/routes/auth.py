@@ -201,13 +201,23 @@ async def refresh_token_endpoint(
         404 — user no longer exists.
     """
     auth_header = request.headers.get("Authorization", "")
-    if not auth_header.lower().startswith("bearer "):
+    raw_token = ""
+    if auth_header.lower().startswith("bearer "):
+        raw_token = auth_header.split(" ", 1)[1].strip()
+    else:
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if isinstance(body, dict):
+            raw_token = str(body.get("refresh_token") or "").strip()
+
+    if not raw_token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Refresh token must be provided as a Bearer token",
+            detail="Refresh token must be provided as a Bearer token or refresh_token body field",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    raw_token = auth_header.split(" ", 1)[1].strip()
 
     # ── Decode & validate claims ──────────────────────────────────────────────
     try:

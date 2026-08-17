@@ -47,7 +47,7 @@ class AnnouncementItem(Base):
     __tablename__ = "announcement_items"
     
     id = Column(Integer, primary_key=True, autoincrement=True)
-    announcement_id = Column(UUID(as_uuid=True), ForeignKey("announcements.id"), nullable=False)
+    announcement_id = Column(UUID(as_uuid=True), ForeignKey("announcements.id"), nullable=False, index=True)
     title = Column(String, nullable=False)
     text = Column(Text, nullable=False)
     

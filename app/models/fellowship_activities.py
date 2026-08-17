@@ -89,7 +89,7 @@ class FellowshipAttendance(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin
     # Metadata
     topic = Column(String, nullable=True) # Bible study topic
     note = Column(Text, nullable=True)
-    entered_by_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
+    entered_by_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False, index=True)
     
     # Relationships
     fellowship = relationship("Fellowship")
@@ -117,7 +117,7 @@ class FellowshipOffering(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     amount = Column(Numeric(12, 2), nullable=False)
     
     # Metadata
-    entered_by_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
+    entered_by_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False, index=True)
     note = Column(Text, nullable=True)
     
     # Relationships
@@ -146,7 +146,7 @@ class Testimony(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     content = Column(Text, nullable=False)
     
     # Metadata
-    entered_by_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
+    entered_by_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False, index=True)
     note = Column(Text, nullable=True) # Admin notes/verification status?
     
     # Relationships
@@ -176,7 +176,7 @@ class PrayerRequest(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     status = Column(String, default="pending") # pending, prayed, answered
     
     # Metadata
-    entered_by_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
+    entered_by_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False, index=True)
     
     # Relationships
     fellowship = relationship("Fellowship")
@@ -211,7 +211,7 @@ class AttendanceSummary(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     total_offering = Column(Numeric(12, 2), default=0)
     
     # Metadata
-    entered_by_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
+    entered_by_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False, index=True)
     
     # Relationships
     fellowship = relationship("Fellowship")

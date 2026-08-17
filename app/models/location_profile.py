@@ -11,7 +11,7 @@ Used for:
 - Branch cover image for public website listing
 """
 from sqlalchemy import Column, String, Integer, Text, Date, ForeignKey, Boolean
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 
 from app.db.base import Base
@@ -40,7 +40,7 @@ class LocationProfile(Base, TimestampMixin):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     location_id = Column(
-        String,
+        UUID(as_uuid=False),
         ForeignKey("locations.location_id", ondelete="CASCADE"),
         unique=True,
         nullable=False,

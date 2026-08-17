@@ -14,12 +14,12 @@ automatic path generation. Each level automatically inherits and extends
 the path from its parent.
 
 Example hierarchy path:
-    org.234.KW.ILN.ILE.001.F001
+    org.234.KW.ILR.ILE.003.F001
     └── Nation: 234 (Nigeria)
         └── State: KW (Kwara)
-            └── Region: ILN (Ilorin North)
+            └── Region: ILR (Ilorin Region)
                 └── Group: ILE (Ilorin East)
-                    └── Location: 001
+                    └── Location: 003
                         └── Fellowship: F001
 """
 from typing import List, Any
@@ -428,16 +428,16 @@ async def create_region(
         ```python
         POST /api/v1/regions/
         {
-            "region_id": "ILN",
+            "region_id": "ILR",
             "state_id": "KW",
-            "region_name": "Ilorin North"
+            "region_name": "Ilorin Region"
         }
         
         Response:
         {
-            "region_id": "ILN",
-            "path": "org.234.KW.ILN",
-            "formatted_id": "DCM-234-KW-ILN",
+            "region_id": "ILR",
+            "path": "org.234.KW.ILR",
+            "formatted_id": "DCM-234-KW-ILR",
             ...
         }
         ```
@@ -579,15 +579,15 @@ async def create_group(
         POST /api/v1/groups/
         {
             "group_id": "ILE",
-            "region_id": "ILN",
+            "region_id": "ILR",
             "group_name": "Ilorin East"
         }
         
         Response:
         {
             "group_id": "ILE",
-            "path": "org.234.KW.ILN.ILE",
-            "formatted_id": "DCM-234-KW-ILN-ILE",
+            "path": "org.234.KW.ILR.ILE",
+            "formatted_id": "DCM-234-KW-ILR-ILE",
             ...
         }
         ```
@@ -714,31 +714,32 @@ async def create_location(
     
     Args:
         db: Database session dependency
-        location_in: Location creation data (location_id, group_id, location_name, church_type, etc.)
+        location_in: Location creation data (group_id UUID, optional location_code, location_name, church_type, etc.)
         current_user: Currently authenticated user
         
     Returns:
         LocationResponse: Created location with auto-generated path
         
     Raises:
-        HTTPException 400: Location ID already exists
+        HTTPException 400: Location code already exists under the parent group
         HTTPException 404: Parent group not found
         
     Example:
         ```python
         POST /api/v1/locations/
         {
-            "location_id": "001",
-            "group_id": "ILE",
-            "location_name": "Ilorin East DLBC",
-            "church_type": "DLBC"
+            "location_code": "003",
+            "group_id": "0f4a0d63-8d2f-4c08-9c6d-6d7b71e18c9f",
+            "location_name": "DLCF Living Spring",
+            "church_type": "DLCF"
         }
         
         Response:
         {
-            "location_id": "001",
-            "path": "org.234.KW.ILN.ILE.001",
-            "formatted_id": "DCM-234-KW-ILN-ILE-001",
+            "location_id": "9d4ff678-4284-4798-b438-d8a7f54a8351",
+            "location_code": "003",
+            "path": "org.234.KW.ILR.ILE.003",
+            "formatted_id": "DCM-234-KW-ILR-ILE-003",
             ...
         }
         ```
@@ -884,13 +885,17 @@ async def get_location_details(
     stmt = (
         select(
             Location.location_id,
+            Location.location_code,
             Location.location_name,
             Location.church_type,
             Group.group_id,
+            Group.group_code,
             Group.group_name,
             Region.region_id,
+            Region.region_code,
             Region.region_name,
             State.state_id,
+            State.state_code,
             State.state_name,
         )
         .join(Group, Group.group_id == Location.group_id)
@@ -928,31 +933,32 @@ async def create_fellowship(
     
     Args:
         db: Database session dependency
-        fellowship_in: Fellowship creation data (fellowship_id, location_id, fellowship_name, etc.)
+        fellowship_in: Fellowship creation data (fellowship_code, location_id UUID, fellowship_name, etc.)
         current_user: Currently authenticated user
         
     Returns:
         FellowshipResponse: Created fellowship with auto-generated path
         
     Raises:
-        HTTPException 400: Fellowship ID already exists
+        HTTPException 400: Fellowship code already exists under the parent location
         HTTPException 404: Parent location not found
         
     Example:
         ```python
         POST /api/v1/fellowships/
         {
-            "fellowship_id": "F001",
-            "location_id": "001",
+            "fellowship_code": "F001",
+            "location_id": "9d4ff678-4284-4798-b438-d8a7f54a8351",
             "fellowship_name": "Youth Fellowship",
             "leader_in_charge": "Brother James"
         }
         
         Response:
         {
-            "fellowship_id": "F001",
-            "path": "org.234.KW.ILN.ILE.001.F001",
-            "formatted_id": "DCM-234-KW-ILN-ILE-001-F001",
+            "fellowship_id": "2fb05441-9498-4c60-a41b-8b371ad7c5c2",
+            "fellowship_code": "F001",
+            "path": "org.234.KW.ILR.ILE.003.F001",
+            "formatted_id": "DCM-234-KW-ILR-ILE-003-F001",
             ...
         }
         ```
@@ -990,8 +996,8 @@ async def read_fellowships(
         # All fellowships
         GET /api/v1/fellowships/
         
-        # Fellowships in specific location
-        GET /api/v1/fellowships/?location_id=001
+        # Fellowships in specific location (location_id is the UUID primary key)
+        GET /api/v1/fellowships/?location_id=9d4ff678-4284-4798-b438-d8a7f54a8351
         ```
     """
     if location_id:
@@ -1182,6 +1188,7 @@ async def get_hierarchy_tree(
             continue
         node = schemas.TreeNode(
             id=n.nation_id,
+            code=n.nation_code,
             name=n.country_name,
             type="nation",
             path=str(n.path),
@@ -1196,6 +1203,7 @@ async def get_hierarchy_tree(
             continue
         node = schemas.TreeNode(
             id=s.state_id,
+            code=s.state_code,
             name=s.state_name,
             type="state",
             path=str(s.path),
@@ -1212,6 +1220,7 @@ async def get_hierarchy_tree(
             continue
         node = schemas.TreeNode(
             id=r.region_id,
+            code=r.region_code,
             name=r.region_name,
             type="region",
             path=str(r.path),
@@ -1228,6 +1237,7 @@ async def get_hierarchy_tree(
             continue
         node = schemas.TreeNode(
             id=g.group_id,
+            code=g.group_code,
             name=g.group_name,
             type="group",
             path=str(g.path),
@@ -1244,6 +1254,7 @@ async def get_hierarchy_tree(
             continue
         node = schemas.TreeNode(
             id=l.location_id,
+            code=l.location_code,
             name=l.location_name,
             type="location",
             path=str(l.path),
@@ -1260,6 +1271,7 @@ async def get_hierarchy_tree(
             continue
         node = schemas.TreeNode(
             id=f.fellowship_id,
+            code=f.fellowship_code,
             name=f.fellowship_name,
             type="fellowship",
             path=str(f.path),
@@ -1303,19 +1315,19 @@ async def search_hierarchy(
         Response:
         [
             {
-                "id": "ILN",
-                "name": "Ilorin North",
+                "id": "ILR",
+                "name": "Ilorin Region",
                 "type": "region",
-                "path": "org.234.KW.ILN",
-                "formatted_id": "DCM-234-KW-ILN",
+                "path": "org.234.KW.ILR",
+                "formatted_id": "DCM-234-KW-ILR",
                 "children": []
             },
             {
-                "id": "001",
-                "name": "Ilorin East DLBC",
+                "id": "003",
+                "name": "DLCF Living Spring",
                 "type": "location",
-                "path": "org.234.KW.ILN.ILE.001",
-                "formatted_id": "DCM-234-KW-ILN-ILE-001",
+                "path": "org.234.KW.ILR.ILE.003",
+                "formatted_id": "DCM-234-KW-ILR-ILE-003",
                 "children": []
             }
         ]
@@ -1342,6 +1354,7 @@ async def search_hierarchy(
     for n in n_res.scalars().all():
         results.append(schemas.TreeNode(
             id=n.nation_id,
+            code=n.nation_code,
             name=n.country_name,
             type="nation",
             path=str(n.path),
@@ -1366,6 +1379,7 @@ async def search_hierarchy(
     for s in s_res.scalars().all():
         results.append(schemas.TreeNode(
             id=s.state_id,
+            code=s.state_code,
             name=s.state_name,
             type="state",
             path=str(s.path),
@@ -1390,6 +1404,7 @@ async def search_hierarchy(
     for r in r_res.scalars().all():
         results.append(schemas.TreeNode(
             id=r.region_id,
+            code=r.region_code,
             name=r.region_name,
             type="region",
             path=str(r.path),
@@ -1414,6 +1429,7 @@ async def search_hierarchy(
     for g in g_res.scalars().all():
         results.append(schemas.TreeNode(
             id=g.group_id,
+            code=g.group_code,
             name=g.group_name,
             type="group",
             path=str(g.path),
@@ -1438,6 +1454,7 @@ async def search_hierarchy(
     for l in l_res.scalars().all():
         results.append(schemas.TreeNode(
             id=l.location_id,
+            code=l.location_code,
             name=l.location_name,
             type="location",
             path=str(l.path),
@@ -1462,6 +1479,7 @@ async def search_hierarchy(
     for f in f_res.scalars().all():
         results.append(schemas.TreeNode(
             id=f.fellowship_id,
+            code=f.fellowship_code,
             name=f.fellowship_name,
             type="fellowship",
             path=str(f.path),

@@ -12,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, text
 
 from app.api import deps
+from app.db.filters import ltree_subpath as _ltree_subpath
+from app.db.filters import scope_filter as _scope_filter
 from app.crud.crud_counts import count as crud_count
 from app.schemas.counts import CountCreate, CountResponse, CountUpdate
 from app.schemas.sync import SyncResult
@@ -163,7 +165,7 @@ async def aggregate_counts_flexible(
     scope_path = str(current_user.path)
     segment_count = level_map[level_key]
 
-    group_path = func.subpath(Count.path, 0, segment_count).label("group_path")
+    group_path = _ltree_subpath(Count.path, segment_count).label("group_path")
 
     query = select(
         group_path,
@@ -175,7 +177,7 @@ async def aggregate_counts_flexible(
         func.sum(Count.girls).label("girls"),
         func.sum(Count.total).label("total"),
     ).where(
-        text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path),
+        _scope_filter(Count.path, scope_path),
         Count.is_deleted == False
     )
 

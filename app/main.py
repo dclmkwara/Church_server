@@ -189,11 +189,11 @@ app.include_router(transfers_router, prefix=f"{settings.API_V1_PREFIX}/transfers
 app.include_router(absence_router, prefix=f"{settings.API_V1_PREFIX}/attendance/absence-notices", tags=["Worker Attendance"])
 
 
-# ── Health endpoints ───────────────────────────────────────────────────────────
+# ── Health & API Info endpoints ────────────────────────────────────────────────
 
-@app.get("/", tags=["Health"])
-async def root():
-    """API health check — always public."""
+@app.get("/api", tags=["Health"])
+async def api_info():
+    """API health and version info — always public."""
     return {
         "message": "DCLM Church Management API is running 🚀",
         "version": settings.VERSION,
@@ -212,3 +212,12 @@ async def health_check():
         "database": "connected" if db_ok else "disconnected",
         "version": settings.VERSION,
     }
+
+
+# ── Mount Faststrap Frontend for Single-Instance Deployment ────────────────────
+try:
+    from app.frontend.dclm_admin.app_factory import app as frontend_app
+    app.mount("/", frontend_app)
+    logger.info("✅ Faststrap Admin Frontend successfully mounted at root /")
+except Exception as exc:
+    logger.warning("Could not mount Faststrap frontend: %s", exc)

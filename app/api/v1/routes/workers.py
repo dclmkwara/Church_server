@@ -196,11 +196,11 @@ async def create_worker(
         ```python
         POST /api/v1/workers/
         {
-            "location_id": "001",
-            "location_name": "Ilorin East DLBC",
-            "church_type": "DLBC",
+            "location_id": "9d4ff678-4284-4798-b438-d8a7f54a8351",
+            "location_name": "DLCF Living Spring",
+            "church_type": "DLCF",
             "state": "Kwara",
-            "region": "Ilorin North",
+            "region": "Ilorin Region",
             "group": "Ilorin East",
             "name": "John Doe",
             "gender": "Male",

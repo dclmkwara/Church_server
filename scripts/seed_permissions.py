@@ -1,4 +1,4 @@
-﻿"""
+"""
 Seed permissions used across the codebase.
 
 Run:

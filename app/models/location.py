@@ -13,29 +13,30 @@ Each model includes:
 - Primary key (custom ID, not auto-increment)
 - Foreign key to parent level (except Nation)
 - ltree path for efficient hierarchical queries
-- formatted_id property for display (e.g., DCM-234-KW-ILN)
+- formatted_id property for display (e.g., DCM-234-KW-ILR)
 - Timestamp and audit fields via mixins
 
 The ltree path enables efficient queries like:
 - Find all descendants: WHERE path <@ 'org.234.KW'
-- Find all ancestors: WHERE 'org.234.KW.ILN.ILE.001' <@ path
+- Find all ancestors: WHERE 'org.234.KW.ILR.ILE.003' <@ path
 - Find siblings: WHERE path ~ 'org.234.KW.*{1}'
 
 Example hierarchy:
-    org.234.KW.ILN.ILE.001.F001
+    org.234.KW.ILR.ILE.003.F001
     └── Nation: 234 (Nigeria)
         └── State: KW (Kwara)
-            └── Region: ILN (Ilorin North)
+            └── Region: ILR (Ilorin Region)
                 └── Group: ILE (Ilorin East)
-                    └── Location: 001
+                    └── Location: 003
                         └── Fellowship: F001
 """
-from typing import Optional, List
-from sqlalchemy import Column, String, ForeignKey, Integer, Text, Boolean, DateTime, Float
-from sqlalchemy.orm import relationship, Mapped, mapped_column
-from sqlalchemy.sql import func
+import uuid
+
+from sqlalchemy import Column, String, ForeignKey, Float, UniqueConstraint
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship
 from app.db.base import Base
-from app.models.core import TimestampMixin, AuditMixin, SoftDeleteMixin, LTreePathMixin
+from app.models.core import TimestampMixin, AuditMixin
 from app.models.core import LtreeType
 
 class Nation(Base, TimestampMixin, AuditMixin):
@@ -75,7 +76,8 @@ class Nation(Base, TimestampMixin, AuditMixin):
     """
     __tablename__ = "nations"
 
-    nation_id = Column(String, primary_key=True, index=True)
+    nation_id = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    nation_code = Column(String, unique=True, nullable=False, index=True)
     continent = Column(String, nullable=False)
     country_name = Column(String, nullable=False)
     capital = Column(String, nullable=True)
@@ -92,14 +94,15 @@ class Nation(Base, TimestampMixin, AuditMixin):
     @property
     def formatted_id(self) -> str:
         """Returns standard display ID: DCM-NationID"""
-        return f"DCM-{self.nation_id}"
+        return f"DCM-{str(self.path).replace('org.', '').replace('.', '-')}"
 
 
 class State(Base, TimestampMixin, AuditMixin):
     __tablename__ = "states"
 
-    state_id = Column(String, primary_key=True, index=True)
-    nation_id = Column(String, ForeignKey("nations.nation_id"), nullable=False)
+    state_id = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    nation_id = Column(UUID(as_uuid=False), ForeignKey("nations.nation_id"), nullable=False, index=True)
+    state_code = Column(String, nullable=False, index=True)
     state_name = Column(String, nullable=False) # Changed from 'state' to 'state_name' to avoid conflict/ambiguity
     city = Column(String, nullable=True)
     address = Column(String, nullable=True)
@@ -113,6 +116,10 @@ class State(Base, TimestampMixin, AuditMixin):
     nation = relationship("Nation", back_populates="states")
     regions = relationship("Region", back_populates="state")
 
+    __table_args__ = (
+        UniqueConstraint("nation_id", "state_code", name="uq_states_nation_code"),
+    )
+
     @property
     def formatted_id(self) -> str:
         """Returns standard display ID: DCM-Nation-State"""
@@ -122,8 +129,9 @@ class State(Base, TimestampMixin, AuditMixin):
 class Region(Base, TimestampMixin, AuditMixin):
     __tablename__ = "regions"
 
-    region_id = Column(String, primary_key=True, index=True)
-    state_id = Column(String, ForeignKey("states.state_id"), nullable=False)
+    region_id = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    state_id = Column(UUID(as_uuid=False), ForeignKey("states.state_id"), nullable=False, index=True)
+    region_code = Column(String, nullable=False, index=True)
     region_name = Column(String, nullable=False)
     region_head = Column(String, nullable=True)
     regional_pastor = Column(String, nullable=True)
@@ -135,6 +143,10 @@ class Region(Base, TimestampMixin, AuditMixin):
     state = relationship("State", back_populates="regions")
     groups = relationship("Group", back_populates="region") # 'group' is SQL keyword, using 'dclm_groups' table name safely
 
+    __table_args__ = (
+        UniqueConstraint("state_id", "region_code", name="uq_regions_state_code"),
+    )
+
     @property
     def formatted_id(self) -> str:
         """Returns standard display ID: DCM-Nation-State-Region"""
@@ -144,8 +156,9 @@ class Region(Base, TimestampMixin, AuditMixin):
 class Group(Base, TimestampMixin, AuditMixin):
     __tablename__ = "dclm_groups" # Avoid reserved keyword 'groups'
 
-    group_id = Column(String, primary_key=True, index=True)
-    region_id = Column(String, ForeignKey("regions.region_id"), nullable=False)
+    group_id = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    region_id = Column(UUID(as_uuid=False), ForeignKey("regions.region_id"), nullable=False, index=True)
+    group_code = Column(String, nullable=False, index=True)
     group_name = Column(String, nullable=False)
     group_head = Column(String, nullable=True)
     group_pastor = Column(String, nullable=True)
@@ -157,6 +170,10 @@ class Group(Base, TimestampMixin, AuditMixin):
     region = relationship("Region", back_populates="groups")
     locations = relationship("Location", back_populates="group")
 
+    __table_args__ = (
+        UniqueConstraint("region_id", "group_code", name="uq_groups_region_code"),
+    )
+
     @property
     def formatted_id(self) -> str:
         """Returns standard display ID: DCM-Nation-State-Region-Group"""
@@ -166,8 +183,9 @@ class Group(Base, TimestampMixin, AuditMixin):
 class Location(Base, TimestampMixin, AuditMixin):
     __tablename__ = "locations"
 
-    location_id = Column(String, primary_key=True, index=True)
-    group_id = Column(String, ForeignKey("dclm_groups.group_id"), nullable=False)
+    location_id = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    group_id = Column(UUID(as_uuid=False), ForeignKey("dclm_groups.group_id"), nullable=False, index=True)
+    location_code = Column(String, nullable=False, index=True)
     location_name = Column(String, nullable=False)
     church_type = Column(String, nullable=False) # DLBC, DLCF, DLSO
     address = Column(String, nullable=True)
@@ -183,6 +201,10 @@ class Location(Base, TimestampMixin, AuditMixin):
     fellowships = relationship("Fellowship", back_populates="location")
     profile = relationship("LocationProfile", back_populates="location", uselist=False)
 
+    __table_args__ = (
+        UniqueConstraint("group_id", "location_code", name="uq_locations_group_code"),
+    )
+
     @property
     def formatted_id(self) -> str:
         """Returns standard display ID: DCM-Nation-State-Region-Group-Location"""
@@ -192,8 +214,9 @@ class Location(Base, TimestampMixin, AuditMixin):
 class Fellowship(Base, TimestampMixin, AuditMixin):
     __tablename__ = "fellowships"
 
-    fellowship_id = Column(String, primary_key=True, index=True)
-    location_id = Column(String, ForeignKey("locations.location_id"), nullable=False)
+    fellowship_id = Column(UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    location_id = Column(UUID(as_uuid=False), ForeignKey("locations.location_id"), nullable=False, index=True)
+    fellowship_code = Column(String, nullable=False, index=True)
     fellowship_name = Column(String, nullable=False)
     fellowship_address = Column(String, nullable=True)
     associate_church = Column(String, nullable=True)
@@ -207,6 +230,10 @@ class Fellowship(Base, TimestampMixin, AuditMixin):
     
     # Relationships
     location = relationship("Location", back_populates="fellowships")
+
+    __table_args__ = (
+        UniqueConstraint("location_id", "fellowship_code", name="uq_fellowships_location_code"),
+    )
 
     @property
     def formatted_id(self) -> str:

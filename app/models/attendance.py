@@ -26,7 +26,7 @@ class WorkerAttendance(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     
     # Hierarchy Scope
     path = Column(LtreeType, nullable=False, index=True)
-    location_id = Column(String, nullable=False, index=True)
+    location_id = Column(UUID(as_uuid=False), nullable=False, index=True)
     
     # Event Link (Source of Truth for Date, Program Type, Domain)
     event_id = Column(UUID(as_uuid=True), ForeignKey("program_events.id"), nullable=False, index=True)
@@ -47,7 +47,7 @@ class WorkerAttendance(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     
     # Metadata
     note = Column(Text, nullable=True)
-    entered_by_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
+    entered_by_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False, index=True)
     
     # Relationships
     event = relationship("ProgramEvent")
@@ -95,6 +95,7 @@ class WorkerAbsenceNotice(Base, TimestampMixin):
         UUID(as_uuid=True),
         ForeignKey("users.user_id"),
         nullable=True,
+        index=True,
     )
     acknowledged_at = Column(DateTime(timezone=True), nullable=True)
     admin_note = Column(Text, nullable=True)

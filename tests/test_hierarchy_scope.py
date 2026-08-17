@@ -15,14 +15,14 @@ from app.api.v1.routes import hierarchy
 
 
 def test_hierarchy_read_allows_ancestor_node():
-    current_user = SimpleNamespace(path="org.234.KW.ILN.ILE.001")
+    current_user = SimpleNamespace(path="org.234.KW.ILR.ILE.003")
     node = SimpleNamespace(path="org.234.KW")
 
     hierarchy._ensure_hierarchy_visible(current_user, node)
 
 
 def test_hierarchy_read_rejects_unrelated_node():
-    current_user = SimpleNamespace(path="org.234.KW.ILN")
+    current_user = SimpleNamespace(path="org.234.KW.ILR")
     node = SimpleNamespace(path="org.234.LA")
 
     with pytest.raises(HTTPException):
@@ -30,7 +30,7 @@ def test_hierarchy_read_rejects_unrelated_node():
 
 
 def test_hierarchy_write_rejects_ancestor_node():
-    current_user = SimpleNamespace(path="org.234.KW.ILN")
+    current_user = SimpleNamespace(path="org.234.KW.ILR")
     node = SimpleNamespace(path="org.234.KW")
 
     with pytest.raises(HTTPException):

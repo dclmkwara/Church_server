@@ -18,14 +18,14 @@ class TransferRequest(Base, TimestampMixin, LTreePathMixin):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     worker_id = Column(UUID(as_uuid=True), ForeignKey("workers.worker_id"), nullable=False, index=True)
 
-    from_location_id = Column(String, nullable=False, index=True)
-    to_location_id = Column(String, nullable=False, index=True)
+    from_location_id = Column(UUID(as_uuid=False), nullable=False, index=True)
+    to_location_id = Column(UUID(as_uuid=False), nullable=False, index=True)
 
     status = Column(String, default="pending", index=True)  # pending, approved, rejected
     reason = Column(String, nullable=True)
 
-    requested_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True)
-    approved_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True)
+    requested_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True, index=True)
+    approved_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True, index=True)
     approved_at = Column(DateTime(timezone=True), nullable=True)
 
     worker = relationship("Worker")
@@ -48,8 +48,8 @@ class StatusChangeRequest(Base, TimestampMixin, LTreePathMixin):
     status = Column(String, default="pending", index=True)  # pending, approved, rejected
     reason = Column(String, nullable=True)
 
-    requested_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True)
-    approved_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True)
+    requested_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True, index=True)
+    approved_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True, index=True)
     approved_at = Column(DateTime(timezone=True), nullable=True)
 
     worker = relationship("Worker")
@@ -91,14 +91,14 @@ class WorkerRemovalRequest(Base, TimestampMixin, LTreePathMixin):
     reviews = Column(JSONB, default=list)
 
     # Who submitted the original request (Level 3 user)
-    requested_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
+    requested_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False, index=True)
 
     # Who took the final action (approve / reject)
-    decided_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True)
+    decided_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True, index=True)
     decided_at = Column(DateTime(timezone=True), nullable=True)
 
     # Populated when escalated — who escalated and when
-    escalated_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True)
+    escalated_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True, index=True)
     escalated_at = Column(DateTime(timezone=True), nullable=True)
     escalation_notes = Column(Text, nullable=True)
 

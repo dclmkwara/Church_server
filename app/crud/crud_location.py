@@ -14,17 +14,17 @@ The path generation follows the pattern:
     org.{nation_id}.{state_id}.{region_id}.{group_id}.{location_id}.{fellowship_id}
 
 Example:
-    org.234.KW.ILN.ILE.001.F001
+    org.234.KW.ILR.ILE.003.F001
     └── Nation: 234
         └── State: KW
-            └── Region: ILN
+            └── Region: ILR
                 └── Group: ILE
-                    └── Location: 001
+                    └── Location: 003
                         └── Fellowship: F001
 """
 from typing import List, Optional, Any
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import func, select
 from fastapi import HTTPException
 
 from app.crud.base import CRUDBase
@@ -82,20 +82,20 @@ class CRUDNation(CRUDBase[Nation, NationCreate, NationUpdate]):
             # nation.path = "org.234"
             ```
         """
-        # Check if nation ID already exists
-        if await self.get(db, obj_in.nation_id):
-             raise HTTPException(status_code=400, detail="Nation ID already exists")
+        existing = await db.execute(select(Nation).where(Nation.nation_code == obj_in.nation_code))
+        if existing.scalars().first():
+             raise HTTPException(status_code=400, detail="Nation code already exists")
 
         # Create nation with generated path
         db_obj = Nation(
-            nation_id=obj_in.nation_id,
+            nation_code=obj_in.nation_code,
             continent=obj_in.continent,
             country_name=obj_in.country_name,
             capital=obj_in.capital,
             address=obj_in.address,
             church_hq=obj_in.church_hq,
             national_pastor=obj_in.national_pastor,
-            path=f"org.{obj_in.nation_id}"  # Root path format
+            path=f"org.{obj_in.nation_code}"  # Root path format
         )
         db.add(db_obj)
         await db.commit()
@@ -154,16 +154,18 @@ class CRUDState(CRUDBase[State, StateCreate, StateUpdate]):
         if not parent:
             raise HTTPException(status_code=404, detail="Parent Nation not found")
         
-        # Check for duplicate state ID
-        if await self.get(db, obj_in.state_id):
-             raise HTTPException(status_code=400, detail="State ID already exists")
+        existing = await db.execute(
+            select(State).where(State.nation_id == obj_in.nation_id, State.state_code == obj_in.state_code)
+        )
+        if existing.scalars().first():
+             raise HTTPException(status_code=400, detail="State code already exists in this nation")
 
         # Generate path: parent.path + "." + state_id
-        new_path = f"{parent.path}.{obj_in.state_id}"
+        new_path = f"{parent.path}.{obj_in.state_code}"
 
         db_obj = State(
-            state_id=obj_in.state_id,
             nation_id=obj_in.nation_id,
+            state_code=obj_in.state_code,
             state_name=obj_in.state_name,
             city=obj_in.city,
             address=obj_in.address,
@@ -191,7 +193,7 @@ class CRUDRegion(CRUDBase[Region, RegionCreate, RegionUpdate]):
     Path format: {state.path}.{region_id}
     
     Example:
-        org.234.KW.ILN (Ilorin North Region in Kwara State)
+        org.234.KW.ILR (Ilorin Region in Kwara State)
     """
     
     async def create(self, db: AsyncSession, *, obj_in: RegionCreate) -> Region:
@@ -217,15 +219,17 @@ class CRUDRegion(CRUDBase[Region, RegionCreate, RegionUpdate]):
         if not parent:
             raise HTTPException(status_code=404, detail="Parent State not found")
 
-        # Check for duplicate region ID
-        if await self.get(db, obj_in.region_id):
-             raise HTTPException(status_code=400, detail="Region ID already exists")
+        existing = await db.execute(
+            select(Region).where(Region.state_id == obj_in.state_id, Region.region_code == obj_in.region_code)
+        )
+        if existing.scalars().first():
+             raise HTTPException(status_code=400, detail="Region code already exists in this state")
 
-        new_path = f"{parent.path}.{obj_in.region_id}"
+        new_path = f"{parent.path}.{obj_in.region_code}"
 
         db_obj = Region(
-            region_id=obj_in.region_id,
             state_id=obj_in.state_id,
+            region_code=obj_in.region_code,
             region_name=obj_in.region_name,
             region_head=obj_in.region_head,
             regional_pastor=obj_in.regional_pastor,
@@ -251,7 +255,7 @@ class CRUDGroup(CRUDBase[Group, GroupCreate, GroupUpdate]):
     Path format: {region.path}.{group_id}
     
     Example:
-        org.234.KW.ILN.ILE (Ilorin East Group in Ilorin North Region)
+        org.234.KW.ILR.ILE (Ilorin East Group in Ilorin Region)
     """
     
     async def create(self, db: AsyncSession, *, obj_in: GroupCreate) -> Group:
@@ -276,14 +280,17 @@ class CRUDGroup(CRUDBase[Group, GroupCreate, GroupUpdate]):
         if not parent:
             raise HTTPException(status_code=404, detail="Parent Region not found")
 
-        if await self.get(db, obj_in.group_id):
-             raise HTTPException(status_code=400, detail="Group ID already exists")
+        existing = await db.execute(
+            select(Group).where(Group.region_id == obj_in.region_id, Group.group_code == obj_in.group_code)
+        )
+        if existing.scalars().first():
+             raise HTTPException(status_code=400, detail="Group code already exists in this region")
 
-        new_path = f"{parent.path}.{obj_in.group_id}"
+        new_path = f"{parent.path}.{obj_in.group_code}"
 
         db_obj = Group(
-            group_id=obj_in.group_id,
             region_id=obj_in.region_id,
+            group_code=obj_in.group_code,
             group_name=obj_in.group_name,
             group_head=obj_in.group_head,
             group_pastor=obj_in.group_pastor,
@@ -310,7 +317,7 @@ class CRUDLocation(CRUDBase[Location, LocationCreate, LocationUpdate]):
     Path format: {group.path}.{location_id}
     
     Example:
-        org.234.KW.ILN.ILE.001 (Location 001 in Ilorin East Group)
+        org.234.KW.ILR.ILE.003 (Location 003 in Ilorin East Group)
     """
     
     async def create(self, db: AsyncSession, *, obj_in: LocationCreate) -> Location:
@@ -339,14 +346,18 @@ class CRUDLocation(CRUDBase[Location, LocationCreate, LocationUpdate]):
         if not parent:
             raise HTTPException(status_code=404, detail="Parent Group not found")
 
-        if await self.get(db, obj_in.location_id):
-             raise HTTPException(status_code=400, detail="Location ID already exists")
+        location_code = obj_in.location_code or await self.next_location_code(db, group_id=obj_in.group_id)
+        existing = await db.execute(
+            select(Location).where(Location.group_id == obj_in.group_id, Location.location_code == location_code)
+        )
+        if existing.scalars().first():
+             raise HTTPException(status_code=400, detail="Location code already exists in this group")
 
-        new_path = f"{parent.path}.{obj_in.location_id}"
+        new_path = f"{parent.path}.{location_code}"
 
         db_obj = Location(
-            location_id=obj_in.location_id,
             group_id=obj_in.group_id,
+            location_code=location_code,
             location_name=obj_in.location_name,
             church_type=obj_in.church_type,
             address=obj_in.address,
@@ -359,6 +370,19 @@ class CRUDLocation(CRUDBase[Location, LocationCreate, LocationUpdate]):
         await db.commit()
         await db.refresh(db_obj)
         return db_obj
+
+    async def next_location_code(self, db: AsyncSession, *, group_id: Any) -> str:
+        result = await db.execute(
+            select(func.max(Location.location_code)).where(Location.group_id == group_id)
+        )
+        current_max = result.scalar_one_or_none()
+        if not current_max:
+            return "001"
+        try:
+            next_number = int(current_max) + 1
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Existing location codes must be numeric") from exc
+        return f"{next_number:03d}"
 
 location = CRUDLocation(Location)
 
@@ -376,7 +400,7 @@ class CRUDFellowship(CRUDBase[Fellowship, FellowshipCreate, FellowshipUpdate]):
     Path format: {location.path}.{fellowship_id}
     
     Example:
-        org.234.KW.ILN.ILE.001.F001 (Fellowship F001 in Location 001)
+        org.234.KW.ILR.ILE.003.F001 (Fellowship F001 in Location 003)
     """
     
     async def create(self, db: AsyncSession, *, obj_in: FellowshipCreate) -> Fellowship:
@@ -405,14 +429,20 @@ class CRUDFellowship(CRUDBase[Fellowship, FellowshipCreate, FellowshipUpdate]):
         if not parent:
             raise HTTPException(status_code=404, detail="Parent Location not found")
 
-        if await self.get(db, obj_in.fellowship_id):
-             raise HTTPException(status_code=400, detail="Fellowship ID already exists")
+        existing = await db.execute(
+            select(Fellowship).where(
+                Fellowship.location_id == obj_in.location_id,
+                Fellowship.fellowship_code == obj_in.fellowship_code,
+            )
+        )
+        if existing.scalars().first():
+             raise HTTPException(status_code=400, detail="Fellowship code already exists in this location")
 
-        new_path = f"{parent.path}.{obj_in.fellowship_id}"
+        new_path = f"{parent.path}.{obj_in.fellowship_code}"
 
         db_obj = Fellowship(
-            fellowship_id=obj_in.fellowship_id,
             location_id=obj_in.location_id,
+            fellowship_code=obj_in.fellowship_code,
             fellowship_name=obj_in.fellowship_name,
             fellowship_address=obj_in.fellowship_address,
             associate_church=obj_in.associate_church,

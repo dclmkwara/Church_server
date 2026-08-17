@@ -40,7 +40,7 @@ class ChurchMember(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     # Hierarchy Scope
     path = Column(LtreeType, nullable=False, index=True)
     location_id = Column(
-        String,
+        UUID(as_uuid=False),
         ForeignKey("locations.location_id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
@@ -59,7 +59,7 @@ class ChurchMember(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     # Church Details
     member_since = Column(Date, nullable=True)         # Date they joined this location
     fellowship_id = Column(
-        String,
+        UUID(as_uuid=False),
         ForeignKey("fellowships.fellowship_id", ondelete="SET NULL"),
         nullable=True,
         index=True,
@@ -85,6 +85,7 @@ class ChurchMember(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
         UUID(as_uuid=True),
         ForeignKey("users.user_id"),
         nullable=False,
+        index=True,
     )
 
     # Relationships

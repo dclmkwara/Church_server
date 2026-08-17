@@ -24,6 +24,12 @@ async def read_program_domains(db: AsyncSession = Depends(deps.get_db), skip: in
 async def create_program_domain(*, db: AsyncSession = Depends(deps.get_db), domain_in: ProgramDomainCreate, current_user: User = Depends(deps.get_current_active_user)) -> Any:
     return await program_domain.create(db, obj_in=domain_in)
 
+@router.get('/domains/{domain_id}', response_model=ProgramDomainResponse, dependencies=[Depends(deps.PermissionChecker('programs:read'))])
+async def read_program_domain(*, db: AsyncSession = Depends(deps.get_db), domain_id: int, current_user: User = Depends(deps.get_current_active_user)) -> Any:
+    db_domain = await program_domain.get(db, id=domain_id)
+    if not db_domain: raise HTTPException(status_code=404, detail='Program Domain not found')
+    return db_domain
+
 @router.put('/domains/{domain_id}', response_model=ProgramDomainResponse, dependencies=[Depends(deps.PermissionChecker('programs:manage'))])
 async def update_program_domain(*, db: AsyncSession = Depends(deps.get_db), domain_id: int, domain_in: ProgramDomainUpdate, current_user: User = Depends(deps.get_current_active_user)) -> Any:
     db_domain = await program_domain.get(db, id=domain_id)
@@ -34,6 +40,12 @@ async def update_program_domain(*, db: AsyncSession = Depends(deps.get_db), doma
 async def read_program_types(db: AsyncSession = Depends(deps.get_db), domain_id: int = Query(None), skip: int = 0, limit: int = 100, current_user: User = Depends(deps.get_current_active_user)) -> Any:
     if domain_id: return await program_type.get_by_domain(db, domain_id=domain_id)
     return await program_type.get_multi(db, skip=skip, limit=limit)
+
+@router.get('/types/{type_id}', response_model=ProgramTypeResponse, dependencies=[Depends(deps.PermissionChecker('programs:read'))])
+async def read_program_type(*, db: AsyncSession = Depends(deps.get_db), type_id: int, current_user: User = Depends(deps.get_current_active_user)) -> Any:
+    db_type = await program_type.get(db, id=type_id)
+    if not db_type: raise HTTPException(status_code=404, detail='Program Type not found')
+    return db_type
 
 @router.post('/types', response_model=ProgramTypeResponse, dependencies=[Depends(deps.PermissionChecker('programs:manage'))])
 async def create_program_type(*, db: AsyncSession = Depends(deps.get_db), type_in: ProgramTypeCreate, current_user: User = Depends(deps.get_current_active_user)) -> Any:

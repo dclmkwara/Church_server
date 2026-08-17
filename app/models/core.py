@@ -163,11 +163,11 @@ def generate_display_id(path: str) -> str:
         path: ltree path (e.g., 'org.234.kw.iln.ile.001')
     
     Returns:
-        str: Display ID (e.g., 'DCM-234-KW-ILN-ILE-001')
+        str: Display ID (e.g., 'DCM-234-KW-ILR-ILE-003')
     
     Example:
         >>> generate_display_id('org.234.kw.iln.ile.001')
-        'DCM-234-KW-ILN-ILE-001'
+        'DCM-234-KW-ILR-ILE-003'
     """
     segments = path.split('.')
     
@@ -186,13 +186,13 @@ def parse_display_id(display_id: str) -> str:
     Parse display ID back to ltree path.
     
     Args:
-        display_id: Display ID (e.g., 'DCM-234-KW-ILN-ILE-001')
+        display_id: Display ID (e.g., 'DCM-234-KW-ILR-ILE-003')
     
     Returns:
         str: ltree path (e.g., 'org.234.kw.iln.ile.001')
     
     Example:
-        >>> parse_display_id('DCM-234-KW-ILN-ILE-001')
+        >>> parse_display_id('DCM-234-KW-ILR-ILE-003')
         'org.234.kw.iln.ile.001'
     """
     segments = display_id.split('-')

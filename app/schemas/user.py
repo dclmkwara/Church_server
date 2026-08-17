@@ -61,6 +61,12 @@ class WorkerBase(BaseModel):
     unit: str
     status: Optional[str] = "Active"
 
+    @field_validator("location_id", mode="before")
+    @classmethod
+    def location_id_to_str(cls, v):
+        """Location primary keys may be UUID objects from asyncpg; API payloads expose strings."""
+        return str(v) if v is not None else v
+
 
 class WorkerCreate(WorkerBase):
     pass
@@ -148,6 +154,12 @@ class UserResponse(UserBase):
     def path_to_str(cls, v):
         """Convert ltree object to string if needed."""
         return str(v) if v is not None else None
+
+    @field_validator("location_id", mode="before")
+    @classmethod
+    def location_id_to_str(cls, v):
+        """Convert UUID location primary keys to API-safe strings."""
+        return str(v) if v is not None else v
 
 
 class UserFullResponse(UserResponse):

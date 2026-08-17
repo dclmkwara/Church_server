@@ -33,7 +33,7 @@ class NationBase(BaseModel):
 
 class NationCreate(NationBase):
     """Schema for creating a Nation."""
-    nation_id: str  # Creating explicitly requires ID for now, or we gen it? Usually explicit "234"
+    nation_code: str  # e.g. "234"
 
 class NationUpdate(BaseModel):
     """Schema for updating a Nation."""
@@ -49,6 +49,7 @@ class NationResponse(NationBase):
     model_config = ConfigDict(from_attributes=True)
 
     nation_id: str
+    nation_code: str
     path: str
     formatted_id: str
     created_at: datetime
@@ -66,7 +67,7 @@ class StateBase(BaseModel):
 
 class StateCreate(StateBase):
     """Schema for creating a State."""
-    state_id: str # e.g. "KW"
+    state_code: str # e.g. "KW"
     nation_id: str
 
 class StateUpdate(BaseModel):
@@ -82,6 +83,7 @@ class StateResponse(StateBase):
     model_config = ConfigDict(from_attributes=True)
 
     state_id: str
+    state_code: str
     nation_id: str
     path: str
     formatted_id: str
@@ -97,7 +99,7 @@ class RegionBase(BaseModel):
 
 class RegionCreate(RegionBase):
     """Schema for creating a Region."""
-    region_id: str # e.g. "ILN"
+    region_code: str # e.g. "ILR"
     state_id: str
 
 class RegionUpdate(BaseModel):
@@ -111,6 +113,7 @@ class RegionResponse(RegionBase):
     model_config = ConfigDict(from_attributes=True)
 
     region_id: str
+    region_code: str
     state_id: str
     path: str
     formatted_id: str
@@ -126,7 +129,7 @@ class GroupBase(BaseModel):
 
 class GroupCreate(GroupBase):
     """Schema for creating a Group."""
-    group_id: str # e.g. "ILE"
+    group_code: str # e.g. "ILE"
     region_id: str
 
 class GroupUpdate(BaseModel):
@@ -140,6 +143,7 @@ class GroupResponse(GroupBase):
     model_config = ConfigDict(from_attributes=True)
 
     group_id: str
+    group_code: str
     region_id: str
     path: str
     formatted_id: str
@@ -158,7 +162,7 @@ class LocationBase(BaseModel):
 
 class LocationCreate(LocationBase):
     """Schema for creating a Location."""
-    location_id: str # e.g. "001"
+    location_code: Optional[str] = None # e.g. "001"; auto-generated within group when omitted
     group_id: str
 
 class LocationUpdate(BaseModel):
@@ -175,6 +179,7 @@ class LocationResponse(LocationBase):
     model_config = ConfigDict(from_attributes=True)
 
     location_id: str
+    location_code: str
     group_id: str
     path: str
     formatted_id: str
@@ -186,13 +191,17 @@ class LocationDetailResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     location_id: str
+    location_code: str
     location_name: str
     church_type: str
     group_id: str
+    group_code: str
     group_name: str
     region_id: str
+    region_code: str
     region_name: str
     state_id: str
+    state_code: str
     state_name: str
 
 
@@ -207,7 +216,7 @@ class FellowshipBase(BaseModel):
 
 class FellowshipCreate(FellowshipBase):
     """Schema for creating a Fellowship."""
-    fellowship_id: str # e.g. "F001"
+    fellowship_code: str # e.g. "F001"
     location_id: str
 
 class FellowshipUpdate(BaseModel):
@@ -223,6 +232,7 @@ class FellowshipResponse(FellowshipBase):
     model_config = ConfigDict(from_attributes=True)
 
     fellowship_id: str
+    fellowship_code: str
     location_id: str
     location_name: Optional[str] = None
     church_type: Optional[str] = None
@@ -236,6 +246,7 @@ class TreeNode(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+    code: Optional[str] = None
     name: str
     type: str # 'nation', 'state', etc.
     path: str

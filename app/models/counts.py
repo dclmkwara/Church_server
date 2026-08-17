@@ -17,7 +17,7 @@ class Count(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     client_id = Column(UUID(as_uuid=True), nullable=True, index=True)
     path = Column(LtreeType, nullable=False, index=True)
-    location_id = Column(String, nullable=False, index=True)
+    location_id = Column(UUID(as_uuid=False), nullable=False, index=True)
     date = Column(DateTime(timezone=True), nullable=False, index=True)
     event_id = Column(UUID(as_uuid=True), ForeignKey("program_events.id"), nullable=True, index=True)
     assignment_id = Column(UUID(as_uuid=True), ForeignKey("event_assignments.id"), nullable=True, index=True)
@@ -36,7 +36,7 @@ class Count(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     campaign_code = Column(String, nullable=True, index=True)
     submission_channel = Column(String, nullable=False, default="admin_web", server_default="admin_web", index=True)
 
-    entered_by_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False)
+    entered_by_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False, index=True)
 
     event = relationship("ProgramEvent")
     assignment = relationship("EventAssignment")

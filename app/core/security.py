@@ -8,24 +8,27 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
+import bcrypt as _bcrypt
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 
 from app.core.config import settings
 
 
 # ── Password hashing ───────────────────────────────────────────────────────────
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
+# NOTE: passlib 1.7.4 is incompatible with bcrypt 4.x (it pre-hashes with sha256
+# producing a 128-byte hex string that bcrypt 4.x refuses). We call bcrypt directly.
 
 def hash_password(password: str) -> str:
-    """Hash a plain-text password with bcrypt."""
-    return pwd_context.hash(password)
+    """Hash a plain-text password with bcrypt (direct, no passlib wrapper)."""
+    return _bcrypt.hashpw(password[:72].encode("utf-8"), _bcrypt.gensalt(rounds=12)).decode("utf-8")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a plain-text password against its bcrypt hash."""
-    return pwd_context.verify(plain_password, hashed_password)
+    """Verify a plain-text password against its bcrypt hash (direct, no passlib wrapper)."""
+    try:
+        return _bcrypt.checkpw(plain_password[:72].encode("utf-8"), hashed_password.encode("utf-8"))
+    except Exception:
+        return False
 
 
 # ── Access token ───────────────────────────────────────────────────────────────

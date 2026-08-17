@@ -52,7 +52,7 @@ class WorkerTransfer(Base, TimestampMixin, SoftDeleteMixin):
 
     # Worker Being Transferred
     worker_id = Column(
-        UUID(as_uuid=True),
+        UUID(as_uuid=False),
         ForeignKey("workers.worker_id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
@@ -60,13 +60,13 @@ class WorkerTransfer(Base, TimestampMixin, SoftDeleteMixin):
 
     # Transfer Locations
     from_location_id = Column(
-        String,
+        UUID(as_uuid=False),
         ForeignKey("locations.location_id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )
     to_location_id = Column(
-        String,
+        UUID(as_uuid=True),
         ForeignKey("locations.location_id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
@@ -85,6 +85,7 @@ class WorkerTransfer(Base, TimestampMixin, SoftDeleteMixin):
         UUID(as_uuid=True),
         ForeignKey("users.user_id"),
         nullable=False,
+        index=True,
     )
 
     # Origin Approval
@@ -92,6 +93,7 @@ class WorkerTransfer(Base, TimestampMixin, SoftDeleteMixin):
         UUID(as_uuid=True),
         ForeignKey("users.user_id"),
         nullable=True,
+        index=True,
     )
     origin_approved_at = Column(DateTime(timezone=True), nullable=True)
     origin_note = Column(Text, nullable=True)
@@ -101,6 +103,7 @@ class WorkerTransfer(Base, TimestampMixin, SoftDeleteMixin):
         UUID(as_uuid=True),
         ForeignKey("users.user_id"),
         nullable=True,
+        index=True,
     )
     destination_approved_at = Column(DateTime(timezone=True), nullable=True)
     destination_note = Column(Text, nullable=True)
@@ -110,6 +113,7 @@ class WorkerTransfer(Base, TimestampMixin, SoftDeleteMixin):
         UUID(as_uuid=True),
         ForeignKey("users.user_id"),
         nullable=True,
+        index=True,
     )
     rejected_at = Column(DateTime(timezone=True), nullable=True)
     rejection_reason = Column(Text, nullable=True)

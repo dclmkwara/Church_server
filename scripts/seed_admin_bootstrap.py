@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import re
 import secrets
 import sys
 from dataclasses import dataclass
@@ -30,6 +31,10 @@ from app.models.user import Role, User, Worker
 from app.schemas.location import GroupCreate, LocationCreate, NationCreate, RegionCreate, StateCreate
 
 WEST_AFRICA_DIVISION = "West Africa Division"
+CHURCH_ACRONYM = "DCM"
+NIGERIA_NATION_ID = "234"
+KWARA_STATE_ID = "KW"
+DEFAULT_STARTER_LOCATION_ID = "003"
 
 WEST_AFRICA_NATIONS = [
     {"nation_id": "229", "country_name": "Benin", "capital": "Porto-Novo"},
@@ -137,27 +142,164 @@ class StarterAccount:
     role_name: str
     phone: str
     email: str
+    gender: str = "Male"
+    unit: str = "Pastorate"
+    occupation: str = "Pastor"
 
 
-STARTER_ACCOUNTS = [
-    StarterAccount("Pastor Samuel Adebayo", "Location Pastor", "09029952120", "samuel.adebayo@admin.dclm.ng"),
-    StarterAccount("Pastor Deborah Yusuf", "Group Pastor", "09029952121", "deborah.yusuf@admin.dclm.ng"),
-    StarterAccount("Pastor David Akinwale", "Region Pastor", "09029952122", "david.akinwale@admin.dclm.ng"),
-    StarterAccount("Pastor Grace Omoniyi", "State Overseer", "09029952123", "grace.omoniyi@admin.dclm.ng"),
-    StarterAccount("Pastor John Fasanmi", "National Admin", "09029952124", "john.fasanmi@admin.dclm.ng"),
-    StarterAccount("Pastor Ruth Balogun", "Continental Admin", "09029952125", "ruth.balogun@admin.dclm.ng"),
-    StarterAccount("Pastor Michael Ojo", "Global Admin", "09029952126", "michael.ojo@admin.dclm.ng"),
+@dataclass(frozen=True)
+class SeedLocation:
+    location_code: str
+    location_name: str
+    church_type: str
+    address: str
+
+
+ILORIN_REGION_NAME = "Ilorin Region"
+ILORIN_EAST_GROUP_NAME = "Ilorin East Group"
+KNOWN_REGION_CODES = {
+    ILORIN_REGION_NAME.casefold(): "ILR",
+}
+KNOWN_GROUP_CODES = {
+    ILORIN_EAST_GROUP_NAME.casefold(): "ILE",
+}
+IGNORED_CODE_WORDS = {
+    "AREA",
+    "BRANCH",
+    "CAMPUS",
+    "CHURCH",
+    "DCLC",
+    "DLCF",
+    "DLSO",
+    "DLBC",
+    "GROUP",
+    "LIFE",
+    "REGION",
+}
+
+ILORIN_EAST_LOCATIONS = [
+    SeedLocation(
+        location_code="001",
+        location_name="DLCF Kwara Poly",
+        church_type="DLCF",
+        address="Kwara State Polytechnic, Ilorin, Kwara State",
+    ),
+    SeedLocation(
+        location_code="002",
+        location_name="DLCF College",
+        church_type="DLCF",
+        address="Agbede, Kwara State",
+    ),
+    SeedLocation(
+        location_code="003",
+        location_name="DLCF Living Spring",
+        church_type="DLCF",
+        address="Lajolo, Kwara State",
+    ),
+    SeedLocation(
+        location_code="004",
+        location_name="DLCF Day Spring",
+        church_type="DLCF",
+        address="Oke-Ose, Kwara State",
+    ),
 ]
 
 
+STARTER_ACCOUNTS = [
+    StarterAccount(
+        "Brother Daniel Olanrewaju",
+        "House Fellowship Leader",
+        "09029952118",
+        "fellowship.leader@admin.dclm.ng",
+        unit="Home Care Fellowship",
+        occupation="Fellowship Leader",
+    ),
+    StarterAccount(
+        "Sister Mary Ojo",
+        "Location Worker",
+        "09029952119",
+        "location.worker@admin.dclm.ng",
+        gender="Female",
+        unit="Follow Up",
+        occupation="Church Worker",
+    ),
+    StarterAccount("Pastor Samuel Adebayo", "Location Pastor", "09029952120", "location.pastor@admin.dclm.ng"),
+    StarterAccount("Pastor Deborah Yusuf", "Group Pastor", "09029952121", "group.pastor@admin.dclm.ng", gender="Female"),
+    StarterAccount("Pastor David Akinwale", "Region Pastor", "09029952122", "region.pastor@admin.dclm.ng"),
+    StarterAccount("Pastor Grace Omoniyi", "State Overseer", "09029952123", "state.overseer@admin.dclm.ng", gender="Female"),
+    StarterAccount("Pastor John Fasanmi", "National Admin", "09029952124", "national.admin@admin.dclm.ng"),
+    StarterAccount("Pastor Ruth Balogun", "Continental Admin", "09029952125", "continental.admin@admin.dclm.ng", gender="Female"),
+    StarterAccount("Meshell Eva", "Global Admin", "09029952126", "meshelleva@gmail.com"),
+]
+
+
+def _clean_code_word(value: str) -> str:
+    return re.sub(r"[^A-Z0-9]", "", value.upper())
+
+
+def _meaningful_code_words(name: str) -> list[str]:
+    words = [_clean_code_word(word) for word in re.split(r"\s+", name.strip())]
+    return [word for word in words if word and word not in IGNORED_CODE_WORDS]
+
+
+def derive_hierarchy_code(name: str, *, level: str) -> str:
+    """Derive a stable 3-character hierarchy code before collision checks."""
+    level_key = level.casefold()
+    known_codes = KNOWN_REGION_CODES if level_key == "region" else KNOWN_GROUP_CODES
+    known_code = known_codes.get(name.casefold())
+    if known_code:
+        return known_code
+
+    words = _meaningful_code_words(name)
+    if not words:
+        raise ValueError(f"Cannot derive {level} code from empty name")
+
+    if len(words) >= 2:
+        code = f"{words[0][:2]}{words[1][0]}"
+    else:
+        suffix = "R" if level_key == "region" else "G"
+        code = f"{words[0][:2]}{suffix}"
+    return code[:3].ljust(3, "X")
+
+
+async def generate_available_hierarchy_code(db, model, code_attr: str, parent_filter, name: str, *, level: str) -> str:
+    base_code = derive_hierarchy_code(name, level=level)
+    candidates = [base_code]
+    code_seed = _clean_code_word("".join(_meaningful_code_words(name)))
+    for index in range(len(code_seed)):
+        candidates.append((base_code[:2] + code_seed[index])[:3])
+    for index in range(10):
+        candidates.append(f"{base_code[:2]}{index}")
+
+    seen = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        code_column = getattr(model, code_attr)
+        existing = (
+            await db.execute(select(model).where(parent_filter, code_column == candidate))
+        ).scalars().first()
+        if not existing:
+            return candidate
+
+    raise RuntimeError(f"Could not generate an available {level} code for {name!r}")
+
+
+def formatted_path(path: object) -> str:
+    return f"{CHURCH_ACRONYM}-{str(path).replace('org.', '').replace('.', '-')}"
+
+
 async def ensure_nation(db, payload: dict) -> Nation:
-    nation = await db.get(Nation, payload["nation_id"])
+    nation = (
+        await db.execute(select(Nation).where(Nation.nation_code == payload["nation_id"]))
+    ).scalars().first()
     if nation:
         return nation
     return await crud_nation.create(
         db,
         obj_in=NationCreate(
-            nation_id=payload["nation_id"],
+            nation_code=payload["nation_id"],
             continent=WEST_AFRICA_DIVISION,
             country_name=payload["country_name"],
             capital=payload.get("capital"),
@@ -168,15 +310,19 @@ async def ensure_nation(db, payload: dict) -> Nation:
     )
 
 
-async def ensure_state(db, *, state_id: str, state_name: str) -> State:
-    state = await db.get(State, state_id)
+async def ensure_state(db, *, nation: Nation, state_code: str, state_name: str) -> State:
+    state = (
+        await db.execute(
+            select(State).where(State.nation_id == nation.nation_id, State.state_code == state_code)
+        )
+    ).scalars().first()
     if state:
         return state
     return await crud_state.create(
         db,
         obj_in=StateCreate(
-            state_id=state_id,
-            nation_id="234",
+            state_code=state_code,
+            nation_id=nation.nation_id,
             state_name=state_name,
             city=None,
             address=None,
@@ -186,55 +332,148 @@ async def ensure_state(db, *, state_id: str, state_name: str) -> State:
     )
 
 
-async def ensure_region(db) -> Region:
-    region = await db.get(Region, "ILN")
+async def ensure_region(db, kwara_state: State) -> Region:
+    desired_code = derive_hierarchy_code(ILORIN_REGION_NAME, level="region")
+    region = (
+        await db.execute(
+            select(Region).where(
+                Region.state_id == kwara_state.state_id,
+                Region.region_code == desired_code,
+            )
+        )
+    ).scalars().first()
     if region:
+        region.region_name = ILORIN_REGION_NAME
+        region.path = f"{kwara_state.path}.{region.region_code}"
+        db.add(region)
+        await db.commit()
+        await db.refresh(region)
         return region
+
+    existing_by_name = (
+        await db.execute(
+            select(Region).where(
+                Region.state_id == kwara_state.state_id,
+                Region.region_name == ILORIN_REGION_NAME,
+            )
+        )
+    ).scalars().first()
+    if existing_by_name:
+        print(
+            f"Using existing region {existing_by_name.region_id} for {ILORIN_REGION_NAME}; "
+            f"new deployments will use {desired_code}."
+        )
+        return existing_by_name
+
+    region_code = await generate_available_hierarchy_code(
+        db,
+        Region,
+        "region_code",
+        Region.state_id == kwara_state.state_id,
+        ILORIN_REGION_NAME,
+        level="region",
+    )
     return await crud_region.create(
         db,
         obj_in=RegionCreate(
-            region_id="ILN",
-            state_id="KW",
-            region_name="Ilorin Region",
+            region_code=region_code,
+            state_id=kwara_state.state_id,
+            region_name=ILORIN_REGION_NAME,
             region_head=None,
             regional_pastor=None,
         ),
     )
 
 
-async def ensure_group(db) -> Group:
-    group = await db.get(Group, "ILE")
+async def ensure_group(db, region: Region) -> Group:
+    desired_code = derive_hierarchy_code(ILORIN_EAST_GROUP_NAME, level="group")
+    group = (
+        await db.execute(
+            select(Group).where(Group.region_id == region.region_id, Group.group_code == desired_code)
+        )
+    ).scalars().first()
     if group:
+        group.group_name = ILORIN_EAST_GROUP_NAME
+        group.path = f"{region.path}.{group.group_code}"
+        db.add(group)
+        await db.commit()
+        await db.refresh(group)
         return group
+
+    existing_by_name = (
+        await db.execute(
+            select(Group).where(
+                Group.region_id == region.region_id,
+                Group.group_name == ILORIN_EAST_GROUP_NAME,
+            )
+        )
+    ).scalars().first()
+    if existing_by_name:
+        print(
+            f"Using existing group {existing_by_name.group_id} for {ILORIN_EAST_GROUP_NAME}; "
+            f"new deployments will use {desired_code}."
+        )
+        return existing_by_name
+
+    group_code = await generate_available_hierarchy_code(
+        db,
+        Group,
+        "group_code",
+        Group.region_id == region.region_id,
+        ILORIN_EAST_GROUP_NAME,
+        level="group",
+    )
     return await crud_group.create(
         db,
         obj_in=GroupCreate(
-            group_id="ILE",
-            region_id="ILN",
-            group_name="Ilorin East Group",
+            group_code=group_code,
+            region_id=region.region_id,
+            group_name=ILORIN_EAST_GROUP_NAME,
             group_head=None,
             group_pastor=None,
         ),
     )
 
 
-async def ensure_location(db) -> Location:
-    location = await db.get(Location, "001")
+async def ensure_location(db, group: Group, payload: SeedLocation) -> Location:
+    location = (
+        await db.execute(
+            select(Location).where(
+                Location.group_id == group.group_id,
+                Location.location_code == payload.location_code,
+            )
+        )
+    ).scalars().first()
     if location:
+        location.location_name = payload.location_name
+        location.church_type = payload.church_type
+        location.address = payload.address
+        location.path = f"{group.path}.{payload.location_code}"
+        db.add(location)
+        await db.commit()
+        await db.refresh(location)
         return location
     return await crud_location.create(
         db,
         obj_in=LocationCreate(
-            location_id="001",
-            group_id="ILE",
-            location_name="Living Spring Lajolo",
-            church_type="DLBC",
-            address="Lajolo, Ilorin, Kwara State",
+            location_code=payload.location_code,
+            group_id=group.group_id,
+            location_name=payload.location_name,
+            church_type=payload.church_type,
+            address=payload.address,
             associate_cord=None,
             latitude=None,
             longitude=None,
         ),
     )
+
+
+async def ensure_ilorin_east_locations(db, group: Group) -> dict[str, Location]:
+    locations = {}
+    for payload in ILORIN_EAST_LOCATIONS:
+        location = await ensure_location(db, group, payload)
+        locations[location.location_code] = location
+    return locations
 
 
 
@@ -301,13 +540,13 @@ async def ensure_worker(db, account: StarterAccount, location: Location) -> Work
         worker.region = "Ilorin Region"
         worker.group = "Ilorin East Group"
         worker.name = account.name
-        worker.gender = "Male" if account.name not in {"Pastor Deborah Yusuf", "Pastor Grace Omoniyi", "Pastor Ruth Balogun"} else "Female"
+        worker.gender = account.gender
         worker.email = account.email
         worker.phone = account.phone
-        worker.address = "Lajolo, Ilorin, Kwara State"
-        worker.occupation = "Pastor"
+        worker.address = location.address
+        worker.occupation = account.occupation
         worker.marital_status = "Married"
-        worker.unit = "Pastorate"
+        worker.unit = account.unit
         worker.status = "Active"
         worker.approval_status = "approved"
         worker.approved_at = worker.approved_at or now
@@ -329,13 +568,13 @@ async def ensure_worker(db, account: StarterAccount, location: Location) -> Work
         region="Ilorin Region",
         group="Ilorin East Group",
         name=account.name,
-        gender="Male" if account.name not in {"Pastor Deborah Yusuf", "Pastor Grace Omoniyi", "Pastor Ruth Balogun"} else "Female",
+        gender=account.gender,
         phone=account.phone,
         email=account.email,
-        address="Lajolo, Ilorin, Kwara State",
-        occupation="Pastor",
+        address=location.address,
+        occupation=account.occupation,
         marital_status="Married",
-        unit="Pastorate",
+        unit=account.unit,
         status="Active",
         approval_status="approved",
         approved_at=now,
@@ -409,15 +648,22 @@ async def run(password: str, reset_passwords: bool, metadata_only: bool = False)
         else:
             await init_rbac(db)
 
+        nations = {}
         for nation_payload in WEST_AFRICA_NATIONS:
-            await ensure_nation(db, nation_payload)
+            nation = await ensure_nation(db, nation_payload)
+            nations[nation.nation_code] = nation
 
-        for state_id, state_name in NIGERIA_STATES:
-            await ensure_state(db, state_id=state_id, state_name=state_name)
+        nigeria = nations[NIGERIA_NATION_ID]
 
-        await ensure_region(db)
-        await ensure_group(db)
-        location = await ensure_location(db)
+        states = {}
+        for state_code, state_name in NIGERIA_STATES:
+            state = await ensure_state(db, nation=nigeria, state_code=state_code, state_name=state_name)
+            states[state.state_code] = state
+
+        region = await ensure_region(db, states[KWARA_STATE_ID])
+        group = await ensure_group(db, region)
+        locations = await ensure_ilorin_east_locations(db, group)
+        location = locations[DEFAULT_STARTER_LOCATION_ID]
         await ensure_program_metadata(db)
         role_map = await ensure_role_map(db)
 
@@ -448,7 +694,10 @@ async def run(password: str, reset_passwords: bool, metadata_only: bool = False)
             print(f"  password: {password}")
             print(f"  worker code: {row['worker_code']}")
             print(f"  home scope: {row['scope_id']}")
-        print("\nSeeded Kwara starter path: DCM-234-KW-ILN-ILE-001")
+        print("\nSeeded Ilorin East locations:")
+        for seeded_location in locations.values():
+            print(f"- {seeded_location.location_code}: {seeded_location.location_name} ({seeded_location.address})")
+        print(f"\nSeeded Kwara starter path: {formatted_path(location.path)}")
 
 
 def parse_args() -> argparse.Namespace:

@@ -2,6 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.api import deps
+from app.core import analytics_cache
+from app.db.filters import ltree_subpath as _ltree_subpath
+from app.db.filters import scope_filter as _scope_filter
 from app.models.core import validate_path
 from app.services.report_service import ReportService
 from app.schemas.report import DailyCountSummary, MonthlyFinancialSummary, AttendanceTrend
@@ -10,6 +13,7 @@ from typing import List, Optional
 from datetime import date, timedelta
 
 router = APIRouter()
+_REPORT_CACHE_TTL = 20.0
 
 
 def _resolve_scope(
@@ -165,6 +169,7 @@ async def refresh_reports(
     """
     # Permission enforced via PermissionChecker ("reports:refresh")
     await ReportService.refresh_views(db)
+    analytics_cache.clear()
     return {"status": "success", "message": "Materialized views refreshed"}
 
 
@@ -176,6 +181,7 @@ async def refresh_reports(
 async def get_timeseries_analysis(
     metric: str = Query(..., description="counts, offerings, or attendance"),
     interval: str = Query("daily", description="daily, weekly, or monthly"),
+    scope_path: Optional[str] = None,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     db: AsyncSession = Depends(deps.get_db),
@@ -191,7 +197,7 @@ async def get_timeseries_analysis(
     if not end_date:
         end_date = date.today()
 
-    effective_scope = str(current_user.path)
+    effective_scope = _resolve_scope(current_user, scope_path)
 
     interval_map = {
         "daily": "day",
@@ -206,7 +212,7 @@ async def get_timeseries_analysis(
     from app.models.offerings import Offering
     from app.models.attendance import WorkerAttendance
     from app.models.programs import ProgramEvent
-    from sqlalchemy import select, func, text, cast, DateTime
+    from sqlalchemy import select, func, cast, DateTime
 
     def _trend_from_series(series: List[dict]) -> str:
         if len(series) < 2:
@@ -222,55 +228,61 @@ async def get_timeseries_analysis(
             return "down"
         return "stable"
 
-    if metric == "counts":
-        period = func.date_trunc(interval_map[interval_key], Count.date).label("period")
-        query = select(
-            period,
-            func.sum(Count.adult_male + Count.adult_female + Count.youth_male +
-                    Count.youth_female + Count.boys + Count.girls).label('total')
-        ).where(
-            Count.date.between(start_date, end_date),
-            text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=effective_scope)
-        ).group_by(period).order_by(period)
+    async def _build_payload():
+        if metric == "counts":
+            period = func.date_trunc(interval_map[interval_key], Count.date).label("period")
+            query = select(
+                period,
+                func.sum(Count.adult_male + Count.adult_female + Count.youth_male +
+                        Count.youth_female + Count.boys + Count.girls).label('total')
+            ).where(
+                Count.date.between(start_date, end_date),
+                _scope_filter(Count.path, effective_scope),
+            ).group_by(period).order_by(period)
 
-        result = await db.execute(query)
-        data = [{"date": str(row.period.date()), "value": row.total} for row in result]
+            result = await db.execute(query)
+            data = [{"date": str(row.period.date()), "value": row.total} for row in result]
 
-        return {
-            "metric": metric,
-            "interval": interval_key,
-            "data": data,
-            "trend": _trend_from_series(data)
-        }
-    if metric == "offerings":
-        period = func.date_trunc(interval_map[interval_key], Offering.date).label("period")
-        query = select(
-            period,
-            func.coalesce(func.sum(Offering.amount), 0).label("total")
-        ).where(
-            Offering.date.between(start_date, end_date),
-            text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=effective_scope)
-        ).group_by(period).order_by(period)
-        result = await db.execute(query)
-        data = [{"date": str(row.period.date()), "value": float(row.total)} for row in result]
-        return {"metric": metric, "interval": interval_key, "data": data, "trend": _trend_from_series(data)}
-    if metric == "attendance":
-        period = func.date_trunc(
-            interval_map[interval_key],
-            cast(ProgramEvent.date, DateTime),
-        ).label("period")
-        query = select(
-            period,
-            func.count(WorkerAttendance.id).label("total")
-        ).join(ProgramEvent, ProgramEvent.id == WorkerAttendance.event_id).where(
-            ProgramEvent.date.between(start_date, end_date),
-            text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=effective_scope)
-        ).group_by(period).order_by(period)
-        result = await db.execute(query)
-        data = [{"date": str(row.period.date()), "value": row.total} for row in result]
-        return {"metric": metric, "interval": interval_key, "data": data, "trend": _trend_from_series(data)}
+            return {
+                "metric": metric,
+                "interval": interval_key,
+                "data": data,
+                "trend": _trend_from_series(data)
+            }
+        if metric == "offerings":
+            period = func.date_trunc(interval_map[interval_key], Offering.date).label("period")
+            query = select(
+                period,
+                func.coalesce(func.sum(Offering.amount), 0).label("total")
+            ).where(
+                Offering.date.between(start_date, end_date),
+                _scope_filter(Offering.path, effective_scope),
+            ).group_by(period).order_by(period)
+            result = await db.execute(query)
+            data = [{"date": str(row.period.date()), "value": float(row.total)} for row in result]
+            return {"metric": metric, "interval": interval_key, "data": data, "trend": _trend_from_series(data)}
+        if metric == "attendance":
+            period = func.date_trunc(
+                interval_map[interval_key],
+                cast(ProgramEvent.date, DateTime),
+            ).label("period")
+            query = select(
+                period,
+                func.count(WorkerAttendance.id).label("total")
+            ).join(ProgramEvent, ProgramEvent.id == WorkerAttendance.event_id).where(
+                ProgramEvent.date.between(start_date, end_date),
+                _scope_filter(WorkerAttendance.path, effective_scope),
+            ).group_by(period).order_by(period)
+            result = await db.execute(query)
+            data = [{"date": str(row.period.date()), "value": row.total} for row in result]
+            return {"metric": metric, "interval": interval_key, "data": data, "trend": _trend_from_series(data)}
+        raise HTTPException(status_code=400, detail="Metric not supported")
 
-    raise HTTPException(status_code=400, detail="Metric not supported")
+    return await analytics_cache.get_or_set(
+        ('reports', 'timeseries', metric, interval_key, effective_scope, start_date, end_date),
+        _build_payload,
+        ttl=_REPORT_CACHE_TTL,
+    )
 
 
 @router.get(
@@ -297,7 +309,7 @@ async def get_hierarchical_breakdown(
 
     effective_scope = str(current_user.path)
 
-    from sqlalchemy import select, func, text
+    from sqlalchemy import select, func
     from app.models.counts import Count
     from app.models.offerings import Offering
     from app.models.attendance import WorkerAttendance
@@ -315,43 +327,53 @@ async def get_hierarchical_breakdown(
     segment_count = level_map[level_key]
 
     def group_expr(model):
-        return func.subpath(model.path, 0, segment_count).label("group_path")
+        return _ltree_subpath(model.path, segment_count).label("group_path")
 
-    if metric == "counts":
-        query = select(
-            group_expr(Count),
-            func.sum(Count.adult_male + Count.adult_female + Count.youth_male +
-                    Count.youth_female + Count.boys + Count.girls).label("total")
-        ).where(
-            Count.date.between(start_date, end_date),
-            text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=effective_scope)
-        ).group_by(group_expr(Count)).order_by(group_expr(Count))
-        result = await db.execute(query)
-        return {"metric": metric, "level": level, "breakdown": [{"path": row.group_path, "total": row.total} for row in result]}
+    async def _build_payload():
+        if metric == "counts":
+            group_path = group_expr(Count)
+            query = select(
+                group_path,
+                func.sum(Count.adult_male + Count.adult_female + Count.youth_male +
+                        Count.youth_female + Count.boys + Count.girls).label("total")
+            ).where(
+                Count.date.between(start_date, end_date),
+                _scope_filter(Count.path, effective_scope),
+            ).group_by(group_path).order_by(group_path)
+            result = await db.execute(query)
+            return {"metric": metric, "level": level, "breakdown": [{"path": str(row.group_path), "total": row.total} for row in result]}
 
-    if metric == "offerings":
-        query = select(
-            group_expr(Offering),
-            func.coalesce(func.sum(Offering.amount), 0).label("total")
-        ).where(
-            Offering.date.between(start_date, end_date),
-            text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=effective_scope)
-        ).group_by(group_expr(Offering)).order_by(group_expr(Offering))
-        result = await db.execute(query)
-        return {"metric": metric, "level": level, "breakdown": [{"path": row.group_path, "total": str(row.total)} for row in result]}
+        if metric == "offerings":
+            group_path = group_expr(Offering)
+            query = select(
+                group_path,
+                func.coalesce(func.sum(Offering.amount), 0).label("total")
+            ).where(
+                Offering.date.between(start_date, end_date),
+                _scope_filter(Offering.path, effective_scope),
+            ).group_by(group_path).order_by(group_path)
+            result = await db.execute(query)
+            return {"metric": metric, "level": level, "breakdown": [{"path": str(row.group_path), "total": str(row.total)} for row in result]}
 
-    if metric == "attendance":
-        query = select(
-            group_expr(WorkerAttendance),
-            func.count(WorkerAttendance.id).label("total")
-        ).join(ProgramEvent, ProgramEvent.id == WorkerAttendance.event_id).where(
-            ProgramEvent.date.between(start_date, end_date),
-            text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=effective_scope)
-        ).group_by(group_expr(WorkerAttendance)).order_by(group_expr(WorkerAttendance))
-        result = await db.execute(query)
-        return {"metric": metric, "level": level, "breakdown": [{"path": row.group_path, "total": row.total} for row in result]}
+        if metric == "attendance":
+            group_path = group_expr(WorkerAttendance)
+            query = select(
+                group_path,
+                func.count(WorkerAttendance.id).label("total")
+            ).join(ProgramEvent, ProgramEvent.id == WorkerAttendance.event_id).where(
+                ProgramEvent.date.between(start_date, end_date),
+                _scope_filter(WorkerAttendance.path, effective_scope),
+            ).group_by(group_path).order_by(group_path)
+            result = await db.execute(query)
+            return {"metric": metric, "level": level, "breakdown": [{"path": str(row.group_path), "total": row.total} for row in result]}
 
-    raise HTTPException(status_code=400, detail="Metric not supported")
+        raise HTTPException(status_code=400, detail="Metric not supported")
+
+    return await analytics_cache.get_or_set(
+        ('reports', 'by_level', metric, level_key, effective_scope, start_date, end_date),
+        _build_payload,
+        ttl=_REPORT_CACHE_TTL,
+    )
 
 
 @router.get(
@@ -375,7 +397,7 @@ async def detect_anomalies(
 
     # Simplified anomaly detection
     from app.models.counts import Count
-    from sqlalchemy import select, func, text
+    from sqlalchemy import select, func
 
     # Get daily totals
     query = select(
@@ -385,7 +407,7 @@ async def detect_anomalies(
                 Count.youth_female + Count.boys + Count.girls).label('total')
     ).where(
         Count.date >= start_date,
-        text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=effective_scope)
+        _scope_filter(Count.path, effective_scope),
     ).group_by(Count.date, Count.location_id)
 
     result = await db.execute(query)
@@ -428,7 +450,7 @@ async def get_growth_rate(
     start_date = date.today() - timedelta(days=months * 30)
 
     from app.models.counts import Count
-    from sqlalchemy import select, func, text, extract
+    from sqlalchemy import select, func, extract
 
     # Monthly aggregation
     query = select(
@@ -438,7 +460,7 @@ async def get_growth_rate(
                 Count.youth_female + Count.boys + Count.girls).label('total')
     ).where(
         Count.date >= start_date,
-        text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=effective_scope)
+        _scope_filter(Count.path, effective_scope),
     ).group_by('year', 'month').order_by('year', 'month')
 
     result = await db.execute(query)

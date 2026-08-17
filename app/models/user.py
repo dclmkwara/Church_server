@@ -124,7 +124,7 @@ class Worker(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     
     # Location information - STRICT ENFORCEMENT: Worker MUST belong to a location
     location_id = Column(
-        String, 
+        UUID(as_uuid=False),
         ForeignKey("locations.location_id", ondelete="RESTRICT"),  # Prevent location deletion if workers exist
         nullable=False,  # REQUIRED field
         index=True
@@ -155,7 +155,7 @@ class Worker(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
         default="approved",  # approved, pending_verification, rejected
         index=True
     )
-    approved_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True)
+    approved_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True, index=True)
     approved_at = Column(DateTime(timezone=True), nullable=True)
     rejection_reason = Column(String, nullable=True)
     
@@ -207,7 +207,7 @@ class User(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
         default="pending",  # pending, approved, rejected
         index=True
     )
-    approved_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True)  # Admin who approved
+    approved_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True, index=True)  # Admin who approved
     approved_at = Column(DateTime(timezone=True), nullable=True)  # When approved
     rejection_reason = Column(String, nullable=True)  # If rejected, why?
 
@@ -218,7 +218,7 @@ class User(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     recovery_answer_two = Column(String, nullable=True)  # Hashed
     
     # Inherited from worker (denormalized for quick access)
-    location_id = Column(String, nullable=False, index=True)
+    location_id = Column(UUID(as_uuid=False), nullable=False, index=True)
     name = Column(String, nullable=False)
     phone = Column(String, unique=True, nullable=False, index=True)
     email = Column(String, unique=True, nullable=False, index=True)

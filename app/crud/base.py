@@ -7,10 +7,12 @@ Changes:
   just to iterate column names — unnecessary CPU work on every update.
 - Replaced deprecated obj_in.dict() with obj_in.model_dump() (Pydantic v2).
 """
+import uuid
 from typing import Any, Dict, Generic, List, Optional, Type, TypeVar, Union
 
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.base import Base
@@ -32,6 +34,17 @@ class CRUDBase(Generic[ModelType, CreateSchemaType, UpdateSchemaType]):
 
     async def get(self, db: AsyncSession, id: Any) -> Optional[ModelType]:
         """Get a single record by primary key."""
+        pk_column = next(iter(self.model.__mapper__.primary_key), None)
+        if (
+            isinstance(id, str)
+            and pk_column is not None
+            and isinstance(pk_column.type, PG_UUID)
+            and getattr(pk_column.type, "as_uuid", False)
+        ):
+            try:
+                id = uuid.UUID(id)
+            except ValueError:
+                return None
         return await db.get(self.model, id)
 
     async def get_multi(
@@ -81,6 +94,17 @@ class CRUDBase(Generic[ModelType, CreateSchemaType, UpdateSchemaType]):
 
     async def remove(self, db: AsyncSession, *, id: Any) -> Optional[ModelType]:
         """Hard delete a record. Prefer soft-delete in production code."""
+        pk_column = next(iter(self.model.__mapper__.primary_key), None)
+        if (
+            isinstance(id, str)
+            and pk_column is not None
+            and isinstance(pk_column.type, PG_UUID)
+            and getattr(pk_column.type, "as_uuid", False)
+        ):
+            try:
+                id = uuid.UUID(id)
+            except ValueError:
+                return None
         obj = await db.get(self.model, id)
         if obj:
             await db.delete(obj)
