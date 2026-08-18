@@ -4,7 +4,7 @@ from typing import Any
 
 from fasthtml.common import A, Button, Div, Form, H2, Img, Input, Link, Main, Option, P, Script, Select, Span, Title
 
-from faststrap import Badge, Drawer, Fx, Icon, Modal, ThemeToggle
+from faststrap import Badge, BottomNav, BottomNavItem, Drawer, Fx, Icon, Modal, ThemeToggle
 
 from ..auth_context import AdminContext, PROFILE_CONFIGS
 from ..backend.config import get_backend_config
@@ -296,6 +296,37 @@ def _sidebar(ctx: AdminContext, active_key: str) -> Any:
     )
 
 
+def _mobile_bottom_nav(ctx: AdminContext, active_key: str) -> Any:
+    """Persistent bottom navigation bar shown on mobile (< lg breakpoint)."""
+    nav_items = [
+        ("Home", "house", "/dashboard", "dashboard"),
+        ("People", "people", "/people/workers", "workers"),
+        ("Church", "calendar-event", "/church-data/programs", "programs"),
+    ]
+    items = [
+        BottomNavItem(
+            label,
+            href=ctx.url_for(href),
+            icon=icon,
+            active=(active_key == key),
+        )
+        for label, icon, href, key in nav_items
+    ]
+    # Menu button — triggers the mobile side-nav offcanvas (no page navigation)
+    items.append(
+        A(
+            Icon("list", cls="bottom-nav-icon"),
+            Span("Menu", cls="bottom-nav-label"),
+            href="#",
+            data_bs_toggle="offcanvas",
+            data_bs_target="#mobile-nav",
+            aria_label="Open navigation menu",
+            cls="bottom-nav-item",
+        )
+    )
+    return BottomNav(*items, cls="d-lg-none admin-bottom-nav")
+
+
 def shell_layout(
     ctx: AdminContext,
     *,
@@ -335,26 +366,19 @@ def shell_layout(
             Drawer(sidebar, drawer_id="mobile-nav", title="DCLM Admin", placement="start", body_cls="p-0"),
             Div(
                 Div(
-                    Button(
-                        Icon("list", cls="fs-4"),
-                        cls=f"btn btn-light border d-lg-none topbar-icon-btn {Fx.base} {Fx.hover_lift}",
-                        data_bs_toggle="offcanvas",
-                        data_bs_target="#mobile-nav",
-                        aria_label="Open navigation menu",
-                        type="button",
-                    ),
-                    Div(
-                        Form(
-                            *hidden_context_inputs(ctx),
-                            Input(
-                                type="search",
-                                name="q",
-                                placeholder="Search people, counts, or locations...",
-                                cls="form-control admin-search-input",
-                            ),
-                            cls="admin-search-form d-none d-md-flex",
+                    # Left side: search box (hidden on small mobile, shown md+)
+                    Form(
+                        *hidden_context_inputs(ctx),
+                        Input(
+                            type="search",
+                            name="q",
+                            placeholder="Search people, counts, or locations...",
+                            cls="form-control admin-search-input",
                         ),
-                        ThemeToggle(toggle_id="theme-toggle-topbar", current_theme="auto", cls="d-none d-sm-inline-flex"),
+                        cls="admin-search-form d-none d-md-flex",
+                    ),
+                    # Right side: notification + user avatar grouped together
+                    Div(
                         Button(
                             Icon("bell", cls="fs-5"),
                             Span(cls="spinner-border spinner-border-sm htmx-indicator topbar-notify-indicator", style="width:.8rem;height:.8rem;", aria_hidden="true"),
@@ -382,7 +406,7 @@ def shell_layout(
                                     P(subtitle, cls="text-muted mb-0") if subtitle else "",
                                     cls="d-flex flex-column gap-1",
                                 ) if show_shell_intro else "",
-                                Div(primary_action, cls="d-none d-lg-block") if primary_action else "",
+                                Div(primary_action, cls="ms-auto flex-shrink-0") if primary_action else "",
                                 cls="d-flex flex-column flex-lg-row justify-content-between gap-3 mb-4",
                             ) if show_shell_intro or primary_action else "",
                             content,
@@ -392,7 +416,8 @@ def shell_layout(
                     ),
                     cls="admin-main",
                 ),
-                Div(primary_action or "", cls="mobile-action-bar d-lg-none") if primary_action else "",
+                # Persistent mobile bottom navigation (replaces scattered mobile-action-bar)
+                _mobile_bottom_nav(ctx, active_key),
                 cls="admin-content-shell",
             ),
             Drawer(Div(P("Select any item from the list to view its details here.", cls="text-muted"), id="detail-drawer-body"), drawer_id="detail-drawer", title="Details", body_cls="admin-drawer-body"),

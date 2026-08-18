@@ -119,14 +119,8 @@ def stat_card(title: str, value: str, note: str, icon: str, tone: str = "success
     )
 
 
-def page_intro(title: str, subtitle: str, *, scope_label: str, scope_kind: str, scope_id: str = "") -> Any:
+def page_intro(title: str, subtitle: str, *, scope_label: str = "", scope_kind: str = "", scope_id: str = "") -> Any:
     return Div(
-        Div(
-            Badge(f"{scope_kind.title()} View", variant="light", cls="scope-chip text-primary-emphasis"),
-            Span(scope_label, cls="fw-semibold text-dark"),
-            Badge(scope_id, variant="light", cls="border text-secondary-emphasis") if scope_id else "",
-            cls="page-intro__meta d-flex flex-wrap align-items-center gap-2 mb-3",
-        ),
         H2(title, cls="display-6 fw-semibold text-dark mb-2 page-intro__title"),
         P(subtitle, cls="text-muted fs-6 mb-0 page-intro__subtitle"),
         cls="page-intro",

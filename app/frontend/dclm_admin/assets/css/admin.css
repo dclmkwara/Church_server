@@ -214,8 +214,7 @@ h6,
 }
 
 .admin-topbar,
-.admin-page-body,
-.mobile-action-bar {
+.admin-page-body {
   backdrop-filter: blur(18px);
 }
 
@@ -850,7 +849,6 @@ h6,
 .approval-card .btn,
 .section-card .btn:not(.dropdown-toggle),
 .quick-action,
-.mobile-action-bar .btn,
 .admin-primary-btn {
   max-width: 14rem;
 }
@@ -910,14 +908,15 @@ h6,
   padding-bottom: 1.25rem;
 }
 
-.mobile-action-bar {
-  background: rgba(255, 255, 255, 0.94);
-  border-top: 1px solid var(--admin-border);
-  box-shadow: 0 -10px 30px rgba(15, 23, 42, 0.06);
-  bottom: 0;
-  left: 0;
-  padding: 0.9rem 1rem calc(0.9rem + env(safe-area-inset-bottom));
-  position: sticky;
+/* Bottom navigation overrides — the faststrap BottomNav component handles
+   most styles; we only override what's needed for the app shell context. */
+.admin-bottom-nav {
+  backdrop-filter: blur(18px);
+  background: rgba(255, 255, 255, 0.94) !important;
+  border-top: 1px solid var(--admin-border) !important;
+  box-shadow: 0 -6px 24px rgba(15, 23, 42, 0.07) !important;
+  padding-bottom: env(safe-area-inset-bottom) !important;
+  z-index: 1025;
 }
 
 .admin-primary-btn {
@@ -1293,7 +1292,6 @@ h6,
   .topbar-action-row {
     flex-wrap: nowrap;
     gap: var(--space-2);
-    margin-left: auto;
     width: auto;
     justify-content: flex-end;
   }
@@ -1310,8 +1308,9 @@ h6,
     padding: 0.9rem;
   }
 
-  .admin-content-shell:has(.mobile-action-bar) .admin-main {
-    padding-bottom: calc(5.5rem + env(safe-area-inset-bottom));
+  /* Always pad the bottom for the fixed bottom nav on mobile */
+  .admin-main {
+    padding-bottom: calc(4.5rem + env(safe-area-inset-bottom));
   }
 
   .page-intro__title {
@@ -1355,9 +1354,6 @@ h6,
     height: min(var(--chart-height, 220px), 208px) !important;
   }
 
-  .mobile-action-bar {
-    padding-inline: 0.75rem;
-  }
 
   .media-detail-item {
     display: grid;
@@ -1488,6 +1484,12 @@ h6,
   background: rgba(15, 23, 42, 0.85);
   border: 1px solid rgba(255, 255, 255, 0.1);
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
+}
+
+[data-bs-theme="dark"] .admin-bottom-nav {
+  background: rgba(15, 23, 42, 0.92) !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.08) !important;
+  box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.35) !important;
 }
 
 [data-bs-theme="dark"] .admin-page-body {
