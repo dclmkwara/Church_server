@@ -1,7 +1,7 @@
 from typing import List, Optional
 from datetime import datetime, date
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, text
+from sqlalchemy import select, and_, text, literal
 from sqlalchemy.orm import selectinload
 from uuid import UUID
 
@@ -72,9 +72,14 @@ class CRUDAnnouncement:
         """Get announcements filtered by scope and active status."""
         stmt = select(Announcement).options(selectinload(Announcement.items))
 
-        # Scope filtering using ltree
+        # Scope filtering using ltree — explicit casts required because the
+        # ORM maps 'path' as String (VARCHAR), so we must cast both sides to
+        # ltree ourselves to satisfy the <@ operator's type requirements.
         stmt = stmt.where(
-            (Announcement.path.op('<@')(scope_path)) | (Announcement.path == scope_path)
+            text(
+                "CAST(announcements.path AS LTREE) <@ CAST(:scope_path AS LTREE)"
+                " OR CAST(announcements.path AS LTREE) = CAST(:scope_path AS LTREE)"
+            ).bindparams(scope_path=scope_path)
         )
 
         if is_active is not None:

@@ -38,7 +38,7 @@ class ReportService:
         query = text("""
             SELECT * FROM mv_daily_counts_by_location
             WHERE day >= :start_date AND day <= :end_date
-              AND (path <@ :scope_path::ltree OR path = :scope_path::ltree)
+              AND (path <@ CAST(:scope_path AS LTREE) OR path = CAST(:scope_path AS LTREE))
             ORDER BY day DESC, path ASC
         """)
         result = await db.execute(
@@ -57,7 +57,7 @@ class ReportService:
         query = text("""
             SELECT * FROM mv_monthly_financial_summary
             WHERE month >= :start_month AND month <= :end_month
-              AND (path <@ :scope_path::ltree OR path = :scope_path::ltree)
+              AND (path <@ CAST(:scope_path AS LTREE) OR path = CAST(:scope_path AS LTREE))
             ORDER BY month DESC, path ASC
         """)
         result = await db.execute(
@@ -76,7 +76,7 @@ class ReportService:
         query = text("""
             SELECT * FROM mv_attendance_trends
             WHERE week >= :start_week AND week <= :end_week
-              AND (path <@ :scope_path::ltree OR path = :scope_path::ltree)
+              AND (path <@ CAST(:scope_path AS LTREE) OR path = CAST(:scope_path AS LTREE))
             ORDER BY week DESC, path ASC
         """)
         result = await db.execute(
