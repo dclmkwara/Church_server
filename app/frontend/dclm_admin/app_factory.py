@@ -158,11 +158,20 @@ def health():
 
 
 @app.post("/theme/toggle")
-def toggle_theme(request: Request):
-    current = request.cookies.get("theme", "light")
-    new_theme = "dark" if current == "light" else "light"
+async def toggle_theme(request: Request):
+    form = {}
+    try:
+        form = await request.form()
+    except Exception:
+        pass
+    desired = form.get("theme") or request.query_params.get("theme")
+    if desired in ("light", "dark"):
+        new_theme = desired
+    else:
+        current = request.cookies.get("theme", "light")
+        new_theme = "dark" if current == "light" else "light"
     resp = Response(status_code=200)
-    resp.set_cookie("theme", new_theme, max_age=31536000, samesite="lax")
+    resp.set_cookie("theme", new_theme, max_age=31536000, path="/", samesite="lax")
     return resp
 
 

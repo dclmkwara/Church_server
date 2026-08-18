@@ -270,30 +270,38 @@ class OrganizationService:
                 lambda: _profile_or_none(client, access_token, location_key) or {},
             ),
         )
+        if not location:
+            return None
+
+        loc_data = location or {}
+        det_data = detail or {}
+        prof_data = profile or {}
+
+        is_profiled = bool(prof_data and any(prof_data.get(k) for k in ("founder_name", "history", "full_address", "landmark")))
         return {
             "location_key": location_key,
-            "location_code": str(location.get("location_code") or str(location.get("path") or "").split(".")[-1] or ""),
-            "location": str(location.get("location_name") or location_key),
-            "church_type": str(location.get("church_type") or ""),
-            "status": "profiled" if profile else "needs_profile",
-            "address": str(location.get("address") or profile.get("full_address") or ""),
-            "pastor_name": str(profile.get("founder_name") or location.get("associate_cord") or "Not set"),
-            "assistant_name": str(profile.get("landmark") or "Not set"),
-            "phone": str(profile.get("google_maps_url") or ""),
-            "group": str(detail.get("group_name") or ""),
-            "region": str(detail.get("region_name") or ""),
-            "state": str(detail.get("state_name") or ""),
-            "path": str(location.get("path") or ""),
-            "display_id": format_scope_display_id(str(location.get("path") or "")),
-            "history": str(profile.get("history") or ""),
-            "founded_date": str(profile.get("founded_date") or ""),
-            "founder_name": str(profile.get("founder_name") or ""),
-            "full_address": str(profile.get("full_address") or ""),
-            "landmark": str(profile.get("landmark") or ""),
-            "google_maps_url": str(profile.get("google_maps_url") or ""),
-            "cover_image_url": str(profile.get("cover_image_url") or ""),
-            "associate_cord": str(location.get("associate_cord") or ""),
-            "special_projects": profile.get("special_projects") or [],
+            "location_code": str(loc_data.get("location_code") or str(loc_data.get("path") or "").split(".")[-1] or ""),
+            "location": str(loc_data.get("location_name") or location_key),
+            "church_type": str(loc_data.get("church_type") or ""),
+            "status": "profiled" if is_profiled else "needs_profile",
+            "address": str(loc_data.get("address") or prof_data.get("full_address") or ""),
+            "pastor_name": str(prof_data.get("founder_name") or loc_data.get("associate_cord") or "Not set"),
+            "assistant_name": str(prof_data.get("landmark") or "Not set"),
+            "phone": str(prof_data.get("google_maps_url") or ""),
+            "group": str(det_data.get("group_name") or ""),
+            "region": str(det_data.get("region_name") or ""),
+            "state": str(det_data.get("state_name") or ""),
+            "path": str(loc_data.get("path") or ""),
+            "display_id": format_scope_display_id(str(loc_data.get("path") or "")),
+            "history": str(prof_data.get("history") or ""),
+            "founded_date": str(prof_data.get("founded_date") or ""),
+            "founder_name": str(prof_data.get("founder_name") or ""),
+            "full_address": str(prof_data.get("full_address") or ""),
+            "landmark": str(prof_data.get("landmark") or ""),
+            "google_maps_url": str(prof_data.get("google_maps_url") or ""),
+            "cover_image_url": str(prof_data.get("cover_image_url") or ""),
+            "associate_cord": str(loc_data.get("associate_cord") or ""),
+            "special_projects": prof_data.get("special_projects") or [],
         }
 
     @staticmethod

@@ -166,7 +166,7 @@ def _scope_drawer_content(ctx: AdminContext, request_path: str) -> Any:
             Div(
                 P("Theme & Appearance", cls="small text-uppercase fw-semibold text-muted mb-2"),
                 Div(
-                    ThemeToggle(current_theme="auto", show_label=True, label_text="Dark Mode"),
+                    ThemeToggle(toggle_id="theme-toggle-drawer", current_theme="auto", show_label=True, label_text="Dark Mode"),
                     cls="p-2 border rounded-3 bg-body-tertiary d-flex align-items-center justify-content-between",
                 ),
                 cls="scope-drawer-section",
@@ -316,6 +316,14 @@ def shell_layout(
         Link(rel="apple-touch-icon", sizes="180x180", href="/assets/apple-touch-icon.png"),
         Link(rel="manifest", href="/manifest.json"),
         Link(rel="stylesheet", href="/assets/css/admin.css"),
+        Script("""
+(function(){
+  try {
+    var saved = localStorage.getItem("dclm-admin-theme") || (document.cookie.match(/theme=(dark|light)/) || [])[1] || "light";
+    document.documentElement.setAttribute("data-bs-theme", saved);
+  } catch(e){}
+})();
+"""),
         Script(src="/assets/js/chart.umd.min.js", defer=True),
         Script(src="/assets/js/admin-charts.js", defer=True),
         Script(src="/assets/js/admin-interactions.js", defer=True),
@@ -346,7 +354,7 @@ def shell_layout(
                             ),
                             cls="admin-search-form d-none d-md-flex",
                         ),
-                        ThemeToggle(current_theme="auto", cls="d-none d-sm-inline-flex"),
+                        ThemeToggle(toggle_id="theme-toggle-topbar", current_theme="auto", cls="d-none d-sm-inline-flex"),
                         Button(
                             Icon("bell", cls="fs-5"),
                             Span(cls="spinner-border spinner-border-sm htmx-indicator topbar-notify-indicator", style="width:.8rem;height:.8rem;", aria_hidden="true"),
