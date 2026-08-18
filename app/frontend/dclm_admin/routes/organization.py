@@ -22,7 +22,7 @@ ORG_TABS = [
 ]
 
 
-async def _organization_nav(ctx, active: str):
+def _organization_nav(ctx, active: str):
     return Div(
         *[
             A(
@@ -63,7 +63,7 @@ async def _tree_list(ctx, focus_path: str):
     )
 
 
-async def _child_action(ctx, row):
+def _child_action(ctx, row):
     if row["kind"] == "location":
         return A("Open profile", href=ctx.url_for(f"/organization/locations/{row['location_key']}"), cls="btn btn-outline-primary")
     if row["kind"] == "fellowship":
@@ -278,7 +278,7 @@ async def _locations_table(ctx, *, search: str = "", status: str = "", church_ty
     )
 
 
-async def _organization_loading_shell(ctx, *, heading: str, target_path: str, **params: str) -> Div:
+def _organization_loading_shell(ctx, *, heading: str, target_path: str, **params: str) -> Div:
     return Div(
         Div(
             H3(heading, cls="h5 fw-semibold mb-3"),
@@ -301,6 +301,10 @@ async def _organization_loading_shell(ctx, *, heading: str, target_path: str, **
 
 
 async def _hierarchy_page_content(ctx, default_focus: str) -> Div:
+    tree_div, panel_div = await asyncio.gather(
+        _tree_list(ctx, default_focus),
+        _hierarchy_panel(ctx, default_focus),
+    )
     return page_stack(
         page_intro(
             "Organization",
@@ -313,8 +317,8 @@ async def _hierarchy_page_content(ctx, default_focus: str) -> Div:
             "Hierarchy explorer",
             "Organization tree and unit details.",
             Div(
-                Div(_tree_list(ctx, default_focus), cls="organization-side-card"),
-                Div(await _hierarchy_panel(ctx, default_focus), cls="organization-side-card"),
+                Div(tree_div, cls="organization-side-card"),
+                Div(panel_div, cls="organization-side-card"),
                 cls="organization-two-up",
             ),
         ),
@@ -384,6 +388,7 @@ async def _location_profile_page_content(ctx, location_key: str) -> Div:
     profile = await OrganizationService.get_location_profile(request, ctx, location_key)
     if profile is None:
         return Div(empty_state("geo-alt", "Location not found", "Choose another location from the list."))
+    panel = await _location_panel(ctx, location_key)
     return page_stack(
         A("Back to locations", href=ctx.url_for("/organization/locations"), cls="btn btn-outline-primary admin-inline-btn mb-3"),
         page_intro(
@@ -393,7 +398,7 @@ async def _location_profile_page_content(ctx, location_key: str) -> Div:
             scope_kind=ctx.current_scope_kind,
         ),
         _organization_nav(ctx, "locations"),
-        _location_panel(ctx, location_key),
+        panel,
     )
 
 
@@ -520,7 +525,7 @@ def register_organization_routes(app) -> None:
                 scope_kind=ctx.current_scope_kind,
             ),
             _organization_nav(ctx, "locations"),
-            _location_panel(ctx, location_key),
+            await _location_panel(ctx, location_key),
         )
         return shell_layout(
             ctx,

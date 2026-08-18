@@ -127,11 +127,23 @@ class FellowshipService:
         return get_backend_config().enabled and bool(AuthService.get_access_token(request))
 
     @staticmethod
-    async def use_mock(request) -> str:
+    def _token(request) -> str:
         token = AuthService.get_access_token(request)
         if not token:
             raise BackendClientError("Backend authentication is required for fellowship.")
         return token
+
+    @staticmethod
+    def _details_key(location_id: str) -> tuple[str, str, str]:
+        return ("people", "location_details", location_id)
+
+    @staticmethod
+    async def use_mock(request) -> bool:
+        if get_backend_config().enabled:
+            if not AuthService.get_access_token(request):
+                raise BackendClientError("Backend authentication is required for fellowship.")
+            return False
+        return True
 
     @staticmethod
     async def _cache_key(location_id: str) -> tuple[str, str]:
@@ -140,7 +152,7 @@ class FellowshipService:
     @staticmethod
     async def list_fellowships(request, ctx, *, search: str = "", location: str = "", status: str = "") -> list[dict[str, Any]]:
         client = async_client(get_api_client())
-        access_token = await FellowshipService._token(request)
+        access_token = FellowshipService._token(request)
 
         async def load_rows() -> list[dict[str, Any]]:
             try:
@@ -157,7 +169,7 @@ class FellowshipService:
                 location_id = str(row.get("location_id") or "")
                 details = await request_cached(
                     request,
-                    await FellowshipService._details_key(location_id),
+                    FellowshipService._details_key(location_id),
                     lambda: PeopleService.get_location_details(request, location_id) or {},
                 )
                 members = await FellowshipService.list_members(request, fellowship_id)
@@ -205,7 +217,7 @@ class FellowshipService:
     @staticmethod
     async def get_fellowship(request, fellowship_id: str) -> dict[str, Any] | None:
         client = async_client(get_api_client())
-        access_token = await FellowshipService._token(request)
+        access_token = FellowshipService._token(request)
 
         async def load_row() -> dict[str, Any] | None:
             try:
@@ -219,7 +231,7 @@ class FellowshipService:
             location_id = str(row.get("location_id") or "")
             details = await request_cached(
                 request,
-                await FellowshipService._details_key(location_id),
+                FellowshipService._details_key(location_id),
                 lambda: PeopleService.get_location_details(request, location_id) or {},
             )
             members = await FellowshipService.list_members(request, fellowship_id)
@@ -233,7 +245,7 @@ class FellowshipService:
     @staticmethod
     async def list_members(request, fellowship_id: str) -> list[dict[str, Any]]:
         client = async_client(get_api_client())
-        access_token = await FellowshipService._token(request)
+        access_token = FellowshipService._token(request)
 
         async def load_rows() -> list[dict[str, Any]]:
             try:
@@ -251,7 +263,7 @@ class FellowshipService:
     @staticmethod
     async def list_attendance(request, fellowship_id: str) -> list[dict[str, Any]]:
         client = async_client(get_api_client())
-        access_token = await FellowshipService._token(request)
+        access_token = FellowshipService._token(request)
 
         async def load_rows() -> list[dict[str, Any]]:
             try:
@@ -269,7 +281,7 @@ class FellowshipService:
     @staticmethod
     async def list_offerings(request, fellowship_id: str) -> list[dict[str, Any]]:
         client = async_client(get_api_client())
-        access_token = await FellowshipService._token(request)
+        access_token = FellowshipService._token(request)
 
         async def load_rows() -> list[dict[str, Any]]:
             try:
@@ -287,7 +299,7 @@ class FellowshipService:
     @staticmethod
     async def list_testimonies(request, fellowship_id: str) -> list[dict[str, Any]]:
         client = async_client(get_api_client())
-        access_token = await FellowshipService._token(request)
+        access_token = FellowshipService._token(request)
 
         async def load_rows() -> list[dict[str, Any]]:
             try:
@@ -305,7 +317,7 @@ class FellowshipService:
     @staticmethod
     async def list_prayers(request, fellowship_id: str) -> list[dict[str, Any]]:
         client = async_client(get_api_client())
-        access_token = await FellowshipService._token(request)
+        access_token = FellowshipService._token(request)
 
         async def load_rows() -> list[dict[str, Any]]:
             try:
@@ -323,7 +335,7 @@ class FellowshipService:
     @staticmethod
     async def list_summaries(request, fellowship_id: str) -> list[dict[str, Any]]:
         client = async_client(get_api_client())
-        access_token = await FellowshipService._token(request)
+        access_token = FellowshipService._token(request)
 
         async def load_rows() -> list[dict[str, Any]]:
             try:
@@ -357,7 +369,7 @@ class FellowshipService:
     async def add_member(request, fellowship_id: str, payload: dict[str, str]) -> dict[str, Any]:
         client = async_client(get_api_client())
         row = await client.create_fellowship_member(
-            await FellowshipService._token(request),
+            FellowshipService._token(request),
             {
                 "fellowship_id": fellowship_id,
                 "name": payload.get("name") or "Member",
@@ -373,7 +385,7 @@ class FellowshipService:
     async def add_offering(request, fellowship_id: str, payload: dict[str, str]) -> dict[str, Any]:
         client = async_client(get_api_client())
         row = await client.create_fellowship_offering(
-            await FellowshipService._token(request),
+            FellowshipService._token(request),
             {
                 "fellowship_id": fellowship_id,
                 "date": f"{payload.get('date') or date.today().isoformat()}T00:00:00",
@@ -387,7 +399,7 @@ class FellowshipService:
     async def add_testimony(request, fellowship_id: str, payload: dict[str, str]) -> dict[str, Any]:
         client = async_client(get_api_client())
         row = await client.create_fellowship_testimony(
-            await FellowshipService._token(request),
+            FellowshipService._token(request),
             {
                 "fellowship_id": fellowship_id,
                 "date": f"{payload.get('date') or date.today().isoformat()}T00:00:00",
@@ -402,7 +414,7 @@ class FellowshipService:
     async def add_prayer(request, fellowship_id: str, payload: dict[str, str]) -> dict[str, Any]:
         client = async_client(get_api_client())
         row = await client.create_fellowship_prayer(
-            await FellowshipService._token(request),
+            FellowshipService._token(request),
             {
                 "fellowship_id": fellowship_id,
                 "date": f"{payload.get('date') or date.today().isoformat()}T00:00:00",

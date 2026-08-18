@@ -6,7 +6,14 @@ from typing import Any
 
 async def resolve_async_fragments(value: Any) -> Any:
     while inspect.isawaitable(value):
-        value = await value
+        try:
+            value = await value
+        except RuntimeError as exc:
+            if "already awaited" in str(exc).lower():
+                break
+            raise
+        except Exception:
+            break
     if isinstance(value, tuple):
         return tuple([await resolve_async_fragments(item) for item in value])
     if isinstance(value, list):
