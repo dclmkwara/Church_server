@@ -59,6 +59,11 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down DCLM API...")
     from app.core.scheduler import shutdown_scheduler
     shutdown_scheduler()
+    try:
+        from app.frontend.dclm_admin.backend import close_async_http_client
+        await close_async_http_client()
+    except Exception:
+        pass
     logger.info("✅ Shutdown complete")
 
 
@@ -220,4 +225,4 @@ try:
     app.mount("/", frontend_app)
     logger.info("✅ Faststrap Admin Frontend successfully mounted at root /")
 except Exception as exc:
-    logger.warning("Could not mount Faststrap frontend: %s", exc)
+    logger.error("Could not mount Faststrap frontend: %s", exc, exc_info=True)

@@ -182,10 +182,23 @@ def apple_touch_icon():
 
 
 async def shutdown_http_client():
-    await close_async_http_client()
+    try:
+        await close_async_http_client()
+    except Exception:
+        pass
 
 
-app.router.on_shutdown.append(shutdown_http_client)
+if hasattr(app, "on_event"):
+    try:
+        app.on_event("shutdown")(shutdown_http_client)
+    except Exception:
+        pass
+elif hasattr(getattr(app, "router", None), "on_shutdown"):
+    try:
+        app.router.on_shutdown.append(shutdown_http_client)
+    except Exception:
+        pass
+
 
 
 
