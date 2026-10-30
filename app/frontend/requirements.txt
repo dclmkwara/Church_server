@@ -1,5 +1,5 @@
-faststrap>=0.8.0
-python-fasthtml>=0.6.0
+faststrap>=0.10.1
+python-fasthtml>=0.14.0
 httpx>=0.27.0
 openpyxl>=3.1.0
 pytest>=7.4.0
