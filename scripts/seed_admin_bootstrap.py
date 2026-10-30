@@ -762,8 +762,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Seed West Africa hierarchy, Nigeria states, and starter pastor accounts.")
     parser.add_argument(
         "--password",
-        default=None,
-        help="Initial password for all seeded starter accounts. If omitted, a strong temporary password is generated.",
+        default="KwaraState2026#",
+        help="Initial password for all seeded starter accounts. Defaults to KwaraState2026#.",
     )
     parser.add_argument(
         "--reset-passwords",
@@ -780,7 +780,7 @@ def parse_args() -> argparse.Namespace:
 
 if __name__ == "__main__":
     args = parse_args()
-    password = args.password or secrets.token_urlsafe(18)
+    password = args.password or "KwaraState2026#"
 
     async def main() -> None:
         try:
