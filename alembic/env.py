@@ -54,15 +54,12 @@ def _quote_database_url_password(db_url: str) -> str:
 
 
 def _migration_url() -> str:
-    db_url = _quote_database_url_password(str(settings.sync_database_url))
-    url_obj = make_url(db_url)
+    url_obj = make_url(str(settings.sync_database_url))
     query = dict(url_obj.query or {})
     if url_obj.host and "supabase.com" in url_obj.host:
         query.setdefault("sslmode", "require")
-    if query != dict(url_obj.query or {}):
-        url_obj = url_obj.set(query=query)
-        db_url = url_obj.render_as_string(hide_password=False)
-    return db_url
+    url_obj = url_obj.set(query=query)
+    return url_obj.render_as_string(hide_password=False)
 
 
 def _alembic_command_name() -> str | None:
