@@ -98,7 +98,12 @@ class Role(Base, TimestampMixin, SoftDeleteMixin):
     @property
     def score_value(self) -> int:
         """Helper to get integer score value."""
-        return self.score.score if self.score else 0
+        try:
+            if self.score is not None and hasattr(self.score, "score"):
+                return self.score.score
+        except Exception:
+            pass
+        return getattr(self, "score_id", 0) or 0
 
     def __repr__(self):
         return f"<Role(name='{self.role_name}', score={self.score.score if self.score else None})>"

@@ -137,7 +137,7 @@ class BackendAuthMiddleware(BaseHTTPMiddleware):
         try:
             response = await call_next(request)
         except BackendClientError as exc:
-            if exc.status_code == 401 or "validate credentials" in str(exc).lower():
+            if exc.status_code in (401, 403) and ("validate credentials" in str(exc).lower() or "expired" in str(exc).lower() or "unauthorized" in str(exc).lower()):
                 login_path = await AuthService.login_redirect_path(request)
                 if request.headers.get("HX-Request"):
                     return Response(status_code=401, headers={"HX-Redirect": login_path})

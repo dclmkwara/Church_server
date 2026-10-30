@@ -1798,3 +1798,63 @@ h6,
 }
 
 
+
+
+/* ── Faint, Branded Skeleton Placeholders ───────────────────────────── */
+.placeholder,
+.placeholder-wave .placeholder,
+.placeholder-glow .placeholder {
+  background: linear-gradient(
+    90deg,
+    rgba(15, 45, 94, 0.05) 0%,
+    rgba(29, 78, 216, 0.12) 40%,
+    rgba(56, 189, 248, 0.16) 60%,
+    rgba(15, 45, 94, 0.05) 100%
+  ) !important;
+  background-size: 250% 100% !important;
+  border-radius: 8px !important;
+  opacity: 1 !important;
+  border: none !important;
+  animation: brandedSkeletonShimmer 2s cubic-bezier(0.4, 0, 0.2, 1) infinite !important;
+}
+
+@keyframes brandedSkeletonShimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}
+
+.placeholder-wave {
+  mask-image: none !important;
+  -webkit-mask-image: none !important;
+}
+
+.card:has(.placeholder),
+.card:has(.placeholder-wave),
+.card:has(.placeholder-glow) {
+  background: rgba(255, 255, 255, 0.65) !important;
+  border: 1px solid rgba(226, 232, 240, 0.6) !important;
+  border-radius: var(--admin-radius-md) !important;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.02) !important;
+}
+
+[data-bs-theme="dark"] .placeholder,
+[data-bs-theme="dark"] .placeholder-wave .placeholder,
+[data-bs-theme="dark"] .placeholder-glow .placeholder {
+  background: linear-gradient(
+    90deg,
+    rgba(30, 41, 59, 0.5) 0%,
+    rgba(56, 189, 248, 0.12) 50%,
+    rgba(30, 41, 59, 0.5) 100%
+  ) !important;
+  background-size: 250% 100% !important;
+}
+
+[data-bs-theme="dark"] .card:has(.placeholder),
+[data-bs-theme="dark"] .card:has(.placeholder-wave) {
+  background: rgba(15, 23, 42, 0.35) !important;
+  border: 1px solid rgba(51, 65, 85, 0.4) !important;
+}
