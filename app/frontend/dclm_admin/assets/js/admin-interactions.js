@@ -85,18 +85,66 @@
     delete button.dataset.adminOriginalValue;
   }
 
-  function scheduleToastDismiss(toast) {
-    const duration = Number(toast.getAttribute("data-duration") || "0");
-    if (!duration || toast.dataset.adminToastReady === "true") return;
-    toast.dataset.adminToastReady = "true";
+  function dismissToast(toast) {
+    if (!toast || toast.dataset.adminToastDismissing === "true") return;
+    toast.dataset.adminToastDismissing = "true";
+    toast.classList.add("admin-modern-toast-leaving");
+    toast.classList.add("faststrap-modern-toast-exit");
     window.setTimeout(() => {
-      toast.classList.add("admin-modern-toast-leaving");
-      window.setTimeout(() => toast.remove(), 220);
-    }, duration);
+      try {
+        if (toast.parentNode) toast.remove();
+      } catch (e) {}
+    }, 240);
+  }
+
+  function scheduleToastDismiss(toast) {
+    if (!toast || toast.dataset.adminToastReady === "true") return;
+    toast.dataset.adminToastReady = "true";
+
+    // Bind close action to close button(s)
+    const closeButtons = toast.querySelectorAll(".btn-close, [data-fs-dismiss], [aria-label*='Dismiss'], [aria-label*='Close']");
+    closeButtons.forEach((btn) => {
+      btn.style.cursor = "pointer";
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dismissToast(toast);
+      });
+    });
+
+    // Auto-dismiss countdown
+    const rawDuration = toast.getAttribute("data-fs-duration") || toast.getAttribute("data-duration");
+    const duration = rawDuration === "infinite" ? 0 : Number(rawDuration || "3500");
+
+    if (duration > 0) {
+      let timer = window.setTimeout(() => {
+        dismissToast(toast);
+      }, duration);
+
+      toast.addEventListener("mouseenter", () => {
+        if (timer) {
+          window.clearTimeout(timer);
+          timer = null;
+        }
+      });
+      toast.addEventListener("mouseleave", () => {
+        if (!timer && toast.dataset.adminToastDismissing !== "true") {
+          timer = window.setTimeout(() => {
+            dismissToast(toast);
+          }, 1500);
+        }
+      });
+    }
   }
 
   function hydrateToasts(root) {
-    (root || document).querySelectorAll("[data-fs-modern-toast]").forEach(scheduleToastDismiss);
+    const scope = root || document;
+    if (scope && scope.matches && (scope.matches("[data-fs-modern-toast]") || scope.matches(".faststrap-modern-toast"))) {
+      scheduleToastDismiss(scope);
+    }
+    if (scope && scope.querySelectorAll) {
+      scope.querySelectorAll("[data-fs-modern-toast], .faststrap-modern-toast").forEach(scheduleToastDismiss);
+    }
   }
 
   const tableMedia = window.matchMedia("(min-width: 992px)");

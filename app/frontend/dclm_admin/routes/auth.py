@@ -147,9 +147,12 @@ def register_auth_routes(app) -> None:
             identity = await AuthService.authenticate(email=email.strip(), password=password)
         except (BackendClientError, ValueError) as exc:
             next_path = AuthService.sanitize_next_path(next) or "/dashboard"
+            error_message = str(exc)
+            if not error_message or "Client error" in error_message or "401" in error_message:
+                error_message = "Invalid email or password. Please check your credentials and try again."
             return _auth_layout(
-                content=_login_form(next_path=next_path, error=str(exc)),
-                toast_message=str(exc),
+                content=_login_form(next_path=next_path, error=error_message),
+                toast_message=error_message,
                 toast_variant="danger",
                 toast_title="Sign in failed",
             )

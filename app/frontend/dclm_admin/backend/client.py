@@ -13,7 +13,72 @@ _ASYNC_CLIENT: Any = None
 
 
 class BackendClientError(RuntimeError):
-    pass
+    def __init__(self, message: str, status_code: int | None = None, raw_detail: Any | None = None):
+        super().__init__(message)
+        self.message = message
+        self.status_code = status_code
+        self.raw_detail = raw_detail
+
+    def __str__(self) -> str:
+        return self.message
+
+
+def _format_http_error(exc: Any) -> str:
+    status_code = getattr(getattr(exc, "response", None), "status_code", 500)
+    detail_msg: str | None = None
+    try:
+        data = exc.response.json()
+        if isinstance(data, dict):
+            detail = data.get("detail") or data.get("message") or data.get("error")
+            if detail:
+                if isinstance(detail, list):
+                    parts = []
+                    for item in detail:
+                        if isinstance(item, dict):
+                            loc_parts = [str(l) for l in item.get("loc", []) if l not in ("body", "query", "path")]
+                            msg = item.get("msg", "")
+                            prefix = f"{' '.join(loc_parts).replace('_', ' ').title()}: " if loc_parts else ""
+                            parts.append(f"{prefix}{msg}")
+                        else:
+                            parts.append(str(item))
+                    detail_msg = "; ".join(parts)
+                else:
+                    detail_msg = str(detail)
+    except Exception:
+        text = getattr(getattr(exc, "response", None), "text", "").strip()
+        if text and len(text) < 180 and not text.startswith("<"):
+            detail_msg = text
+
+    if detail_msg:
+        if "Client error" in detail_msg or "for url" in detail_msg:
+            detail_msg = None
+        else:
+            return detail_msg
+
+    if status_code == 400:
+        return "Invalid request. Please verify your input and try again."
+    if status_code == 401:
+        return "Invalid email or password. Please check your credentials."
+    if status_code == 403:
+        return "You do not have permission to perform this action with your current role."
+    if status_code == 404:
+        return "The requested record was not found."
+    if status_code == 409:
+        return "A record with this information already exists in the system."
+    if status_code == 422:
+        return "Validation failed. Please verify the information entered in the form."
+    if status_code >= 500:
+        return "The server encountered an error processing your request. Please try again later."
+    return f"Request failed with status code {status_code}."
+
+
+def _format_network_error(exc: Any) -> str:
+    err_str = str(exc)
+    if "ConnectError" in type(exc).__name__ or "Connection refused" in err_str:
+        return "Unable to connect to the backend server. Please verify the service is running."
+    if "Timeout" in type(exc).__name__ or "timed out" in err_str:
+        return "The backend request timed out. Please try again in a few moments."
+    return "A network error occurred while communicating with the server." 
 
 
 def _get_async_http_client(config: BackendConfig) -> Any:
@@ -130,9 +195,9 @@ class BackendClient:
                 method.upper(),
                 url,
             )
-            raise BackendClientError(str(exc)) from exc
+            raise BackendClientError(_format_http_error(exc), status_code=exc.response.status_code) from exc
         except httpx.HTTPError as exc:
-            raise BackendClientError(str(exc)) from exc
+            raise BackendClientError(_format_network_error(exc)) from exc
 
         content_type = response.headers.get("content-type", "")
         if "application/json" in content_type:
@@ -182,9 +247,9 @@ class BackendClient:
                 method.upper(),
                 url,
             )
-            raise BackendClientError(str(exc)) from exc
+            raise BackendClientError(_format_http_error(exc), status_code=exc.response.status_code) from exc
         except httpx.HTTPError as exc:
-            raise BackendClientError(str(exc)) from exc
+            raise BackendClientError(_format_network_error(exc)) from exc
 
 
     async def login(self, *, username: str, password: str) -> dict[str, Any]:

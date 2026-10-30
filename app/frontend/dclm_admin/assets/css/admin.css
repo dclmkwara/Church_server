@@ -966,20 +966,35 @@ h6,
   animation: admin-toast-in 180ms ease-out both;
 }
 
+.faststrap-modern-toast[data-fs-intent="success"],
 .faststrap-modern-toast[data-variant="success"] {
   border-color: rgba(5, 150, 105, 0.3) !important;
 }
 
+.faststrap-modern-toast[data-fs-intent="error"],
 .faststrap-modern-toast[data-variant="danger"] {
   border-color: rgba(220, 38, 38, 0.32) !important;
 }
 
+.faststrap-modern-toast[data-fs-intent="warning"],
 .faststrap-modern-toast[data-variant="warning"] {
   border-color: rgba(217, 119, 6, 0.34) !important;
 }
 
 .faststrap-modern-toast .text-info {
   color: var(--admin-info) !important;
+}
+
+.faststrap-modern-toast .btn-close {
+  cursor: pointer;
+  pointer-events: auto;
+  opacity: 0.65;
+  transition: opacity 150ms ease, transform 150ms ease;
+}
+
+.faststrap-modern-toast .btn-close:hover {
+  opacity: 1;
+  transform: scale(1.1);
 }
 
 .admin-modern-toast-leaving {
