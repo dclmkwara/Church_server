@@ -1,5 +1,5 @@
 """
-Tests for Bulk Import / Export feature.
+Tests for Bulk Import / Export feature and Collision-Safe Code Generation.
 """
 import io
 from unittest.mock import AsyncMock, MagicMock
@@ -16,14 +16,91 @@ from app.services.bulk_import_service import (
 )
 
 
-def test_code_generators():
-    """Verify initials-based code generation for regions and groups."""
+def test_code_generators_standard():
+    """Verify standard region and group codes."""
     assert generate_region_code("Ilorin Region") == "ILR"
-    assert generate_region_code("Kwara") == "KWA"
+    assert generate_region_code("Offa Region") == "OFR"
+    assert generate_region_code("Omu-Aran Region") == "OAR"
+    assert generate_region_code("Kwara South Region") == "KSR"
     assert generate_group_code("Ilorin East") == "ILE"
     assert generate_group_code("Ilorin West") == "ILW"
-    assert generate_group_code("Central") == "CEN"
-    assert generate_group_code("North Central Region") == "NCR"
+    assert generate_group_code("Central Group") == "CEN"
+
+
+def test_code_generators_hyphenated_and_critical_cases():
+    """
+    Critical conditions:
+    1. 'Asa Group' vs 'Asa-dam group':
+       - 'Asa Group' strips 'group' -> 'Asa' -> 'ASA'
+       - 'Asa-dam group' splits on hyphen -> ['Asa', 'dam'] -> 'ASD'
+    2. Punctuated, single-token, and short names.
+    """
+    asa_code = generate_group_code("Asa Group")
+    asadam_code = generate_group_code("Asa-dam group")
+    assert asa_code == "ASA"
+    assert asadam_code == "ASD"
+    assert asa_code != asadam_code
+
+    # Hyphenated place names
+    assert generate_group_code("Offa-Garage Group") == "OFG"
+    assert generate_group_code("Oja-Tuntun Group") == "OJT"
+    assert generate_group_code("St. Jude Group") == "STJ"
+
+    # Short / single-word names
+    assert generate_group_code("GRA Group") == "GRA"
+    assert generate_group_code("Oja Group") == "OJA"
+    assert generate_group_code("A Group") == "AXX"
+    assert generate_group_code("DB Group") == "DBX"
+
+
+def test_collision_resolution_group_codes():
+    """
+    Verify that when candidate codes collide, the algorithm automatically
+    disambiguates them using alternative word characters or numeric suffixes.
+    """
+    existing: set[str] = set()
+
+    # 'Ilorin East' gets 'ILE'
+    c1 = generate_group_code("Ilorin East", existing_codes=existing)
+    assert c1 == "ILE"
+    existing.add(c1)
+
+    # 'Iludun East' would normally get 'ILE', but 'ILE' is taken -> should vary to 'IUE'
+    c2 = generate_group_code("Iludun East", existing_codes=existing)
+    assert c2 != "ILE"
+    assert c2 not in existing
+    assert c2 == "IUE"
+    existing.add(c2)
+
+    # 'Ilesha East' -> 'IEE'
+    c3 = generate_group_code("Ilesha East", existing_codes=existing)
+    assert c3 not in existing
+    existing.add(c3)
+
+    # Passing 'Ilorin East' again produces letter variation 'IOE', avoiding 'ILE'
+    c4 = generate_group_code("Ilorin East", existing_codes=existing)
+    assert c4 not in existing
+    assert c4 == "IOE"
+    existing.add(c4)
+
+    # Exhaust all letter variations to verify numeric fallback (e.g. 'IL2', 'IL3')
+    for _ in range(20):
+        code = generate_group_code("Ilorin East", existing_codes=existing)
+        assert code not in existing
+        existing.add(code)
+    # Verify that a numeric suffix was used once letters were exhausted
+    has_numeric = any(any(ch.isdigit() for ch in c) for c in existing)
+    assert has_numeric
+
+
+def test_collision_resolution_region_codes():
+    """Verify region code collision resolution."""
+    existing = {"ILR"}
+    # Another region that might collide with 'ILR'
+    c = generate_region_code("Ilorin Central Region", existing_codes=existing)
+    assert c != "ILR"
+    assert c not in existing
+    assert c == "ICR"
 
 
 def test_hierarchy_template_structure():

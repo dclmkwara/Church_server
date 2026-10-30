@@ -6,7 +6,9 @@ Provides:
 - Multi-sheet and flat-sheet parsing
 - Dry-run validation with duplicate detection (in-file and in-DB)
 - Atomic DB commit for hierarchy and workers
-- Auto-code generation (region, group, location codes)
+- Collision-safe Auto-code generation (region, group, location codes)
+  * Handles hyphenated and compound names (e.g. 'Asa-dam group' -> 'ASD', 'Asa Group' -> 'ASA')
+  * Resolves collisions dynamically using character variations and numeric suffixes
 """
 from __future__ import annotations
 
@@ -31,53 +33,201 @@ logger = logging.getLogger(__name__)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Code generation helpers
+# Tokenization & Code Generation Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _initials(name: str, length: int = 3) -> str:
+def _clean_tokens(name: str, strip_suffix: str | None = None) -> list[str]:
     """
-    Derive an uppercase alphabetic code from a church entity name.
+    Split name into clean alphanumeric words, handling hyphens, slashes, periods, and commas.
 
-    Convention:
-      - 3+ words: take 1st letter of first 3 words (e.g. 'North Central Region' -> 'NCR')
-      - 2 words: take 2 letters of 1st word + 1st letter of 2nd (e.g. 'Ilorin Region' -> 'ILR', 'Ilorin East' -> 'ILE')
-      - 1 word: take first 3 letters (e.g. 'Kwara' -> 'KWA', 'Central' -> 'CEN')
+    Examples:
+      'Asa-dam group'  -> ['Asa', 'dam']  (if strip_suffix='group')
+      'Offa-Garage'    -> ['Offa', 'Garage']
+      'St. Jude Group' -> ['St', 'Jude']
     """
-    words = [re.sub(r"[^a-zA-Z0-9]", "", w) for w in name.split() if re.sub(r"[^a-zA-Z0-9]", "", w)]
-    if not words:
-        return "UNK"
-    if len(words) >= 3:
-        code = "".join(w[0] for w in words[:3])
-    elif len(words) == 2:
-        code = words[0][:2] + words[1][:1]
+    if not name:
+        return []
+    # Replace punctuation that connects words with spaces so hyphens become separate words
+    spaced = re.sub(r"[-_/.,&()']", " ", name)
+    tokens = [re.sub(r"[^a-zA-Z0-9]", "", w) for w in spaced.split()]
+    tokens = [t for t in tokens if t]
+    if strip_suffix and len(tokens) > 1 and tokens[-1].lower() == strip_suffix.lower():
+        tokens = tokens[:-1]
+    return tokens
+
+
+def _generate_candidate_list(tokens: list[str], default_prefix: str = "GRP", length: int = 3) -> list[str]:
+    """
+    Generate an ordered list of distinct candidate 3-character codes.
+
+    Strategy:
+    1. Primary abbreviation:
+       - 3+ tokens: 1st char of first 3 tokens (e.g. ['Asa', 'Dam', 'Group'] -> 'ADG')
+       - 2 tokens: 1st 2 chars of token 1 + 1st char of token 2 (e.g. ['Asa', 'Dam'] -> 'ASD', ['Ilorin', 'East'] -> 'ILE')
+       - 1 token: 1st 3 chars of token (e.g. ['Asa'] -> 'ASA', ['Central'] -> 'CEN', ['GRA'] -> 'GRA')
+    2. Character variations from the constituent words (consonant and letter shifts)
+    3. Numeric fallback suffixes: candidate[:2] + '2'..'9', then candidate[:1] + '01'..'99'
+    """
+    candidates: list[str] = []
+    if not tokens:
+        return [default_prefix[:length].upper()]
+
+    # 1. Primary candidate
+    if len(tokens) >= 3:
+        primary = "".join(t[0] for t in tokens[:3]).upper()
+    elif len(tokens) == 2:
+        primary = (tokens[0][:2] + tokens[1][:1]).upper()
     else:
-        code = words[0][:3]
-    return code.upper().ljust(length, "X")[:length]
+        primary = tokens[0][:3].upper()
+
+    primary = primary.ljust(length, "X")[:length]
+    candidates.append(primary)
+
+    # 2. Letter variations from words
+    if len(tokens) >= 2:
+        w1, w2 = tokens[0], tokens[1]
+        # w1[0] + w1[i] + w2[0]
+        for i in range(2, len(w1)):
+            alt = (w1[0] + w1[i] + w2[0]).upper()
+            if len(alt) == length and alt not in candidates:
+                candidates.append(alt)
+        # w1[0] + w2[0] + w2[i]
+        for i in range(1, len(w2)):
+            alt = (w1[0] + w2[0] + w2[i]).upper()
+            if len(alt) == length and alt not in candidates:
+                candidates.append(alt)
+        # w1[0] + w1[-1] + w2[0]
+        alt = (w1[0] + w1[-1] + w2[0]).upper()
+        if len(alt) == length and alt not in candidates:
+            candidates.append(alt)
+    elif len(tokens) == 1:
+        w = tokens[0]
+        for i in range(1, len(w)):
+            for j in range(i + 1, len(w)):
+                alt = (w[0] + w[i] + w[j]).upper()
+                if len(alt) == length and alt not in candidates:
+                    candidates.append(alt)
+
+    # 3. Numeric suffixes (guarantees a collision-free code exists)
+    prefix2 = primary[:2]
+    for d in range(2, 10):
+        alt = f"{prefix2}{d}"
+        if alt not in candidates:
+            candidates.append(alt)
+
+    prefix1 = primary[:1]
+    for d in range(1, 100):
+        alt = f"{prefix1}{d:02d}"
+        if alt not in candidates:
+            candidates.append(alt)
+
+    return candidates
 
 
-def generate_region_code(region_name: str) -> str:
-    """Generate 3-letter region code from name, e.g. 'Ilorin Region' -> 'ILR'."""
-    return _initials(region_name, 3)
+def generate_group_code(group_name: str, existing_codes: set[str] | None = None) -> str:
+    """
+    Generate a 3-letter group code with automatic collision resolution.
+
+    Examples:
+      'Asa Group'       -> 'ASA'
+      'Asa-dam group'   -> 'ASD'
+      'Ilorin East'     -> 'ILE'
+      'Iludun East'     (if 'ILE' taken) -> 'IUE'
+      'Oja-Tuntun'      -> 'OJT'
+    """
+    existing = {c.upper() for c in (existing_codes or set()) if c}
+    tokens = _clean_tokens(group_name, strip_suffix="group")
+    candidates = _generate_candidate_list(tokens, default_prefix="GRP", length=3)
+    for c in candidates:
+        if c not in existing:
+            return c
+    return "G99"
 
 
-def generate_group_code(group_name: str) -> str:
-    """Generate 3-letter group code from name, e.g. 'Ilorin East' -> 'ILE'."""
-    return _initials(group_name, 3)
+def generate_region_code(region_name: str, existing_codes: set[str] | None = None) -> str:
+    """
+    Generate a 3-letter region code with automatic collision resolution.
+
+    Examples:
+      'Ilorin Region'       -> 'ILR'
+      'Ilorin'              -> 'ILR'
+      'Offa Region'         -> 'OFR'
+      'Omu-Aran Region'     -> 'OAR'
+      'Kwara South Region'  -> 'KSR'
+      'Asa Region'          -> 'ASR'
+    """
+    existing = {c.upper() for c in (existing_codes or set()) if c}
+    tokens = _clean_tokens(region_name)
+    if not tokens:
+        return "REG"
+
+    has_region_suffix = len(tokens) > 1 and tokens[-1].lower() == "region"
+    core_tokens = tokens[:-1] if has_region_suffix else tokens
+
+    candidates: list[str] = []
+    # Primary candidate
+    if has_region_suffix:
+        if len(core_tokens) >= 2:
+            primary = ("".join(t[0] for t in core_tokens[:2]) + "R").upper()
+        else:
+            primary = (core_tokens[0][:2] + "R").upper()
+    else:
+        if len(tokens) >= 3:
+            primary = "".join(t[0] for t in tokens[:3]).upper()
+        elif len(tokens) == 2:
+            primary = (tokens[0][:2] + tokens[1][:1]).upper()
+        else:
+            primary = (tokens[0][:2] + "R").upper()
+
+    primary = primary.ljust(3, "X")[:3]
+    candidates.append(primary)
+
+    # Character variations
+    if core_tokens:
+        w = core_tokens[0]
+        for i in range(2, len(w)):
+            alt = (w[0] + w[i] + "R").upper()
+            if alt not in candidates and len(alt) == 3:
+                candidates.append(alt)
+
+    # Numeric fallback
+    prefix2 = primary[:2]
+    for d in range(2, 10):
+        alt = f"{prefix2}{d}"
+        if alt not in candidates:
+            candidates.append(alt)
+
+    for c in candidates:
+        if c not in existing:
+            return c
+    return "R99"
 
 
-async def next_location_code(db: AsyncSession, group_id: str) -> str:
-    """Return next sequential 3-digit location code for a group, e.g. '001', '005'."""
+async def next_location_code(
+    db: AsyncSession,
+    group_id: str,
+    existing_codes: set[str] | None = None,
+) -> str:
+    """
+    Return next sequential 3-digit location code for a group, e.g. '001', '005'.
+    Considers both existing database rows and previously assigned codes in the current batch.
+    """
     result = await db.execute(
         select(Location.location_code).where(Location.group_id == group_id)
     )
-    codes = [r for r in result.scalars().all() if r and r.isdigit()]
-    if not codes:
+    db_codes = [r for r in result.scalars().all() if r and r.isdigit()]
+    all_codes = list(db_codes)
+    if existing_codes:
+        all_codes.extend([c for c in existing_codes if c and c.isdigit()])
+
+    if not all_codes:
         return "001"
-    return f"{max(int(c) for c in codes) + 1:03d}"
+    next_num = max(int(c) for c in all_codes) + 1
+    return f"{next_num:03d}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Excel styling helpers
+# Excel Styling Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
 _HEADER_FILL = PatternFill("solid", fgColor="1A3557")
@@ -111,7 +261,7 @@ def _set_col_widths(ws, widths: list[int]) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Template generators
+# Template Generators
 # ─────────────────────────────────────────────────────────────────────────────
 
 def generate_hierarchy_template() -> bytes:
@@ -162,9 +312,15 @@ def generate_hierarchy_template() -> bytes:
         ("Group Head", False),
     ])
     _set_col_widths(ws_grp, [34, 30, 24, 30, 30])
-    for col, val in enumerate(["Ilorin Region", "Ilorin East", "ILE", "Pastor B. Alabi", ""], start=1):
-        cell = ws_grp.cell(row=3, column=col, value=val)
-        cell.font = Font(italic=True, color="888888", size=9)
+    sample_groups = [
+        ["Ilorin Region", "Ilorin East", "ILE", "Pastor B. Alabi", ""],
+        ["Ilorin Region", "Asa Group", "", "", ""],
+        ["Ilorin Region", "Asa-dam group", "", "", ""],
+    ]
+    for r_idx, row_vals in enumerate(sample_groups, start=3):
+        for col, val in enumerate(row_vals, start=1):
+            cell = ws_grp.cell(row=r_idx, column=col, value=val)
+            cell.font = Font(italic=True, color="888888", size=9)
     ws_grp.freeze_panes = "A3"
 
     # Sheet 4: Locations
@@ -247,7 +403,7 @@ def generate_workers_template() -> bytes:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Data classes
+# Data Classes
 # ─────────────────────────────────────────────────────────────────────────────
 
 @dataclass
@@ -297,7 +453,7 @@ class WorkersImportResult:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Parsing helpers
+# Parsing Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _read_sheet(wb, sheet_name: str) -> list[list[Any]]:
@@ -337,7 +493,6 @@ async def _resolve_state(db: AsyncSession, state_id: str) -> State | None:
     except (ValueError, AttributeError):
         pass
 
-    # Lookup by state_code or state_name
     res = await db.execute(
         select(State).where(or_(State.state_code.ilike(state_id), State.state_name.ilike(state_id)))
     )
@@ -345,7 +500,7 @@ async def _resolve_state(db: AsyncSession, state_id: str) -> State | None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Hierarchy validation
+# Hierarchy Validation
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def parse_and_validate_hierarchy(
@@ -359,7 +514,6 @@ async def parse_and_validate_hierarchy(
     """
     result = HierarchyImportResult()
 
-    # Validate state exists in DB
     state_row = await _resolve_state(db, state_id)
     if not state_row:
         result.errors.append(ImportError("File", 0, "state_id", f"State '{state_id}' not found in database"))
@@ -367,7 +521,6 @@ async def parse_and_validate_hierarchy(
 
     actual_state_id = str(state_row.state_id)
 
-    # Check if CSV
     is_csv = filename.lower().endswith(".csv") or file_bytes.startswith(b"\"") or (b"," in file_bytes[:500] and not file_bytes.startswith(b"PK"))
 
     if is_csv:
@@ -384,11 +537,9 @@ async def parse_and_validate_hierarchy(
         result.errors.append(ImportError("File", 0, "file", f"Cannot read Excel file: {exc}"))
         return result
 
-    # Check if multi-sheet workbook
     if "Regions" in wb.sheetnames or "Locations" in wb.sheetnames:
         return await _parse_multisheet_hierarchy(wb, actual_state_id, db, result)
 
-    # Flat single sheet workbook
     ws = wb.active
     rows = []
     for r in ws.iter_rows(min_row=2, values_only=True):
@@ -400,38 +551,51 @@ async def parse_and_validate_hierarchy(
 async def _parse_multisheet_hierarchy(wb, state_id: str, db: AsyncSession, result: HierarchyImportResult) -> HierarchyImportResult:
     region_rows = _read_sheet(wb, "Regions")
     region_name_map: dict[str, str] = {}
-    existing_region_codes = {
+    
+    # Load all existing region codes in this state to guarantee 0 collisions
+    existing_region_codes_map = {
         r[0]: r[1]
         for r in (await db.execute(
             select(Region.region_name, Region.region_code).where(Region.state_id == state_id)
         )).all()
     }
+    known_region_codes: set[str] = set(existing_region_codes_map.values())
 
     for row_idx, row in enumerate(region_rows, start=3):
         region_name = _cell_str(row, 0)
-        region_code = _cell_str(row, 1) or generate_region_code(region_name)
+        user_code = _cell_str(row, 1)
         regional_pastor = _cell_str(row, 2)
         region_head = _cell_str(row, 3)
 
         if not region_name:
             result.errors.append(ImportError("Regions", row_idx, "Region Name", "Region Name is required"))
             continue
-        if not re.match(r"^[A-Za-z0-9]{2,6}$", region_code):
-            result.errors.append(ImportError("Regions", row_idx, "Region Code", f"Code '{region_code}' must be 2-6 alphanumeric chars"))
-            continue
-        region_code = region_code.upper()
 
         if region_name in region_name_map:
             result.errors.append(ImportError("Regions", row_idx, "Region Name", f"Duplicate region '{region_name}' in file"))
             continue
-        if region_name in existing_region_codes:
+
+        if region_name in existing_region_codes_map:
             result.errors.append(ImportError("Regions", row_idx, "Region Name", f"Region '{region_name}' already exists in this state"))
             continue
 
-        region_name_map[region_name] = region_code
+        if user_code:
+            code = user_code.upper()
+            if not re.match(r"^[A-Za-z0-9]{2,6}$", code):
+                result.errors.append(ImportError("Regions", row_idx, "Region Code", f"Code '{code}' must be 2-6 alphanumeric chars"))
+                continue
+            if code in known_region_codes:
+                result.errors.append(ImportError("Regions", row_idx, "Region Code", f"Region Code '{code}' is already in use"))
+                continue
+        else:
+            # Auto-generate with guaranteed collision avoidance
+            code = generate_region_code(region_name, existing_codes=known_region_codes)
+
+        known_region_codes.add(code)
+        region_name_map[region_name] = code
         result.regions.append({
             "region_name": region_name,
-            "region_code": region_code,
+            "region_code": code,
             "regional_pastor": regional_pastor,
             "region_head": region_head,
             "state_id": state_id,
@@ -440,15 +604,18 @@ async def _parse_multisheet_hierarchy(wb, state_id: str, db: AsyncSession, resul
     # Groups
     group_rows = _read_sheet(wb, "Groups")
     group_name_map: dict[str, str] = {}
+    known_group_codes: dict[str, set[str]] = {}
     existing_groups_by_region: dict[str, set[str]] = {}
+
     for r in (await db.execute(select(Region.region_name, Region.region_id).where(Region.state_id == state_id))).all():
-        groups = (await db.execute(select(Group.group_name).where(Group.region_id == r[1]))).scalars().all()
-        existing_groups_by_region[r[0]] = set(groups)
+        grp_rows = (await db.execute(select(Group.group_name, Group.group_code).where(Group.region_id == r[1]))).all()
+        existing_groups_by_region[r[0]] = {g[0] for g in grp_rows}
+        known_group_codes[r[0]] = {g[1].upper() for g in grp_rows}
 
     for row_idx, row in enumerate(group_rows, start=3):
         region_name = _cell_str(row, 0)
         group_name = _cell_str(row, 1)
-        group_code = _cell_str(row, 2) or generate_group_code(group_name)
+        user_code = _cell_str(row, 2)
         group_pastor = _cell_str(row, 3)
         group_head = _cell_str(row, 4)
 
@@ -458,13 +625,9 @@ async def _parse_multisheet_hierarchy(wb, state_id: str, db: AsyncSession, resul
         if not group_name:
             result.errors.append(ImportError("Groups", row_idx, "Group Name", "Group Name is required"))
             continue
-        if region_name not in region_name_map and region_name not in existing_region_codes:
+        if region_name not in region_name_map and region_name not in existing_region_codes_map:
             result.errors.append(ImportError("Groups", row_idx, "Region Name", f"Region '{region_name}' not found in Regions sheet or database"))
             continue
-        if not re.match(r"^[A-Za-z0-9]{2,6}$", group_code):
-            result.errors.append(ImportError("Groups", row_idx, "Group Code", f"Code '{group_code}' must be 2-6 alphanumeric chars"))
-            continue
-        group_code = group_code.upper()
 
         if group_name in group_name_map:
             result.errors.append(ImportError("Groups", row_idx, "Group Name", f"Duplicate group '{group_name}' in file"))
@@ -473,11 +636,26 @@ async def _parse_multisheet_hierarchy(wb, state_id: str, db: AsyncSession, resul
             result.errors.append(ImportError("Groups", row_idx, "Group Name", f"Group '{group_name}' already exists under '{region_name}'"))
             continue
 
-        group_name_map[group_name] = group_code
+        reg_known_codes = known_group_codes.setdefault(region_name, set())
+
+        if user_code:
+            code = user_code.upper()
+            if not re.match(r"^[A-Za-z0-9]{2,6}$", code):
+                result.errors.append(ImportError("Groups", row_idx, "Group Code", f"Code '{code}' must be 2-6 alphanumeric chars"))
+                continue
+            if code in reg_known_codes:
+                result.errors.append(ImportError("Groups", row_idx, "Group Code", f"Group Code '{code}' already exists under '{region_name}'"))
+                continue
+        else:
+            # Auto-generate with guaranteed collision avoidance
+            code = generate_group_code(group_name, existing_codes=reg_known_codes)
+
+        reg_known_codes.add(code)
+        group_name_map[group_name] = code
         result.groups.append({
             "region_name": region_name,
             "group_name": group_name,
-            "group_code": group_code,
+            "group_code": code,
             "group_pastor": group_pastor,
             "group_head": group_head,
         })
@@ -531,20 +709,28 @@ async def _parse_flat_hierarchy_rows(rows: list[list[str]], state_id: str, db: A
     """
     seen_regions: dict[str, str] = {}
     seen_groups: dict[str, str] = {}
+    known_region_codes: set[str] = set()
+    known_group_codes: dict[str, set[str]] = {}
     valid_church_types = {"DLBC", "DLCF", "DLSO"}
 
+    # Load existing regions & groups from DB
     existing_regions = {
         r[0]: r[1]
         for r in (await db.execute(select(Region.region_name, Region.region_code).where(Region.state_id == state_id))).all()
     }
+    known_region_codes.update(existing_regions.values())
+
+    for r in (await db.execute(select(Region.region_name, Region.region_id).where(Region.state_id == state_id))).all():
+        grps = (await db.execute(select(Group.group_code).where(Group.region_id == r[1]))).scalars().all()
+        known_group_codes[r[0]] = {g.upper() for g in grps}
 
     for row_idx, row in enumerate(rows, start=2):
         if len(row) < 5:
             continue
         region_name = _cell_str(row, 0)
-        region_code = _cell_str(row, 1) or generate_region_code(region_name)
+        user_region_code = _cell_str(row, 1)
         group_name = _cell_str(row, 2)
-        group_code = _cell_str(row, 3) or generate_group_code(group_name)
+        user_group_code = _cell_str(row, 3)
         location_name = _cell_str(row, 4)
         church_type = (_cell_str(row, 5) or "DLCF").upper()
         address = _cell_str(row, 6)
@@ -564,25 +750,29 @@ async def _parse_flat_hierarchy_rows(rows: list[list[str]], state_id: str, db: A
             result.errors.append(ImportError("Flat", row_idx, "Church Type", f"Church Type must be DLBC, DLCF, or DLSO (got '{church_type}')"))
             continue
 
-        region_code = region_code.upper()
-        group_code = group_code.upper()
-
+        # Region deduplication and code assignment
         if region_name not in seen_regions and region_name not in existing_regions:
-            seen_regions[region_name] = region_code
+            code = user_region_code.upper() if user_region_code else generate_region_code(region_name, existing_codes=known_region_codes)
+            known_region_codes.add(code)
+            seen_regions[region_name] = code
             result.regions.append({
                 "region_name": region_name,
-                "region_code": region_code,
+                "region_code": code,
                 "regional_pastor": None,
                 "region_head": None,
                 "state_id": state_id,
             })
 
+        # Group deduplication and code assignment
+        reg_grps = known_group_codes.setdefault(region_name, set())
         if group_name not in seen_groups:
-            seen_groups[group_name] = group_code
+            gcode = user_group_code.upper() if user_group_code else generate_group_code(group_name, existing_codes=reg_grps)
+            reg_grps.add(gcode)
+            seen_groups[group_name] = gcode
             result.groups.append({
                 "region_name": region_name,
                 "group_name": group_name,
-                "group_code": group_code,
+                "group_code": gcode,
                 "group_pastor": None,
                 "group_head": None,
             })
@@ -601,7 +791,7 @@ async def _parse_flat_hierarchy_rows(rows: list[list[str]], state_id: str, db: A
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Workers validation
+# Workers Validation
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def parse_and_validate_workers(
@@ -696,7 +886,7 @@ async def parse_and_validate_workers(
             result.errors.append(ImportError("Workers", row_idx, "Unit", "Unit is required"))
             errors_in_row = True
         if marital_status and marital_status.title() not in {v.title() for v in valid_marital if v}:
-            result.errors.append(ImportError("Workers", row_idx, "Marital Status", f"Must be Single, Married, or Widowed"))
+            result.errors.append(ImportError("Workers", row_idx, "Marital Status", "Must be Single, Married, or Widowed"))
             errors_in_row = True
 
         if not errors_in_row:
@@ -721,7 +911,7 @@ async def parse_and_validate_workers(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Commit operations
+# Commit Operations
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def commit_hierarchy(
@@ -803,11 +993,14 @@ async def commit_hierarchy(
         group_path_map[gname] = ginfo["path"]
 
     # Locations
+    batch_loc_codes: dict[str, set[str]] = {}
     for loc_data in result.locations:
         gname = loc_data["group_name"]
         parent_id = group_id_map[gname]
         parent_path = group_path_map[gname]
-        loc_code = await next_location_code(db, parent_id)
+        assigned = batch_loc_codes.setdefault(parent_id, set())
+        loc_code = await next_location_code(db, parent_id, existing_codes=assigned)
+        assigned.add(loc_code)
         new_loc = Location(
             group_id=parent_id,
             location_code=loc_code,
