@@ -229,6 +229,39 @@ VISIBLE_MODULES = {
         "communication",
         "reports",
     ],
+    7: [
+        "dashboard",
+        "inbox",
+        "people",
+        "workflows",
+        "church-data",
+        "fellowship",
+        "organization",
+        "communication",
+        "reports",
+    ],
+    8: [
+        "dashboard",
+        "inbox",
+        "people",
+        "workflows",
+        "church-data",
+        "fellowship",
+        "organization",
+        "communication",
+        "reports",
+    ],
+    9: [
+        "dashboard",
+        "inbox",
+        "people",
+        "workflows",
+        "church-data",
+        "fellowship",
+        "organization",
+        "communication",
+        "reports",
+    ],
 }
 
 
@@ -272,7 +305,11 @@ class AdminContext:
 
     @property
     def visible_modules(self) -> list[str]:
-        return VISIBLE_MODULES[self.level]
+        if self.level in VISIBLE_MODULES:
+            return VISIBLE_MODULES[self.level]
+        if self.level >= 6:
+            return VISIBLE_MODULES[6]
+        return VISIBLE_MODULES.get(self.level, VISIBLE_MODULES[3])
 
     @property
     def page_scope_title(self) -> str:

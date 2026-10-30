@@ -128,7 +128,7 @@ def _trend_label(points: list[tuple[str, int]]) -> str:
     return "Stable"
 
 
-async def _mix_rows(items: list[tuple[str, str, str]]) -> Any:
+def _mix_rows(items: list[tuple[str, str, str]]) -> Any:
     return Div(
         *[
             Div(
@@ -146,7 +146,7 @@ async def _mix_rows(items: list[tuple[str, str, str]]) -> Any:
     )
 
 
-async def _ranking_rows(rows: list[dict[str, Any]], *, empty_title: str, empty_body: str, metric_label: str) -> Any:
+def _ranking_rows(rows: list[dict[str, Any]], *, empty_title: str, empty_body: str, metric_label: str) -> Any:
     if not rows:
         return empty_state("bar-chart-line", empty_title, empty_body)
     return Div(
@@ -172,7 +172,7 @@ async def _ranking_rows(rows: list[dict[str, Any]], *, empty_title: str, empty_b
     )
 
 
-async def _scope_snapshot(rows: list[dict[str, Any]]) -> Any:
+def _scope_snapshot(rows: list[dict[str, Any]]) -> Any:
     if not rows:
         return empty_state("diagram-3", "No comparisons", "No breakdown records are available.")
     return Div(
@@ -900,7 +900,7 @@ async def _section_grid_with_priority_content(request: Request, ctx, profile: st
     return blocks
 
 
-async def _dashboard_loading_content(ctx) -> Any:
+def _dashboard_loading_content(ctx) -> Any:
     return page_stack(
         _dashboard_intro(),
         Div(
