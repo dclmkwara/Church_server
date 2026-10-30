@@ -366,16 +366,33 @@ def shell_layout(
             Drawer(sidebar, drawer_id="mobile-nav", title="DCLM Admin", placement="start", body_cls="p-0"),
             Div(
                 Div(
-                    # Left side: search box (hidden on small mobile, shown md+)
-                    Form(
-                        *hidden_context_inputs(ctx),
-                        Input(
-                            type="search",
-                            name="q",
-                            placeholder="Search people, counts, or locations...",
-                            cls="form-control admin-search-input",
+                    # Left side: mobile hamburger + logo brand (shown < lg) and search form (shown md+)
+                    Div(
+                        Button(
+                            Icon("list", cls="fs-5"),
+                            cls="btn btn-light border d-lg-none topbar-icon-btn topbar-mobile-menu-btn me-2",
+                            data_bs_toggle="offcanvas",
+                            data_bs_target="#mobile-nav",
+                            aria_label="Open navigation menu",
+                            type="button",
                         ),
-                        cls="admin-search-form d-none d-md-flex",
+                        A(
+                            Img(src="/assets/img/dclm-logo.png", alt="DCLM", style="height:28px;width:auto;", cls="me-2 flex-shrink-0"),
+                            Span("DCLM Admin", cls="fw-bold text-body-emphasis small text-nowrap"),
+                            href=ctx.url_for("/dashboard"),
+                            cls="d-flex align-items-center text-decoration-none d-md-none me-2 topbar-mobile-brand",
+                        ),
+                        Form(
+                            *hidden_context_inputs(ctx),
+                            Input(
+                                type="search",
+                                name="q",
+                                placeholder="Search people, counts, or locations...",
+                                cls="form-control admin-search-input",
+                            ),
+                            cls="admin-search-form d-none d-md-flex",
+                        ),
+                        cls="d-flex align-items-center flex-grow-1 min-w-0 topbar-left-cluster",
                     ),
                     # Right side: notification + user avatar grouped together
                     Div(
@@ -393,7 +410,7 @@ def shell_layout(
                             type="button",
                         ),
                         _user_menu(ctx),
-                        cls="d-flex align-items-center gap-2 gap-md-3 topbar-action-row",
+                        cls="d-flex align-items-center gap-2 gap-md-3 topbar-action-row flex-shrink-0",
                     ),
                     cls="admin-topbar admin-page-frame",
                 ),
@@ -420,9 +437,9 @@ def shell_layout(
                 _mobile_bottom_nav(ctx, active_key),
                 cls="admin-content-shell",
             ),
-            Drawer(Div(P("Select any item from the list to view its details here.", cls="text-muted"), id="detail-drawer-body"), drawer_id="detail-drawer", title="Details", body_cls="admin-drawer-body"),
-            Drawer(Div(P("Use page actions to open forms in this panel.", cls="text-muted"), id="form-drawer-body"), drawer_id="form-drawer", title="Form", body_cls="admin-drawer-body"),
-            Drawer(Div(P("You have no new notifications right now.", cls="text-muted"), id="notification-drawer-body"), drawer_id="notification-drawer", title="Notifications", body_cls="admin-drawer-body"),
+            Drawer(Div(P("Select any item from the list to view its details here.", cls="text-muted"), id="detail-drawer-body"), drawer_id="detail-drawer", title="Details", placement="end", body_cls="admin-drawer-body"),
+            Drawer(Div(P("Use page actions to open forms in this panel.", cls="text-muted"), id="form-drawer-body"), drawer_id="form-drawer", title="Form", placement="end", body_cls="admin-drawer-body"),
+            Drawer(Div(P("You have no new notifications right now.", cls="text-muted"), id="notification-drawer-body"), drawer_id="notification-drawer", title="Notifications", placement="end", body_cls="admin-drawer-body"),
             Drawer(_scope_drawer_content(ctx, request_path), drawer_id="scope-drawer", title="View settings", placement="end", body_cls="admin-drawer-body scope-drawer-body"),
             Modal(Div(P("Select an action above to continue.", cls="text-muted"), id="confirm-modal-body"), modal_id="confirm-modal", title="Confirm action"),
             toast_stack(),
