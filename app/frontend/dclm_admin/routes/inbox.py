@@ -96,7 +96,6 @@ async def _linked_actions(ctx, item: dict, worker: dict | None, account: dict | 
 async def _inbox_loading_results(ctx, kind: str) -> Div:
     return Div(
         Div(
-            Spinner(variant="primary", size="sm", label="Loading inbox"),
             P("Loading inbox items.", cls="text-muted mb-0"),
             cls="d-flex align-items-center gap-3",
         ),

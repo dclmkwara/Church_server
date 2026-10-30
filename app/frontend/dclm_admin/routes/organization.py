@@ -285,7 +285,6 @@ def _organization_loading_shell(ctx, *, heading: str, target_path: str, **params
         Div(
             H3(heading, cls="h5 fw-semibold mb-3"),
             Div(
-                Spinner(variant="primary", size="md", label="Loading organization"),
                 P(
                     "Loading organization records.",
                     cls="text-muted mb-0",

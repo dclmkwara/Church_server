@@ -828,7 +828,6 @@ def _dashboard_section_placeholder(ctx, section_key: str, *, delay_ms: int | Non
             }
         )
         body = Div(
-            Spinner(variant="primary", size="sm", label=f"Loading {title}"),
             P(f"Fetching {title.lower()} data…", cls="text-muted mb-0"),
             cls="d-flex align-items-center gap-3 py-2",
         )
@@ -917,7 +916,6 @@ def _dashboard_loading_content(ctx) -> Any:
                 "One moment",
                 "Pulling the latest data for your scope.",
                 Div(
-                    Spinner(variant="primary", size="md", label="Loading analytics"),
                     P("Loading dashboard analytics…", cls="text-muted mb-0"),
                     cls="d-flex align-items-center gap-3 py-2",
                 ),

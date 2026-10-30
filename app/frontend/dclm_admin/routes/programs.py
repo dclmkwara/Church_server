@@ -942,17 +942,6 @@ async def _programs_workspace(
 
 async def _programs_loading_shell(ctx, **params: str) -> Div:
     return Div(
-        Div(
-            H3("Programs", cls="h5 fw-semibold mb-3"),
-            Div(
-                Spinner(variant="primary", size="md", label="Loading programs"),
-                P(
-                    "Loading program records.",
-                    cls="text-muted mb-0",
-                ),
-                cls="d-flex align-items-center gap-3 py-2",
-            ),
-        ),
         Div(PlaceholderCard(animation="wave", show_image=False, cls="border-0 shadow-sm"), cls="mb-4"),
         Div(PlaceholderCard(animation="wave", show_image=False, cls="border-0 shadow-sm"), cls="mb-4"),
         id="programs-content",
@@ -978,12 +967,6 @@ def register_program_routes(app) -> None:
     ):
         ctx = build_context(request)
         body = page_stack(
-            page_intro(
-                "Programs and Events",
-                "Manage domains, types, and event instances used by the rest of the admin records.",
-                scope_label=ctx.current_scope_label,
-                scope_kind=ctx.current_scope_kind,
-            ),
             _programs_loading_shell(
                 ctx,
                 event_search=event_search,

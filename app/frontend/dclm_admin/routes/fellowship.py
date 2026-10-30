@@ -375,7 +375,6 @@ async def _fellowship_loading_shell(ctx, *, heading: str, message: str, target_p
         Div(
             H3(heading, cls="h5 fw-semibold mb-3"),
             Div(
-                Spinner(variant="primary", size="md", label="Loading fellowship"),
                 P(message, cls="text-muted mb-0"),
                 cls="d-flex align-items-center gap-3 py-2",
             ),

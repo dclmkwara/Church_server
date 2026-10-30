@@ -531,7 +531,6 @@ async def _report_tab_content(request: Request, ctx, active_tab: str) -> Div:
 async def _reports_loading_content(ctx, active_tab: str) -> Div:
     return Div(
         Div(
-            Spinner(variant="primary", size="sm", label="Loading reports"),
             P("Loading reports.", cls="text-muted mb-0"),
             cls="d-flex align-items-center gap-3",
         ),

@@ -189,19 +189,32 @@
     return document.getElementById("admin-loading-bar");
   }
 
+  let loaderSafetyTimer = null;
+
   function startTopLoader() {
     const bar = getLoadingBar();
     if (!bar) return;
+    if (loaderSafetyTimer) {
+      clearTimeout(loaderSafetyTimer);
+    }
     bar.classList.add("is-loading");
     bar.classList.remove("is-settling");
+    // Safety auto-stop after 3.8s to prevent infinite loading on stale/aborted requests
+    loaderSafetyTimer = window.setTimeout(() => {
+      stopTopLoader();
+    }, 3800);
   }
 
   function stopTopLoader() {
+    if (loaderSafetyTimer) {
+      clearTimeout(loaderSafetyTimer);
+      loaderSafetyTimer = null;
+    }
     const bar = getLoadingBar();
     if (!bar) return;
     bar.classList.remove("is-loading");
     bar.classList.add("is-settling");
-    window.setTimeout(() => bar.classList.remove("is-settling"), 400);
+    window.setTimeout(() => bar.classList.remove("is-settling"), 350);
   }
 
   /* ── Sidebar Link Tap / Feedback ─────────────────────────────────────── */
@@ -209,6 +222,13 @@
     document.addEventListener("click", (e) => {
       const link = e.target.closest(".sidebar-link, a.nav-link");
       if (!link) return;
+      // Ignore non-navigation links, dropdown toggles, modal/offcanvas triggers, and HTMX links
+      const href = link.getAttribute("href");
+      if (!href || href === "#" || href.startsWith("#") || href.startsWith("javascript:")) return;
+      if (link.hasAttribute("data-bs-toggle") || link.hasAttribute("data-bs-target")) return;
+      if (link.matches("[hx-get], [hx-post], [hx-put], [hx-delete], [hx-patch]")) return;
+      if (link.target && link.target !== "_self") return;
+
       // Mark as navigating
       document.querySelectorAll(".sidebar-link.is-navigating").forEach((el) => el.classList.remove("is-navigating"));
       link.classList.add("is-navigating");

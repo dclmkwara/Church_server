@@ -301,6 +301,7 @@ def _mobile_bottom_nav(ctx: AdminContext, active_key: str) -> Any:
     nav_items = [
         ("Home", "house", "/dashboard", "dashboard"),
         ("People", "people", "/people/workers", "workers"),
+        ("Inbox", "inbox", "/inbox", "inbox"),
         ("Church", "calendar-event", "/church-data/programs", "programs"),
     ]
     items = [
@@ -368,14 +369,6 @@ def shell_layout(
                 Div(
                     # Left side: mobile hamburger + logo brand (shown < lg) and search form (shown md+)
                     Div(
-                        Button(
-                            Icon("list", cls="fs-5"),
-                            cls="btn btn-light border d-lg-none topbar-icon-btn topbar-mobile-menu-btn me-2",
-                            data_bs_toggle="offcanvas",
-                            data_bs_target="#mobile-nav",
-                            aria_label="Open navigation menu",
-                            type="button",
-                        ),
                         A(
                             Img(src="/assets/img/dclm-logo.png", alt="DCLM", style="height:28px;width:auto;", cls="me-2 flex-shrink-0"),
                             Span("DCLM Admin", cls="fw-bold text-body-emphasis small text-nowrap"),

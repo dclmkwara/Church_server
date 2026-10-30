@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fasthtml.common import Div, Form, H3, Input, Option, P, Select, Textarea
+from fasthtml.common import A, Div, Form, H3, Input, Option, P, Select, Textarea
 from starlette.requests import Request
 
 import base64
@@ -41,7 +41,6 @@ OFFICIAL_ROLE_OPTIONS = [
 async def _loading_results(target_id: str, *, hx_get: str, message: str) -> Div:
     return Div(
         Div(
-            Spinner(variant="primary", size="sm", label="Loading"),
             P(message, cls="text-muted mb-0"),
             cls="d-flex align-items-center gap-3",
         ),

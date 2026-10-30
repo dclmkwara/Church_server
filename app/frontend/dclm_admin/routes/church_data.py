@@ -61,7 +61,7 @@ async def _church_data_loading_shell(
                 P(section_note, cls="text-muted mb-0"),
                 cls="d-grid gap-1",
             ),
-            Div(Spinner(size="sm"), P(section_note, cls="text-muted mb-0"), cls="d-flex align-items-center gap-2"),
+            Div(P(section_note, cls="text-muted mb-0"), cls="d-flex align-items-center gap-2"),
             PlaceholderCard(animation="wave", show_image=False, cls="border-0 shadow-sm"),
             PlaceholderCard(animation="wave", show_image=False, cls="border-0 shadow-sm"),
             id="church-data-page-content",

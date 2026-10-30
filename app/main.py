@@ -225,6 +225,23 @@ async def health_check():
 # ── Mount Faststrap Frontend for Single-Instance Deployment ────────────────────
 try:
     from app.frontend.dclm_admin.app_factory import app as frontend_app
+    from app.frontend.dclm_admin.components.error_pages import not_found_response, server_error_response
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse
+
+    @app.exception_handler(404)
+    async def custom_404_handler(request: Request, exc: Exception):
+        if request.url.path.startswith(settings.API_V1_PREFIX) or request.url.path.startswith("/api"):
+            return JSONResponse(status_code=404, content={"detail": "Not found"})
+        return not_found_response(request, exc)
+
+    @app.exception_handler(500)
+    async def custom_500_handler(request: Request, exc: Exception):
+        logger.error("Unhandled error: %s", exc, exc_info=True)
+        if request.url.path.startswith(settings.API_V1_PREFIX) or request.url.path.startswith("/api"):
+            return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+        return server_error_response(request, exc)
+
     app.mount("/", frontend_app)
     logger.info("✅ Faststrap Admin Frontend successfully mounted at root /")
 except Exception as exc:

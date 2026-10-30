@@ -11,7 +11,8 @@ from fasthtml.common import FastHTML
 from faststrap import add_bootstrap, add_pwa, mount_assets
 
 from .async_render import install_async_render_resolution
-from .backend import close_async_http_client
+from .backend import BackendClientError, close_async_http_client
+from .components.error_pages import not_found_response, server_error_response
 from .backend.config import get_backend_config
 from .communication import AuthService
 from .routes.auth import register_auth_routes
@@ -36,6 +37,11 @@ app = FastHTML()
 add_bootstrap(app, theme=DCLM_THEME, mode="light", font_family="Inter", font_weights=[400, 500, 600, 700], include_favicon=True, favicon_url="/favicon.png", include_modern_toast=True)
 setup_theme_defaults()
 mount_assets(app, str(Path(__file__).resolve().parent / "assets"), url_path="/assets")
+
+# Custom styled error pages for 404, 500 and unexpected errors
+app.exception_handlers[404] = not_found_response
+app.exception_handlers[500] = server_error_response
+app.exception_handlers[Exception] = server_error_response
 
 add_pwa(
     app,
@@ -128,7 +134,17 @@ class BackendAuthMiddleware(BaseHTTPMiddleware):
                 if refreshed_identity is not None:
                     await AuthService.persist_identity(response, refreshed_identity)
                 return response
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except BackendClientError as exc:
+            if exc.status_code == 401 or "validate credentials" in str(exc).lower():
+                login_path = await AuthService.login_redirect_path(request)
+                if request.headers.get("HX-Request"):
+                    return Response(status_code=401, headers={"HX-Redirect": login_path})
+                redirect_res = RedirectResponse(login_path, status_code=303)
+                AuthService.clear_identity(redirect_res)
+                return redirect_res
+            raise
         if refreshed_identity is not None:
             await AuthService.persist_identity(response, refreshed_identity)
             import time

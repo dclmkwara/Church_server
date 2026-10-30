@@ -69,7 +69,6 @@ async def _system_nav(ctx, active: str) -> Div:
 async def _system_loading_section(target_id: str, *, hx_get: str, message: str) -> Div:
     return Div(
         Div(
-            Spinner(variant="primary", size="sm", label="Loading"),
             P(message, cls="text-muted mb-0"),
             cls="d-flex align-items-center gap-3",
         ),
