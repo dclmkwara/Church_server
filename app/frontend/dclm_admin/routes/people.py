@@ -72,7 +72,7 @@ async def _scope_assignment_options(request: Request, ctx):
 async def _official_mobile_card(ctx, appointment):
     return Div(
         H3(appointment["worker_name"], cls="fw-bold mb-0 lh-sm"),
-        P(appointment["appointed_role"], cls="text-dark mb-1"),
+        P(appointment["appointed_role"], cls="text-body-emphasis mb-1"),
         P(appointment["assigned_scope"], cls="text-muted small mb-2"),
         Div(status_badge(appointment["status"]), cls="d-flex flex-wrap gap-1 mb-2"),
         Div(
@@ -116,7 +116,7 @@ async def _officials_table(request: Request, ctx, *, search: str = "", status: s
                     Button(
                         "View",
                         variant="outline-primary",
-                        size="md",
+                        size="sm",
                         data_bs_toggle="offcanvas",
                         data_bs_target="#detail-drawer",
                         hx_get=ctx.url_for(f"/people/officials/{appointment['appointment_id']}/drawer"),
@@ -182,7 +182,7 @@ async def _workers_table(request: Request, ctx, *, search: str = "", status: str
                     Button(
                         "View",
                         variant="outline-primary",
-                        size="md",
+                        size="sm",
                         data_bs_toggle="offcanvas",
                         data_bs_target="#detail-drawer",
                         hx_get=ctx.url_for(f"/people/workers/{worker['worker_id']}/drawer"),
@@ -427,7 +427,7 @@ async def _users_table(request: Request, ctx, *, search: str = "", approval: str
                 Button(
                     "View",
                     variant="outline-primary",
-                    size="md",
+                    size="sm",
                     data_bs_toggle="offcanvas",
                     data_bs_target="#detail-drawer",
                     hx_get=ctx.url_for(f"/people/users/{user['account_id']}/drawer"),
@@ -510,7 +510,7 @@ async def _members_table(
                 Button(
                     "View",
                     variant="outline-primary",
-                    size="md",
+                    size="sm",
                     data_bs_toggle="offcanvas",
                     data_bs_target="#detail-drawer",
                     hx_get=ctx.url_for(f"/people/members/{member['member_id']}/drawer"),
@@ -585,12 +585,6 @@ def register_people_routes(app) -> None:
             cls="admin-filter-grid",
         )
         body = page_stack(
-            page_intro(
-                "Workers",
-                "Keep worker management simple: register, review and open details without leaving the page.",
-                scope_label=ctx.current_scope_label,
-                scope_kind=ctx.current_scope_kind,
-            ),
             section_card(
                 "Workers directory",
                 "Filter by name, unit, worker code, approval, or status.",
@@ -1305,12 +1299,6 @@ def register_people_routes(app) -> None:
             cls="admin-filter-grid",
         )
         body = page_stack(
-            page_intro(
-                "Members",
-                "Manage member records and fellowship links.",
-                scope_label=ctx.current_scope_label,
-                scope_kind=ctx.current_scope_kind,
-            ),
             section_card(
                 "Member registry",
                 f"{summary['total']} members, {summary['active']} active and {summary['fellowships']} fellowships represented.",
@@ -1534,12 +1522,6 @@ def register_people_routes(app) -> None:
             cls="admin-filter-grid",
         )
         body = page_stack(
-            page_intro(
-                "Officials",
-                "Appoint and review junior officials.",
-                scope_label=ctx.current_scope_label,
-                scope_kind=ctx.current_scope_kind,
-            ),
             section_card(
                 "Officials & appointments",
                 "Official appointments and assigned scopes.",
@@ -1893,12 +1875,6 @@ def register_people_routes(app) -> None:
             cls="admin-filter-grid",
         )
         body = page_stack(
-            page_intro(
-                "App Users",
-                "Manage user access, approvals, and roles.",
-                scope_label=ctx.current_scope_label,
-                scope_kind=ctx.current_scope_kind,
-            ),
             section_card(
                 "User accounts",
                 "User account directory and access status.",

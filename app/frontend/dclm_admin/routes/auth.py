@@ -25,14 +25,14 @@ def _auth_layout(
         Img(
             src="/assets/img/dclm-logo.png",
             alt="Deeper Life Bible Church",
-            width="100",
-            height="100",
-            cls="mb-3 mx-auto d-block shadow-sm rounded-circle p-1 bg-white",
+            width="72",
+            height="72",
+            cls="mb-3 mx-auto d-block shadow-sm rounded-circle p-1 bg-body",
         ),
         Div(
-            Badge("DCLM Admin", variant="light", cls="text-primary-emphasis border-0 px-3 py-2"),
-            P(accent, cls="small text-primary fw-semibold mb-0"),
-            cls="d-flex flex-wrap align-items-center justify-content-center gap-2 mb-4",
+            Badge("DCLM Operations", variant="primary", cls="border-0 px-3 py-1 fw-semibold"),
+            P(accent, cls="small text-secondary fw-semibold mb-0"),
+            cls="d-flex flex-wrap align-items-center justify-content-center gap-2 mb-3",
         ),
         cls="text-center w-100",
     )
@@ -97,7 +97,7 @@ def _login_form(*, next_path: str, error: str | None = None):
                 cls="admin-auth-note mt-3",
             ),
         ),
-        cls="admin-auth-card border-0 shadow-sm",
+        cls="admin-auth-card border-0 shadow-lg p-2 p-sm-3",
     )
 
 
@@ -108,12 +108,12 @@ def _mock_mode_card():
             P("Sign-in becomes available when the backend connection is enabled.", cls="text-muted"),
             Div(
                 A("Open dashboard", href="/dashboard", cls="btn btn-primary admin-primary-btn"),
-                A("System status", href="/system?profile=national_admin", cls="btn btn-outline-primary admin-inline-btn"),
+                A("System status", href="/dashboard?profile=state_overseer", cls="btn btn-outline-primary admin-inline-btn"),
                 cls="d-flex flex-wrap gap-2",
             ),
             cls="d-grid gap-2",
         ),
-        cls="admin-auth-card border-0 shadow-sm",
+        cls="admin-auth-card border-0 shadow-lg p-2 p-sm-3",
     )
 
 

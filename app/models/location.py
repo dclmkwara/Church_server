@@ -60,7 +60,7 @@ class Nation(Base, TimestampMixin, AuditMixin):
         states: One-to-many relationship with State model
         
     Properties:
-        formatted_id: Display ID in format DCM-{nation_id}
+        formatted_id: Display ID in format DCL-{nation_id}
         
     Example:
         ```python
@@ -71,7 +71,7 @@ class Nation(Base, TimestampMixin, AuditMixin):
             capital="Abuja",
             path="org.234"
         )
-        print(nation.formatted_id)  # "DCM-234"
+        print(nation.formatted_id)  # "DCL-234"
         ```
     """
     __tablename__ = "nations"
@@ -94,7 +94,7 @@ class Nation(Base, TimestampMixin, AuditMixin):
     @property
     def formatted_id(self) -> str:
         """Returns standard display ID: DCM-NationID"""
-        return f"DCM-{str(self.path).replace('org.', '').replace('.', '-')}"
+        return f"DCL-{str(self.path).replace('org.', '').replace('.', '-')}"
 
 
 class State(Base, TimestampMixin, AuditMixin):
@@ -123,7 +123,7 @@ class State(Base, TimestampMixin, AuditMixin):
     @property
     def formatted_id(self) -> str:
         """Returns standard display ID: DCM-Nation-State"""
-        return f"DCM-{str(self.path).replace('org.', '').replace('.', '-')}"
+        return f"DCL-{str(self.path).replace('org.', '').replace('.', '-')}"
 
 
 class Region(Base, TimestampMixin, AuditMixin):
@@ -150,7 +150,7 @@ class Region(Base, TimestampMixin, AuditMixin):
     @property
     def formatted_id(self) -> str:
         """Returns standard display ID: DCM-Nation-State-Region"""
-        return f"DCM-{str(self.path).replace('org.', '').replace('.', '-')}"
+        return f"DCL-{str(self.path).replace('org.', '').replace('.', '-')}"
 
 
 class Group(Base, TimestampMixin, AuditMixin):
@@ -177,7 +177,7 @@ class Group(Base, TimestampMixin, AuditMixin):
     @property
     def formatted_id(self) -> str:
         """Returns standard display ID: DCM-Nation-State-Region-Group"""
-        return f"DCM-{str(self.path).replace('org.', '').replace('.', '-')}"
+        return f"DCL-{str(self.path).replace('org.', '').replace('.', '-')}"
 
 
 class Location(Base, TimestampMixin, AuditMixin):
@@ -208,7 +208,7 @@ class Location(Base, TimestampMixin, AuditMixin):
     @property
     def formatted_id(self) -> str:
         """Returns standard display ID: DCM-Nation-State-Region-Group-Location"""
-        return f"DCM-{str(self.path).replace('org.', '').replace('.', '-')}"
+        return f"DCL-{str(self.path).replace('org.', '').replace('.', '-')}"
 
 
 class Fellowship(Base, TimestampMixin, AuditMixin):
@@ -238,4 +238,4 @@ class Fellowship(Base, TimestampMixin, AuditMixin):
     @property
     def formatted_id(self) -> str:
         """Returns standard display ID: DCM-Nation-State-Region-Group-Location-Fellowship"""
-        return f"DCM-{str(self.path).replace('org.', '').replace('.', '-')}"
+        return f"DCL-{str(self.path).replace('org.', '').replace('.', '-')}"

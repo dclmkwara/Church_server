@@ -46,7 +46,7 @@ async def _tree_list(ctx, focus_path: str):
         *[
             A(
                 Div(
-                    P(row["label"], cls="fw-semibold text-dark mb-1"),
+                    P(row["label"], cls="fw-semibold text-body-emphasis mb-1"),
                     P(row.get("display_id") or row["kind"].replace("_", " ").title(), cls="small text-muted mb-0"),
                     cls="d-flex flex-column",
                 ),
@@ -306,12 +306,6 @@ async def _hierarchy_page_content(ctx, default_focus: str) -> Div:
         _hierarchy_panel(ctx, default_focus),
     )
     return page_stack(
-        page_intro(
-            "Organization",
-            "Inspect the church structure in simple terms, then move into the next lower unit without losing your place.",
-            scope_label=ctx.current_scope_label,
-            scope_kind=ctx.current_scope_kind,
-        ),
         _organization_nav(ctx, "hierarchy"),
         section_card(
             "Hierarchy explorer",
@@ -333,12 +327,6 @@ async def _locations_page_content(ctx, *, search: str = "", status: str = "", ch
         _locations_table(ctx, search=search, status=status, church_type=church_type),
     )
     return page_stack(
-        page_intro(
-            "Organization",
-            "Open location profiles, check connected data summaries, and keep profile editing straightforward on phone or desktop.",
-            scope_label=ctx.current_scope_label,
-            scope_kind=ctx.current_scope_kind,
-        ),
         _organization_nav(ctx, "locations"),
         section_card(
             "Locations & profiles",

@@ -33,7 +33,7 @@ from .theme import DCLM_THEME, setup_theme_defaults
 install_async_render_resolution()
 
 app = FastHTML()
-add_bootstrap(app, theme=DCLM_THEME, mode="light", include_favicon=True, favicon_url="/favicon.png")
+add_bootstrap(app, theme=DCLM_THEME, mode="light", font_family="Inter", font_weights=[400, 500, 600, 700], include_favicon=True, favicon_url="/favicon.png")
 setup_theme_defaults()
 mount_assets(app, str(Path(__file__).resolve().parent / "assets"), url_path="/assets")
 

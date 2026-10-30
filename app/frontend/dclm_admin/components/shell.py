@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fasthtml.common import A, Button, Div, Form, H2, Img, Input, Link, Main, Option, P, Script, Select, Span, Title
+from fasthtml.common import A, Button, Div, Form, H1, H2, Img, Input, Link, Main, Option, P, Script, Select, Span, Title
 
 from faststrap import Badge, BottomNav, BottomNavItem, Drawer, Fx, Icon, Modal, ThemeToggle
 
@@ -50,7 +50,7 @@ NAV_GROUPS = [
             {"label": "Organization", "icon": "geo-alt", "href": "/organization", "key": "organization"},
             {"label": "Communication", "icon": "megaphone", "href": "/communication", "key": "communication", "module": "communication"},
             {"label": "Reports", "icon": "clipboard-data", "href": "/reports", "key": "reports", "module": "reports"},
-            {"label": "System", "icon": "shield-lock", "href": "/system", "key": "system", "module": "system"},
+            # {"label": "System", "icon": "shield-lock", "href": "/system", "key": "system", "module": "system"},
         ],
     },
 ]
@@ -75,7 +75,7 @@ def _demo_profile_switcher(ctx: AdminContext, request_path: str) -> Any:
             ),
             cls="scope-static-card",
         )
-    profile_options = sorted(PROFILE_CONFIGS.values(), key=lambda row: row.level)
+    profile_options = sorted([p for p in PROFILE_CONFIGS.values() if p.level <= 6], key=lambda row: (row.level, row.role_label))
     return Form(
         P("Role view", cls="small text-muted mb-1"),
         Div(
@@ -106,7 +106,7 @@ def _scope_selector(ctx: AdminContext, request_path: str) -> Any:
             P("Scope", cls="small text-muted mb-1"),
             Div(
                 Badge("My Scope", variant="light", cls="scope-chip text-primary-emphasis"),
-                Span(ctx.current_scope_label, cls="fw-semibold text-dark"),
+                Span(ctx.current_scope_label, cls="fw-semibold text-body-emphasis"),
                 cls="d-flex align-items-center gap-2 flex-wrap",
             ),
             cls="scope-static-card",
@@ -148,7 +148,7 @@ def _scope_drawer_content(ctx: AdminContext, request_path: str) -> Any:
         ),
         Div(
             P("View", cls="small text-muted mb-1"),
-            P(ctx.profile.role_label, cls="fw-semibold text-dark mb-1"),
+            P(ctx.profile.role_label, cls="fw-semibold text-body-emphasis mb-1"),
             P(ctx.current_scope_label, cls="small text-muted mb-0"),
             cls="scope-summary-card",
         ),
@@ -203,7 +203,7 @@ def _user_menu(ctx: AdminContext) -> Any:
             Div(
                 Span(initials, cls="avatar-pill"),
                 Div(
-                    P(ctx.profile.user_name, cls="fw-semibold text-dark mb-1"),
+                    P(ctx.profile.user_name, cls="fw-semibold text-body-emphasis mb-1"),
                     P(f"{ctx.profile.role_label} • Level {ctx.level}", cls="small text-muted mb-0"),
                     cls="dropdown-user-copy",
                 ),
@@ -402,17 +402,17 @@ def shell_layout(
                         Div(
                             Div(
                                 Div(
-                                    H2(title, cls="h3 fw-semibold text-dark mb-1") if title else "",
-                                    P(subtitle, cls="text-muted mb-0") if subtitle else "",
-                                    cls="d-flex flex-column gap-1",
-                                ) if show_shell_intro else "",
-                                Div(primary_action, cls="ms-auto flex-shrink-0") if primary_action else "",
-                                cls="d-flex flex-column flex-lg-row justify-content-between gap-3 mb-4",
-                            ) if show_shell_intro or primary_action else "",
+                                    H1(title, cls="h4 fw-bold tracking-tight text-body-emphasis mb-1") if title else "",
+                                    P(subtitle, cls="text-secondary small mb-0") if subtitle else "",
+                                    cls="d-flex flex-column",
+                                ) if show_shell_intro and title else "",
+                                Div(primary_action, cls="d-flex align-items-center gap-2 ms-lg-auto flex-shrink-0") if primary_action else "",
+                                cls="page-command-header d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-3 mb-4 pb-3 border-bottom border-body-secondary",
+                            ) if (show_shell_intro and title) or primary_action else "",
                             content,
                             cls="admin-page-body",
                         ),
-                        cls="container-fluid px-3 px-lg-4 py-4 py-lg-5 admin-page-frame",
+                        cls="container-fluid px-3 px-lg-4 py-3 py-lg-4 admin-page-frame",
                     ),
                     cls="admin-main",
                 ),

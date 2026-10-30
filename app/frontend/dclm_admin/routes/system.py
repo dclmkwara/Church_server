@@ -730,7 +730,7 @@ async def _audit_workspace(request: Request, ctx, *, search: str = "", status: s
         mobile_cards = [
             Div(
                 H4(row["actor"], cls="h6 fw-semibold mb-1"),
-                P(row["action"], cls="text-dark mb-1"),
+                P(row["action"], cls="text-body-emphasis mb-1"),
                 P(row["target"], cls="text-muted mb-2"),
                 Div(status_badge(row["status"]), cls="mb-2"),
                 P(f"{row['scope_label']} - {row['time']}", cls="small text-muted mb-0"),
@@ -888,7 +888,7 @@ async def _public_contact_workspace(request: Request, ctx, *, status: str = "all
         mobile_cards = [
             Div(
                 H4(row["name"], cls="h6 fw-semibold mb-1"),
-                P(row["subject"], cls="text-dark mb-1"),
+                P(row["subject"], cls="text-body-emphasis mb-1"),
                 P(row["email"], cls="text-muted mb-2"),
                 Div(status_badge(row["status"]), cls="mb-2"),
                 P(f"Submitted: {row['created_at']}", cls="small text-muted mb-3"),
@@ -1011,7 +1011,7 @@ async def _public_prayer_workspace(request: Request, ctx, *, status: str = "all"
         mobile_cards = [
             Div(
                 H4(row["name"], cls="h6 fw-semibold mb-1"),
-                P(row["request"], cls="text-dark mb-2"),
+                P(row["request"], cls="text-body-emphasis mb-2"),
                 Div(status_badge(row["status"]), status_badge("urgent" if row["is_urgent"] else "regular"), cls="d-flex flex-wrap gap-2 mb-2"),
                 P(f"Submitted: {row['created_at']}", cls="small text-muted mb-3"),
                 Div(
@@ -1060,7 +1060,7 @@ async def _rbac_view(request: Request, ctx, *, family: str = "all", search: str 
         Div(
             H4(row["name"], cls="h6 fw-semibold mb-1"),
             P(f"Level {row['level']}", cls="text-muted mb-2"),
-            P(f"Permissions: {row['permission_count']}", cls="small text-dark mb-2"),
+            P(f"Permissions: {row['permission_count']}", cls="small text-body-emphasis mb-2"),
             Div(
                 Button(
                     "Open",

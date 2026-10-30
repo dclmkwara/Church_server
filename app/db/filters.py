@@ -41,4 +41,4 @@ def scope_filter(column, scope_path: str):
     """
     ltree_col = ltree_column(column)
     ltree_scope = cast(scope_path, _LTREE())
-    return ltree_col.op("<@")(ltree_scope) | (ltree_col == ltree_scope)
+    return ltree_col.op("<@")(ltree_scope)

@@ -38,7 +38,7 @@ class Announcement(Base, TimestampMixin, LTreePathMixin):
     children_hcf_lesson = Column(String, nullable=True)
     children_hcf_volume = Column(String, nullable=True)
     
-    is_active = Column(Boolean, default=True)
+    is_active = Column(Boolean, default=True, index=True)
     published_at = Column(DateTime(timezone=True), nullable=True)
     
     items = relationship("AnnouncementItem", back_populates="announcement", cascade="all, delete-orphan", lazy="selectin")

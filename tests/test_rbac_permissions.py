@@ -3,7 +3,7 @@ from pathlib import Path
 import re
 import sys
 
-os.environ.setdefault("SECRET_KEY", "test-secret-key")
+os.environ.setdefault("SECRET_KEY", "test-secret-key-must-be-at-least-32-characters-long")
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost/test_db")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

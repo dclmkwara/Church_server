@@ -66,8 +66,8 @@ def priority_badge(label: str) -> Any:
 def section_card(title: str, subtitle: str | None, *children: Any, action: Any | None = None, cls: str = "") -> Any:
     header = Div(
         Div(
-            H3(title, cls="h5 fw-semibold mb-1 text-dark section-card__title"),
-            P(subtitle, cls="text-muted mb-0 small section-card__subtitle") if subtitle else "",
+            H3(title, cls="h6 fw-bold mb-1 text-body-emphasis section-card__title"),
+            P(subtitle, cls="text-secondary mb-0 small section-card__subtitle") if subtitle else "",
             cls="section-card__heading",
         ),
         action or "",
@@ -104,26 +104,44 @@ def page_stack(*children: Any, cls: str = "", gap: str = "gap-4", **attrs: Any) 
     return Div(*children, cls=f"d-grid {gap} {cls}".strip(), **attrs)
 
 
-def stat_card(title: str, value: str, note: str, icon: str, tone: str = "success") -> Any:
+def stat_card(title: str, value: str, note: str, icon: str, tone: str = "primary") -> Any:
+    tone_colors = {
+        "primary": ("#1d4ed8", "rgba(29, 78, 216, 0.1)"),
+        "success": ("#059669", "rgba(5, 150, 105, 0.1)"),
+        "warning": ("#d97706", "rgba(217, 119, 6, 0.1)"),
+        "danger": ("#dc2626", "rgba(220, 38, 38, 0.1)"),
+        "info": ("#0284c7", "rgba(2, 132, 199, 0.1)"),
+    }
+    accent_color, accent_bg = tone_colors.get(tone, tone_colors["primary"])
     return Card(
         Div(
-            Div(Icon(icon, cls=f"fs-4 text-{tone}"), cls=f"metric-icon bg-{tone}-subtle"),
             Div(
-                P(title, cls="metric-label"),
-                H3(value, cls="metric-value"),
-                P(note, cls="metric-note mb-0"),
+                P(title, cls="metric-label text-secondary small fw-semibold text-uppercase tracking-wider mb-1", style="font-size:0.75rem; letter-spacing:0.04em;"),
+                H3(value, cls="metric-value h4 fw-bold text-body-emphasis mb-1 tracking-tight"),
+                P(note, cls="metric-note text-secondary small mb-0"),
+                cls="d-flex flex-column",
             ),
-            cls="metric-card__inner d-flex gap-3 align-items-start",
+            Div(
+                Icon(icon, cls=f"fs-5 text-{tone}"),
+                cls="metric-icon-wrap rounded-3 d-flex align-items-center justify-content-center flex-shrink-0",
+                style=f"width: 2.4rem; height: 2.4rem; background: {accent_bg};",
+            ),
+            cls="metric-card__inner d-flex justify-content-between align-items-start gap-2",
         ),
-        cls=f"metric-card {Fx.base} {Fx.hover_lift} {Fx.shadow_soft}",
+        cls=f"metric-card {Fx.base} {Fx.hover_lift} border-0 shadow-sm",
+        style=f"border-top: 3px solid {accent_color} !important;",
     )
 
 
 def page_intro(title: str, subtitle: str, *, scope_label: str = "", scope_kind: str = "", scope_id: str = "") -> Any:
+    meta = []
+    if scope_label:
+        meta.append(Span(scope_label, cls="badge bg-primary-subtle text-primary-emphasis border border-primary-subtle px-2 py-1 small"))
     return Div(
-        H2(title, cls="display-6 fw-semibold text-dark mb-2 page-intro__title"),
-        P(subtitle, cls="text-muted fs-6 mb-0 page-intro__subtitle"),
-        cls="page-intro",
+        H2(title, cls="h5 fw-bold text-body-emphasis mb-1 page-intro__title"),
+        P(subtitle, cls="text-secondary small mb-0 page-intro__subtitle") if subtitle else "",
+        Div(*meta, cls="d-flex align-items-center gap-2 mt-2") if meta else "",
+        cls="page-intro mb-3",
     )
 
 
@@ -134,7 +152,7 @@ def quick_actions(actions: list[dict[str, Any]]) -> Any:
                 Div(
                     Icon(action["icon"], cls="fs-4 text-primary"),
                     Div(
-                        Span(action["label"], cls="fw-semibold text-dark d-block"),
+                        Span(action["label"], cls="fw-semibold text-body-emphasis d-block"),
                         Span(action["hint"], cls="small text-muted"),
                     ),
                     cls="quick-action__inner d-flex gap-3 align-items-start",
@@ -157,7 +175,7 @@ def activity_feed(items: list[dict[str, str]]) -> Any:
             Div(
                 Span(cls=f"feed-dot bg-{item['tone']}"),
                 Div( 
-                    P(item["message"], cls="fw-semibold mb-1 text-dark"),
+                    P(item["message"], cls="fw-semibold mb-1 text-body-emphasis"),
                     P(item["meta"], cls="small text-muted mb-0"),
                 ),
                 cls="feed-item",
@@ -230,7 +248,7 @@ def approval_card(item: dict[str, Any], *, detail_url: str, confirm_url: str) ->
             cls="approval-card__header d-flex align-items-start justify-content-between gap-3",
         ),
         Div(
-            Span(item["location"], cls="small fw-semibold text-dark"),
+            Span(item["location"], cls="small fw-semibold text-body-emphasis"),
             Span("|", cls="text-muted"),
             Span(item["submitted_at"], cls="small text-muted"),
             cls="d-flex flex-wrap gap-2 align-items-center mt-2",

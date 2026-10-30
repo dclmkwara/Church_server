@@ -7,9 +7,9 @@ PROFILE_BY_SCORE = {
     4: "group_pastor",
     5: "region_pastor",
     6: "state_overseer",
-    7: "national_admin",
-    8: "continental_admin",
-    9: "global_admin",
+    7: "state_overseer",
+    8: "state_overseer",
+    9: "state_overseer",
 }
 
 STATE_CODE_BY_NAME = {
@@ -132,7 +132,7 @@ STATE_CODE_BY_NAME = {
 def profile_key_for_score(score: int) -> str:
     if score <= 3:
         return "location_pastor"
-    return PROFILE_BY_SCORE.get(score, "global_admin")
+    return PROFILE_BY_SCORE.get(score, "state_overseer")
 
 
 def split_scope_path(path: str | None) -> dict[str, str]:
@@ -212,8 +212,8 @@ def _format_mock_scope_display_id(path: str) -> str:
     if not segments:
         return ""
     if segments == ["global"]:
-        return "DCM"
-    parts = ["DCM"]
+        return "DCL"
+    parts = ["DCL"]
     if len(segments) > 1:
         continent_code = MOCK_CONTINENT_CODES.get(segments[1])
         if continent_code and len(segments) == 2:
@@ -245,7 +245,7 @@ def format_scope_display_id(path: str | None) -> str:
     segments = [segment.strip() for segment in cleaned.split(".") if segment.strip()]
     if not segments:
         return ""
-    segments[0] = "DCM"
+    segments[0] = "DCL"
     return "-".join(segment.upper() for segment in segments)
 
 

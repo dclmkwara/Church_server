@@ -49,7 +49,7 @@ async def _fellowship_cards(request: Request, ctx, *, search: str = "", location
                         cls="d-flex justify-content-between align-items-start gap-3 mb-3",
                     ),
                     Div(
-                        P(f"Leader: {row['leader_name']}", cls="small text-dark mb-1"),
+                        P(f"Leader: {row['leader_name']}", cls="small text-body-emphasis mb-1"),
                         P(f"Members: {row['member_count']} active • Last attendance: {row['last_attendance']}", cls="small text-muted mb-1"),
                         P(f"Open prayers: {row['open_prayers']} • Last offering: {format_naira(row['last_offering'])}", cls="small text-muted mb-0"),
                         cls="mb-3",
@@ -436,12 +436,6 @@ async def _fellowship_page_content(request: Request, ctx, *, search: str = "", l
         cls="admin-filter-grid",
     )
     return page_stack(
-        page_intro(
-            "Fellowship",
-            "Fellowship units, members, attendance, offerings, and follow-up.",
-            scope_label=ctx.current_scope_label,
-            scope_kind=ctx.current_scope_kind,
-        ),
         Div(
             stat_card("Fellowships", str(summary["total"]), "Fellowship units in current view", "house-heart", tone="primary"),
             stat_card("Members", str(summary["members"]), "Members connected to fellowships", "people", tone="success"),

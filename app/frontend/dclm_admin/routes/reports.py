@@ -197,7 +197,7 @@ async def _summary_tab(request: Request, ctx) -> Div:
         Div(
             H4(row["location"], cls="h6 fw-semibold mb-1"),
             P(f"{row['event_title']} - {row['date']}", cls="text-muted mb-2"),
-            P(f"Total recorded: {row['total']}", cls="small text-dark mb-1"),
+            P(f"Total recorded: {row['total']}", cls="small text-body-emphasis mb-1"),
             P(f"Submitted by {row['submitted_by']}", cls="small text-muted mb-0"),
             cls="mobile-count-card",
         )
@@ -346,8 +346,8 @@ async def _breakdown_tab(request: Request, ctx) -> Div:
     mobile_cards = [
         Div(
             H4(row["label"], cls="h6 fw-semibold mb-1"),
-            P(f"Counts: {row['counts_total']}", cls="small text-dark mb-1"),
-            P(f"Finance: {format_naira(row['finance_total'])}", cls="small text-dark mb-1"),
+            P(f"Counts: {row['counts_total']}", cls="small text-body-emphasis mb-1"),
+            P(f"Finance: {format_naira(row['finance_total'])}", cls="small text-body-emphasis mb-1"),
             P(f"Attendance records: {row['attendance_total']}", cls="small text-muted mb-0"),
             cls="mobile-count-card",
         )
@@ -374,7 +374,7 @@ async def _growth_tab(request: Request, ctx) -> Div:
     mobile_cards = [
         Div(
             H4(row["period"], cls="h6 fw-semibold mb-1"),
-            P(f"Value: {row['value']}", cls="small text-dark mb-1"),
+            P(f"Value: {row['value']}", cls="small text-body-emphasis mb-1"),
             P(f"Growth: {row['growth']}%", cls="small text-muted mb-0"),
             cls="mobile-count-card",
         )

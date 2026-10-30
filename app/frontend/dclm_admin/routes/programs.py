@@ -50,7 +50,7 @@ def _chart_legend(rows: list[dict[str, Any]]) -> Any:
             Div(
                 Div(cls="report-legend-swatch", style=f"background:{row['color']};"),
                 Span(str(row["label"]), cls="small text-muted"),
-                Span(str(row.get("display") or row.get("value") or ""), cls="small fw-semibold text-dark"),
+                Span(str(row.get("display") or row.get("value") or ""), cls="small fw-semibold text-body-emphasis"),
                 cls="report-legend-item",
             )
             for row in rows
@@ -451,13 +451,13 @@ def _campaign_activity_table(activity: dict[str, object]) -> Div:
                 H4(row["title"], cls="h6 fw-semibold mb-1"),
                 P(f"{row['location']} - {row['date']}", cls="text-muted mb-2"),
                 Div(
-                    P(f"Segment: {_segment_label(str(row.get('audience_segment') or ''))}", cls="small text-dark mb-1"),
-                    P(f"Population: {row['population']}", cls="small text-dark mb-1"),
-                    P(f"Alpha: {row['alpha_population']}", cls="small text-dark mb-1"),
-                    P(f"Satellite: {row['satellite_population']}", cls="small text-dark mb-1"),
-                    P(f"Converts: {row['converts']}", cls="small text-dark mb-1"),
-                    P(f"Newcomers: {row['newcomers']}", cls="small text-dark mb-1"),
-                    P(f"Assignments submitted: {row.get('assignment_submitted', 0)}/{row.get('assignment_total', 0)}", cls="small text-dark mb-0"),
+                    P(f"Segment: {_segment_label(str(row.get('audience_segment') or ''))}", cls="small text-body-emphasis mb-1"),
+                    P(f"Population: {row['population']}", cls="small text-body-emphasis mb-1"),
+                    P(f"Alpha: {row['alpha_population']}", cls="small text-body-emphasis mb-1"),
+                    P(f"Satellite: {row['satellite_population']}", cls="small text-body-emphasis mb-1"),
+                    P(f"Converts: {row['converts']}", cls="small text-body-emphasis mb-1"),
+                    P(f"Newcomers: {row['newcomers']}", cls="small text-body-emphasis mb-1"),
+                    P(f"Assignments submitted: {row.get('assignment_submitted', 0)}/{row.get('assignment_total', 0)}", cls="small text-body-emphasis mb-0"),
                 ),
                 cls="mobile-worker-card",
             )
@@ -667,9 +667,9 @@ async def _assignments_section(request: Request, ctx, event_id: str) -> Div:
             Div(
                 H4(row["worker_name"], cls="h6 fw-semibold mb-1"),
                 P(row["worker_public_code"] or "No worker code", cls="text-muted mb-2"),
-                P(f"{row['assignment_type'].title()} - {row['source_role'].title()}", cls="small text-dark mb-1"),
-                P(row["assignment_label"] or "No block/label set", cls="small text-dark mb-2"),
-                P(f"Submitted at: {row['submitted_at'] or 'Not yet'}", cls="small text-dark mb-2"),
+                P(f"{row['assignment_type'].title()} - {row['source_role'].title()}", cls="small text-body-emphasis mb-1"),
+                P(row["assignment_label"] or "No block/label set", cls="small text-body-emphasis mb-2"),
+                P(f"Submitted at: {row['submitted_at'] or 'Not yet'}", cls="small text-body-emphasis mb-2"),
                 status_badge(row["status"]),
                 Div(*actions, cls="d-grid gap-2 mt-3") if actions else P("Assignment already reviewed.", cls="small text-muted mt-3 mb-0"),
                 cls="mobile-worker-card",

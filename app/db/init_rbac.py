@@ -226,8 +226,8 @@ DEFAULT_ROLES = {
     "Location Usher": {"score_id": 2, "permissions": USHER_PERMS},
 
     # Level 3: Location Governance
-    "Location Admin": {"score_id": 3, "permissions": ADMIN_PERMS},
-    "Location Pastor": {"score_id": 3, "permissions": PASTOR_PERMS},
+    "Location Admin": {"score_id": 3, "permissions": ADMIN_PERMS + ["users:assign_roles"]},
+    "Location Pastor": {"score_id": 3, "permissions": PASTOR_PERMS + ["users:assign_roles"]},
 
     # Level 4: Group Governance
     "Group Usher": {"score_id": 4, "permissions": USHER_PERMS},

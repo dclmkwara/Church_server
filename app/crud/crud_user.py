@@ -1,3 +1,4 @@
+from app.core.auth_cache import invalidate_user_cache
 """
 CRUD operations for User management.
 

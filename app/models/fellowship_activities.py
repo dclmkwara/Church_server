@@ -30,7 +30,7 @@ class FellowshipMember(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     
     # Hierarchy
     path = Column(LtreeType, nullable=False, index=True)
-    fellowship_id = Column(String, ForeignKey("fellowships.fellowship_id"), nullable=False, index=True)
+    fellowship_id = Column(UUID(as_uuid=False), ForeignKey("fellowships.fellowship_id"), nullable=False, index=True)
     
     # Personal Info
     name = Column(String, nullable=False)
@@ -74,7 +74,7 @@ class FellowshipAttendance(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin
     
     # Hierarchy
     path = Column(LtreeType, nullable=False, index=True)
-    fellowship_id = Column(String, ForeignKey("fellowships.fellowship_id"), nullable=False, index=True)
+    fellowship_id = Column(UUID(as_uuid=False), ForeignKey("fellowships.fellowship_id"), nullable=False, index=True)
     
     # Date/Context
     date = Column(DateTime, nullable=False, index=True) # Meeting date
@@ -110,7 +110,7 @@ class FellowshipOffering(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     
     # Hierarchy
     path = Column(LtreeType, nullable=False, index=True)
-    fellowship_id = Column(String, ForeignKey("fellowships.fellowship_id"), nullable=False, index=True)
+    fellowship_id = Column(UUID(as_uuid=False), ForeignKey("fellowships.fellowship_id"), nullable=False, index=True)
     
     # Financials
     date = Column(DateTime, nullable=False, index=True)
@@ -138,7 +138,7 @@ class Testimony(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     
     # Hierarchy
     path = Column(LtreeType, nullable=False, index=True)
-    fellowship_id = Column(String, ForeignKey("fellowships.fellowship_id"), nullable=False, index=True)
+    fellowship_id = Column(UUID(as_uuid=False), ForeignKey("fellowships.fellowship_id"), nullable=False, index=True)
     
     # Content
     date = Column(DateTime, nullable=False, index=True)
@@ -167,7 +167,7 @@ class PrayerRequest(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     
     # Hierarchy
     path = Column(LtreeType, nullable=False, index=True)
-    fellowship_id = Column(String, ForeignKey("fellowships.fellowship_id"), nullable=False, index=True)
+    fellowship_id = Column(UUID(as_uuid=False), ForeignKey("fellowships.fellowship_id"), nullable=False, index=True)
     
     # Content
     date = Column(DateTime, nullable=False, index=True)
@@ -199,7 +199,7 @@ class AttendanceSummary(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     
     # Hierarchy
     path = Column(LtreeType, nullable=False, index=True)
-    fellowship_id = Column(String, ForeignKey("fellowships.fellowship_id"), nullable=False, index=True)
+    fellowship_id = Column(UUID(as_uuid=False), ForeignKey("fellowships.fellowship_id"), nullable=False, index=True)
     
     # Period
     month = Column(Integer, nullable=False)

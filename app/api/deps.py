@@ -37,43 +37,14 @@ reusable_oauth2 = OAuth2PasswordBearer(
     tokenUrl=f"{settings.API_V1_PREFIX}/auth/login"
 )
 
-# ── In-process user identity cache ────────────────────────────────────────────
-# Structure: { user_id_str: (User, expires_monotonic) }
-# TTL is intentionally short (60 s) so role / activation changes propagate
-# within one minute without requiring a full logout cycle.
-_USER_CACHE_TTL: float = 60.0
-_user_cache: dict[str, tuple[User, float]] = {}
-_user_cache_lock = asyncio.Lock()
-
-
-async def _get_cached_user(db: AsyncSession, user_id: str) -> Optional[User]:
-    """Return a fresh-session copy of a cached User if the entry is still fresh."""
-    now = time.monotonic()
-    async with _user_cache_lock:
-        entry = _user_cache.get(user_id)
-        if entry is not None:
-            cached_user, expires_at = entry
-            if now < expires_at:
-                return await db.merge(cached_user, load=False)
-            # Expired — remove stale entry
-            _user_cache.pop(user_id, None)
-    return None
-
-
-async def _cache_user(user_obj: User) -> None:
-    """Store a User in the cache with a fresh TTL."""
-    key = str(user_obj.user_id)
-    expires_at = time.monotonic() + _USER_CACHE_TTL
-    async with _user_cache_lock:
-        _user_cache[key] = (user_obj, expires_at)
-
-
-def invalidate_user_cache(user_id: str) -> None:
-    """
-    Evict a user from the cache immediately.
-    Call this after role changes, deactivation, or approval status updates.
-    """
-    _user_cache.pop(str(user_id), None)
+# ── In-process user identity cache (imported from core to prevent circular dependencies) ───
+from app.core.auth_cache import (
+    _user_cache,
+    _user_cache_lock,
+    get_cached_user as _get_cached_user,
+    cache_user as _cache_user,
+    invalidate_user_cache,
+)
 
 
 # ── Core auth dependency ───────────────────────────────────────────────────────

@@ -165,7 +165,7 @@ async def _request_card(ctx, row, *, review_mode: bool):
             cls="d-flex align-items-start justify-content-between gap-3",
         ),
         Div(
-            P(row["origin_location"], cls="small fw-semibold text-dark mb-0"),
+            P(row["origin_location"], cls="small fw-semibold text-body-emphasis mb-0"),
             P(row["submitted_at"], cls="small text-muted mb-0"),
             cls="d-flex flex-wrap justify-content-between gap-2 mt-2",
         ),
@@ -374,12 +374,6 @@ def register_workflow_routes(app) -> None:
             cls="admin-filter-grid",
         )
         body = page_stack(
-            page_intro(
-                "Workflows",
-                "Track requests you submitted and keep review work separate from your own request history.",
-                scope_label=ctx.current_scope_label,
-                scope_kind=ctx.current_scope_kind,
-            ),
             _workflows_nav(ctx, "my-requests"),
             section_card(
                 "My requests",
@@ -441,12 +435,6 @@ def register_workflow_routes(app) -> None:
             cls="admin-filter-grid",
         )
         body = page_stack(
-            page_intro(
-                "Workflows",
-                "Review submitted requests and decisions in one place.",
-                scope_label=ctx.current_scope_label,
-                scope_kind=ctx.current_scope_kind,
-            ),
             _workflows_nav(ctx, "review-queue"),
             section_card(
                 "Review queue",

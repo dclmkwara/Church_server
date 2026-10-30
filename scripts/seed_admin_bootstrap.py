@@ -31,7 +31,7 @@ from app.models.user import Role, User, Worker
 from app.schemas.location import GroupCreate, LocationCreate, NationCreate, RegionCreate, StateCreate
 
 WEST_AFRICA_DIVISION = "West Africa Division"
-CHURCH_ACRONYM = "DCM"
+CHURCH_ACRONYM = "DCL"
 NIGERIA_NATION_ID = "234"
 KWARA_STATE_ID = "KW"
 DEFAULT_STARTER_LOCATION_ID = "003"
@@ -186,7 +186,7 @@ ILORIN_EAST_LOCATIONS = [
     ),
     SeedLocation(
         location_code="002",
-        location_name="DLCF College",
+        location_name="DLCF College of Health Sciences",
         church_type="DLCF",
         address="Agbede, Kwara State",
     ),
@@ -198,7 +198,7 @@ ILORIN_EAST_LOCATIONS = [
     ),
     SeedLocation(
         location_code="004",
-        location_name="DLCF Day Spring",
+        location_name="DLCF Dayspring",
         church_type="DLCF",
         address="Oke-Ose, Kwara State",
     ),
@@ -230,6 +230,41 @@ STARTER_ACCOUNTS = [
     StarterAccount("Pastor John Fasanmi", "National Admin", "09029952124", "national.admin@admin.dclm.ng"),
     StarterAccount("Pastor Ruth Balogun", "Continental Admin", "09029952125", "continental.admin@admin.dclm.ng", gender="Female"),
     StarterAccount("Meshell Eva", "Global Admin", "09029952126", "meshelleva@gmail.com"),
+]
+
+LEVEL_ADMIN_ACCOUNTS = [
+    StarterAccount(
+        "Brother Timothy Adeleke",
+        "Location Admin",
+        "09029952127",
+        "location.admin@admin.dclm.ng",
+        unit="Secretariat",
+        occupation="Church Administrator",
+    ),
+    StarterAccount(
+        "Brother Joshua Ige",
+        "Group Admin",
+        "09029952128",
+        "group.admin@admin.dclm.ng",
+        unit="Group Secretariat",
+        occupation="Group Administrator",
+    ),
+    StarterAccount(
+        "Brother Samuel Kayode",
+        "Region Admin",
+        "09029952129",
+        "region.admin@admin.dclm.ng",
+        unit="Region Secretariat",
+        occupation="Region Administrator",
+    ),
+    StarterAccount(
+        "Brother Peter Alabi",
+        "State Admin",
+        "09029952130",
+        "state.admin@admin.dclm.ng",
+        unit="State Secretariat",
+        occupation="State Administrator",
+    ),
 ]
 
 
@@ -520,7 +555,7 @@ async def ensure_program_metadata(db) -> None:
                 await db.commit()
 
 async def ensure_role_map(db) -> dict[str, Role]:
-    result = await db.execute(select(Role))
+    result = await db.execute(select(Role).options(selectinload(Role.score)))
     roles = result.scalars().all()
     return {role.role_name: role for role in roles}
 
@@ -667,14 +702,37 @@ async def run(password: str, reset_passwords: bool, metadata_only: bool = False)
         await ensure_program_metadata(db)
         role_map = await ensure_role_map(db)
 
-        missing_roles = [account.role_name for account in STARTER_ACCOUNTS if account.role_name not in role_map]
+        all_accounts = STARTER_ACCOUNTS + LEVEL_ADMIN_ACCOUNTS
+        missing_roles = [account.role_name for account in all_accounts if account.role_name not in role_map]
         if missing_roles:
             raise RuntimeError(f"Missing roles after RBAC seed: {', '.join(sorted(set(missing_roles)))}")
 
         seeded = []
-        for account in STARTER_ACCOUNTS:
+        for account in all_accounts:
+            # Determine ecclesiastical scope path based on role tier
+            role_obj = role_map[account.role_name]
+            score = role_obj.score.score if role_obj.score else 3
+            
+            target_path = str(location.path)
+            target_loc_id = location.location_id
+            if score == 6:  # State tier
+                target_path = str(states[KWARA_STATE_ID].path)
+            elif score == 5:  # Region tier
+                target_path = str(region.path)
+            elif score == 4:  # Group tier
+                target_path = str(group.path)
+            
             worker = await ensure_worker(db, account, location)
-            user = await ensure_user(db, worker, role_map[account.role_name], password, reset_passwords)
+            worker.path = target_path
+            db.add(worker)
+            await db.commit()
+            
+            user = await ensure_user(db, worker, role_obj, password, reset_passwords)
+            user.path = target_path
+            db.add(user)
+            await db.commit()
+            await db.refresh(user)
+            
             scope_id = generate_display_id(str(user.path))
             seeded.append(
                 {

@@ -163,17 +163,17 @@ def generate_display_id(path: str) -> str:
         path: ltree path (e.g., 'org.234.kw.iln.ile.001')
     
     Returns:
-        str: Display ID (e.g., 'DCM-234-KW-ILR-ILE-003')
+        str: Display ID (e.g., 'DCL-234-KW-ILR-ILE-003')
     
     Example:
         >>> generate_display_id('org.234.kw.iln.ile.001')
-        'DCM-234-KW-ILR-ILE-003'
+        'DCL-234-KW-ILR-ILE-003'
     """
     segments = path.split('.')
     
-    # Replace 'org' with 'DCM' (Deeper Christian Ministry)
-    if segments[0] == 'org':
-        segments[0] = 'DCM'
+    # Replace 'org' with 'DCL' (Deeper Christian Life)
+    if segments[0] in ('org', 'dcl'):
+        segments[0] = 'DCL'
     
     # Uppercase all segments
     segments = [seg.upper() for seg in segments]
@@ -186,19 +186,21 @@ def parse_display_id(display_id: str) -> str:
     Parse display ID back to ltree path.
     
     Args:
-        display_id: Display ID (e.g., 'DCM-234-KW-ILR-ILE-003')
+        display_id: Display ID (e.g., 'DCL-234-KW-ILR-ILE-003')
     
     Returns:
         str: ltree path (e.g., 'org.234.kw.iln.ile.001')
     
     Example:
-        >>> parse_display_id('DCM-234-KW-ILR-ILE-003')
+        >>> parse_display_id('DCL-234-KW-ILR-ILE-003')
         'org.234.kw.iln.ile.001'
     """
     segments = display_id.split('-')
     
-    # Replace 'DCM' with 'org'
-    if segments[0] == 'DCM':
+    # Replace 'DCL' with 'dcl'
+    if segments[0] in ('DCL', 'DCM'):
+        segments[0] = 'dcl'
+    elif segments[0] == 'ORG':
         segments[0] = 'org'
     
     # Lowercase all segments

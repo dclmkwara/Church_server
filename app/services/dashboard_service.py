@@ -48,50 +48,41 @@ class DashboardService:
             uf.append(User.location_id == location_id)
             tf.append(TransferRequest.from_location_id == location_id)
 
-        member_r = await db.execute(select(
-            func.count(ChurchMember.id).label("members_total"),
-            func.coalesce(func.sum(_status_case(ChurchMember.status, "active")), 0).label("active_members"),
-        ).where(and_(*mf)))
-        worker_r = await db.execute(select(
-            func.count(Worker.worker_id).label("workers_total"),
-            func.coalesce(func.sum(_status_case(Worker.status, "Active")), 0).label("active_workers"),
-            func.coalesce(func.sum(_status_case(Worker.approval_status, "pending_verification")), 0).label("pending_workers"),
-        ).where(and_(*wf)))
-        record_r = await db.execute(select(
-            func.coalesce(func.sum(_status_case(Record.record_type, "newcomer")), 0).label("newcomers_total"),
-            func.coalesce(func.sum(_status_case(Record.record_type, "convert")), 0).label("converts_total"),
-        ).where(and_(*rf)))
-        count_r = await db.execute(select(
-            func.coalesce(func.max(Count.total), 0).label("latest_total"),
-            func.count(func.distinct(Count.location_id)).label("locations_reporting"),
-        ).where(and_(*cf)))
-        pending_user_r = await db.execute(select(func.count(User.user_id).label("pending_users")).where(and_(*uf, User.approval_status == "pending")))
-        pending_transfer_r = await db.execute(select(func.count(TransferRequest.id).label("pending_transfers")).where(and_(*tf)))
-        pending_status_r = await db.execute(select(func.count(StatusChangeRequest.id).label("pending_status_changes")).where(and_(*sf)))
-        pending_removal_r = await db.execute(select(func.count(WorkerRemovalRequest.id).label("pending_removals")).where(and_(*rmf)))
-        mr, wr, rr, cr = member_r.one(), worker_r.one(), record_r.one(), count_r.one()
-        pur = pending_user_r.one()
-        ptr = pending_transfer_r.one()
-        psr = pending_status_r.one()
-        pmr = pending_removal_r.one()
+        # Single round-trip consolidated query: executes all summary aggregates in 1 database trip
+        stmt = select(
+            select(func.count(ChurchMember.id)).where(and_(*mf)).scalar_subquery().label("members_total"),
+            select(func.coalesce(func.sum(_status_case(ChurchMember.status, "active")), 0)).where(and_(*mf)).scalar_subquery().label("active_members"),
+            select(func.count(Worker.worker_id)).where(and_(*wf)).scalar_subquery().label("workers_total"),
+            select(func.coalesce(func.sum(_status_case(Worker.status, "Active")), 0)).where(and_(*wf)).scalar_subquery().label("active_workers"),
+            select(func.coalesce(func.sum(_status_case(Worker.approval_status, "pending_verification")), 0)).where(and_(*wf)).scalar_subquery().label("pending_workers"),
+            select(func.coalesce(func.sum(_status_case(Record.record_type, "newcomer")), 0)).where(and_(*rf)).scalar_subquery().label("newcomers_total"),
+            select(func.coalesce(func.sum(_status_case(Record.record_type, "convert")), 0)).where(and_(*rf)).scalar_subquery().label("converts_total"),
+            select(func.coalesce(func.max(Count.total), 0)).where(and_(*cf)).scalar_subquery().label("latest_total"),
+            select(func.count(func.distinct(Count.location_id))).where(and_(*cf)).scalar_subquery().label("locations_reporting"),
+            select(func.count(User.user_id)).where(and_(*uf, User.approval_status == "pending")).scalar_subquery().label("pending_users"),
+            select(func.count(TransferRequest.id)).where(and_(*tf)).scalar_subquery().label("pending_transfers"),
+            select(func.count(StatusChangeRequest.id)).where(and_(*sf)).scalar_subquery().label("pending_status_changes"),
+            select(func.count(WorkerRemovalRequest.id)).where(and_(*rmf)).scalar_subquery().label("pending_removals"),
+        )
+        row = (await db.execute(stmt)).one()
         pending_items = (
-            int(wr.pending_workers or 0)
-            + int(pur.pending_users or 0)
-            + int(ptr.pending_transfers or 0)
-            + int(psr.pending_status_changes or 0)
-            + int(pmr.pending_removals or 0)
+            int(row.pending_workers or 0)
+            + int(row.pending_users or 0)
+            + int(row.pending_transfers or 0)
+            + int(row.pending_status_changes or 0)
+            + int(row.pending_removals or 0)
         )
         return {
-            "members_total": int(mr.members_total or 0), "active_members": int(mr.active_members or 0),
-            "workers_total": int(wr.workers_total or 0), "active_workers": int(wr.active_workers or 0),
-            "pending_workers": int(wr.pending_workers or 0),
-            "pending_users": int(pur.pending_users or 0),
-            "pending_transfers": int(ptr.pending_transfers or 0),
-            "pending_status_changes": int(psr.pending_status_changes or 0),
-            "pending_removals": int(pmr.pending_removals or 0),
+            "members_total": int(row.members_total or 0), "active_members": int(row.active_members or 0),
+            "workers_total": int(row.workers_total or 0), "active_workers": int(row.active_workers or 0),
+            "pending_workers": int(row.pending_workers or 0),
+            "pending_users": int(row.pending_users or 0),
+            "pending_transfers": int(row.pending_transfers or 0),
+            "pending_status_changes": int(row.pending_status_changes or 0),
+            "pending_removals": int(row.pending_removals or 0),
             "pending_items": pending_items,
-            "newcomers_total": int(rr.newcomers_total or 0), "converts_total": int(rr.converts_total or 0),
-            "latest_total": int(cr.latest_total or 0), "locations_reporting": int(cr.locations_reporting or 0),
+            "newcomers_total": int(row.newcomers_total or 0), "converts_total": int(row.converts_total or 0),
+            "latest_total": int(row.latest_total or 0), "locations_reporting": int(row.locations_reporting or 0),
         }
 
     @staticmethod

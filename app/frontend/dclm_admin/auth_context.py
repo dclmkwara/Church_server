@@ -21,7 +21,7 @@ class _AuthRedirectRequired(Exception):
         super().__init__(f"Auth redirect required: {location}")
 
 
-SEGMENT_ORDER = ["continent", "nation", "state", "region", "group", "location", "fellowship"]
+SEGMENT_ORDER = ["state", "region", "group", "location", "fellowship"]
 
 
 DEMO_SCOPE_ROWS = [
@@ -29,28 +29,37 @@ DEMO_SCOPE_ROWS = [
         "continent": "West Africa Division",
         "nation": "Nigeria",
         "state": "Kwara State",
-        "region": "Ilorin North Region",
+        "region": "Ilorin Region",
         "group": "Ilorin East Group",
-        "location": "GRA DLBC",
-        "path": "global.west_africa.nigeria.kwara_state.ilorin_north_region.ilorin_east_group.gra_dlbc",
+        "location": "DLCF Kwara Poly",
+        "path": "dcl.234.kw.ilr.ile.001",
     },
     {
         "continent": "West Africa Division",
         "nation": "Nigeria",
         "state": "Kwara State",
-        "region": "Ilorin North Region",
+        "region": "Ilorin Region",
         "group": "Ilorin East Group",
-        "location": "University DLBC",
-        "path": "global.west_africa.nigeria.kwara_state.ilorin_north_region.ilorin_east_group.university_dlbc",
+        "location": "DLCF College of Health Sciences",
+        "path": "dcl.234.kw.ilr.ile.002",
     },
     {
         "continent": "West Africa Division",
         "nation": "Nigeria",
         "state": "Kwara State",
-        "region": "Ilorin North Region",
+        "region": "Ilorin Region",
         "group": "Ilorin East Group",
-        "location": "Tanke DLBC",
-        "path": "global.west_africa.nigeria.kwara_state.ilorin_north_region.ilorin_east_group.tanke_dlbc",
+        "location": "DLCF Living Spring",
+        "path": "dcl.234.kw.ilr.ile.003",
+    },
+    {
+        "continent": "West Africa Division",
+        "nation": "Nigeria",
+        "state": "Kwara State",
+        "region": "Ilorin Region",
+        "group": "Ilorin East Group",
+        "location": "DLCF Dayspring",
+        "path": "dcl.234.kw.ilr.ile.004",
     },
     {
         "continent": "West Africa Division",
@@ -58,38 +67,26 @@ DEMO_SCOPE_ROWS = [
         "state": "Kwara State",
         "region": "Offa Region",
         "group": "Offa Central Group",
-        "location": "Offa Township DLBC",
-        "path": "global.west_africa.nigeria.kwara_state.offa_region.offa_central_group.offa_township_dlbc",
-    },
-    {
-        "continent": "West Africa Division",
-        "nation": "Nigeria",
-        "state": "Lagos State",
-        "region": "Ikeja Region",
-        "group": "Surulere Group",
-        "location": "Surulere DLBC",
-        "path": "global.west_africa.nigeria.lagos_state.ikeja_region.surulere_group.surulere_dlbc",
+        "location": "DLCF Offa",
+        "path": "dcl.234.kw.off.ofc.001",
     },
 ]
 
 
 DEMO_SCOPE_PATHS = {
-    "global": {"Global": "global"},
-    "continent": {"West Africa Division": "global.west_africa"},
-    "nation": {"Nigeria": "global.west_africa.nigeria"},
+    "global": {"Global": "dcl"},
+    "continent": {"West Africa Division": "dcl.234"},
+    "nation": {"Nigeria": "dcl.234"},
     "state": {
-        "Kwara State": "global.west_africa.nigeria.kwara_state",
-        "Lagos State": "global.west_africa.nigeria.lagos_state",
+        "Kwara State": "dcl.234.kw",
     },
     "region": {
-        "Ilorin North Region": "global.west_africa.nigeria.kwara_state.ilorin_north_region",
-        "Offa Region": "global.west_africa.nigeria.kwara_state.offa_region",
-        "Ikeja Region": "global.west_africa.nigeria.lagos_state.ikeja_region",
+        "Ilorin Region": "dcl.234.kw.ilr",
+        "Offa Region": "dcl.234.kw.off",
     },
     "group": {
-        "Ilorin East Group": "global.west_africa.nigeria.kwara_state.ilorin_north_region.ilorin_east_group",
-        "Offa Central Group": "global.west_africa.nigeria.kwara_state.offa_region.offa_central_group",
-        "Surulere Group": "global.west_africa.nigeria.lagos_state.ikeja_region.surulere_group",
+        "Ilorin East Group": "dcl.234.kw.ilr.ile",
+        "Offa Central Group": "dcl.234.kw.off.ofc",
     },
     "location": {row["location"]: row["path"] for row in DEMO_SCOPE_ROWS},
 }
@@ -113,6 +110,28 @@ class ProfileConfig:
 
 
 PROFILE_CONFIGS = {
+    "location_worker": ProfileConfig(
+        key="location_worker",
+        level=2,
+        user_name="Sister Mary Ojo",
+        role_label="Location Worker",
+        mode_label="Action Mode",
+        root_kind="location",
+        root_label="DLCF Kwara Poly",
+        root_path=DEMO_SCOPE_PATHS["location"]["DLCF Kwara Poly"],
+        selector_fields=(),
+    ),
+    "location_admin": ProfileConfig(
+        key="location_admin",
+        level=3,
+        user_name="Brother Daniel Olanrewaju",
+        role_label="Location Admin",
+        mode_label="Action Mode",
+        root_kind="location",
+        root_label="DLCF Kwara Poly",
+        root_path=DEMO_SCOPE_PATHS["location"]["DLCF Kwara Poly"],
+        selector_fields=(),
+    ),
     "location_pastor": ProfileConfig(
         key="location_pastor",
         level=3,
@@ -120,9 +139,20 @@ PROFILE_CONFIGS = {
         role_label="Location Pastor",
         mode_label="Action Mode",
         root_kind="location",
-        root_label="GRA DLBC",
-        root_path=DEMO_SCOPE_PATHS["location"]["GRA DLBC"],
+        root_label="DLCF Kwara Poly",
+        root_path=DEMO_SCOPE_PATHS["location"]["DLCF Kwara Poly"],
         selector_fields=(),
+    ),
+    "group_admin": ProfileConfig(
+        key="group_admin",
+        level=4,
+        user_name="Brother Joshua Ige",
+        role_label="Group Admin",
+        mode_label="Oversight Mode",
+        root_kind="group",
+        root_label="Ilorin East Group",
+        root_path=DEMO_SCOPE_PATHS["group"]["Ilorin East Group"],
+        selector_fields=("group", "location"),
     ),
     "group_pastor": ProfileConfig(
         key="group_pastor",
@@ -135,6 +165,17 @@ PROFILE_CONFIGS = {
         root_path=DEMO_SCOPE_PATHS["group"]["Ilorin East Group"],
         selector_fields=("group", "location"),
     ),
+    "region_admin": ProfileConfig(
+        key="region_admin",
+        level=5,
+        user_name="Brother Samuel Kayode",
+        role_label="Region Admin",
+        mode_label="Oversight Mode",
+        root_kind="region",
+        root_label="Ilorin Region",
+        root_path=DEMO_SCOPE_PATHS["region"]["Ilorin Region"],
+        selector_fields=("region", "group", "location"),
+    ),
     "region_pastor": ProfileConfig(
         key="region_pastor",
         level=5,
@@ -142,9 +183,20 @@ PROFILE_CONFIGS = {
         role_label="Region Pastor",
         mode_label="Oversight Mode",
         root_kind="region",
-        root_label="Ilorin North Region",
-        root_path=DEMO_SCOPE_PATHS["region"]["Ilorin North Region"],
+        root_label="Ilorin Region",
+        root_path=DEMO_SCOPE_PATHS["region"]["Ilorin Region"],
         selector_fields=("region", "group", "location"),
+    ),
+    "state_admin": ProfileConfig(
+        key="state_admin",
+        level=6,
+        user_name="Brother Peter Alabi",
+        role_label="State Admin",
+        mode_label="Oversight Mode",
+        root_kind="state",
+        root_label="Kwara State",
+        root_path=DEMO_SCOPE_PATHS["state"]["Kwara State"],
+        selector_fields=("state", "region", "group", "location"),
     ),
     "state_overseer": ProfileConfig(
         key="state_overseer",
@@ -157,43 +209,12 @@ PROFILE_CONFIGS = {
         root_path=DEMO_SCOPE_PATHS["state"]["Kwara State"],
         selector_fields=("state", "region", "group", "location"),
     ),
-    "national_admin": ProfileConfig(
-        key="national_admin",
-        level=7,
-        user_name="Pastor John Fasanmi",
-        role_label="National Admin",
-        mode_label="Admin Mode",
-        root_kind="nation",
-        root_label="Nigeria",
-        root_path=DEMO_SCOPE_PATHS["nation"]["Nigeria"],
-        selector_fields=("nation", "state", "region", "group", "location"),
-    ),
-    "continental_admin": ProfileConfig(
-        key="continental_admin",
-        level=8,
-        user_name="Pastor Ruth Balogun",
-        role_label="Continental Admin",
-        mode_label="Admin Mode",
-        root_kind="continent",
-        root_label="West Africa Division",
-        root_path=DEMO_SCOPE_PATHS["continent"]["West Africa Division"],
-        selector_fields=("continent", "nation", "state", "region", "group", "location"),
-    ),
-    "global_admin": ProfileConfig(
-        key="global_admin",
-        level=9,
-        user_name="Pastor Michael Ojo",
-        role_label="Global Admin",
-        mode_label="Admin Mode",
-        root_kind="global",
-        root_label="Global",
-        root_path=DEMO_SCOPE_PATHS["global"]["Global"],
-        selector_fields=("continent", "nation", "state", "region", "group", "location"),
-    ),
 }
 
 
 VISIBLE_MODULES = {
+    1: ["dashboard", "inbox", "church-data"],
+    2: ["dashboard", "inbox", "church-data", "fellowship"],
     3: ["dashboard", "inbox", "people", "workflows", "church-data", "fellowship", "organization"],
     4: ["dashboard", "inbox", "people", "workflows", "church-data", "fellowship", "organization"],
     5: ["dashboard", "inbox", "people", "workflows", "church-data", "fellowship", "organization", "communication"],
@@ -208,51 +229,13 @@ VISIBLE_MODULES = {
         "communication",
         "reports",
     ],
-    7: [
-        "dashboard",
-        "inbox",
-        "people",
-        "workflows",
-        "church-data",
-        "fellowship",
-        "organization",
-        "communication",
-        "reports",
-        "system",
-    ],
-    8: [
-        "dashboard",
-        "inbox",
-        "people",
-        "workflows",
-        "church-data",
-        "fellowship",
-        "organization",
-        "communication",
-        "reports",
-        "system",
-    ],
-    9: [
-        "dashboard",
-        "inbox",
-        "people",
-        "workflows",
-        "church-data",
-        "fellowship",
-        "organization",
-        "communication",
-        "reports",
-        "system",
-    ],
 }
 
 
 def _mode_label_for_level(level: int) -> str:
     if level <= 3:
         return "Action Mode"
-    if level <= 6:
-        return "Oversight Mode"
-    return "Admin Mode"
+    return "Oversight Mode"
 
 
 def _scope_kind_from_backend_path(path: str, level: int) -> str:

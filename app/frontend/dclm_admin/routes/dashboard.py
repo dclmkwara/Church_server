@@ -80,10 +80,10 @@ def _bootstrap_keys_for_profile(profile: str) -> tuple[str, ...]:
 
 def _dashboard_intro() -> Any:
     return Div(
-        H2("DCLM Admin Dashboard", cls="display-6 fw-semibold text-dark mb-0 dashboard-hero__title"),
-        P("Attendance, workers, and decisions — scoped to your level.", cls="dashboard-hero__subtitle text-muted mb-0"),
+        H2("DCLM Operations Dashboard", cls="h4 fw-bold text-body-emphasis mb-1 tracking-tight dashboard-hero__title"),
+        P("Real-time church growth, workers, and operational decisions scoped to your level.", cls="dashboard-hero__subtitle text-secondary small mb-0"),
         id="dashboard-intro",
-        cls="dashboard-hero",
+        cls="dashboard-hero pb-2 mb-3 border-bottom border-body-secondary",
     )
 
 CHART_PALETTE = {
@@ -133,7 +133,7 @@ async def _mix_rows(items: list[tuple[str, str, str]]) -> Any:
         *[
             Div(
                 Div(
-                    Span(label, cls="fw-semibold text-dark"),
+                    Span(label, cls="fw-semibold text-body-emphasis"),
                     Span(value, cls="fw-semibold text-primary"),
                     cls="d-flex justify-content-between align-items-center gap-3",
                 ),
@@ -153,14 +153,14 @@ async def _ranking_rows(rows: list[dict[str, Any]], *, empty_title: str, empty_b
         *[
             Div(
                 Div(
-                    P(row["label"], cls="fw-semibold text-dark mb-1"),
+                    P(row["label"], cls="fw-semibold text-body-emphasis mb-1"),
                     P(
                         f"{row.get('records', row.get('present', 0) + row.get('late', 0))} records in this view.",
                         cls="small text-muted mb-0",
                     ),
                 ),
                 Div(
-                    P(str(row.get("total", row.get("present", 0) + row.get("late", 0))), cls="fw-semibold mb-0 text-dark"),
+                    P(str(row.get("total", row.get("present", 0) + row.get("late", 0))), cls="fw-semibold mb-0 text-body-emphasis"),
                     P(metric_label, cls="small text-muted mb-0"),
                     cls="text-lg-end",
                 ),
@@ -180,12 +180,12 @@ async def _scope_snapshot(rows: list[dict[str, Any]]) -> Any:
             Div(
                 Div(
                     Div(
-                        P(row["label"], cls="fw-semibold text-dark mb-1"),
+                        P(row["label"], cls="fw-semibold text-body-emphasis mb-1"),
                         P(row.get("display_id") or "Scope ID unavailable.", cls="small text-muted mb-1"),
                         P(f"{row['counts']} attendance total", cls="small text-muted mb-0"),
                     ),
                     Div(
-                        P(str(row["total"]), cls="fw-semibold mb-0 text-dark"),
+                        P(str(row["total"]), cls="fw-semibold mb-0 text-body-emphasis"),
                         P("Total", cls="small text-muted mb-0"),
                         cls="text-lg-end",
                     ),

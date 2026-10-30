@@ -1,3 +1,4 @@
+from app.core.auth_cache import invalidate_user_cache
 """
 CRUD operations for WorkerTransfer and WorkerAbsenceNotice.
 """
@@ -188,6 +189,7 @@ async def approve_destination(
     if linked_user:
         linked_user.location_id = location.location_id
         linked_user.path = location.path
+        invalidate_user_cache(str(linked_user.user_id))
 
     await db.commit()
     await db.refresh(transfer)

@@ -134,12 +134,6 @@ def register_inbox_routes(app) -> None:
             cls="filter-chip-row admin-toggle-group",
         )
         body = page_stack(
-            page_intro(
-                "Inbox",
-                "Pending registrations, access approvals, and request reviews — all in one place.",
-                scope_label=ctx.current_scope_label,
-                scope_kind=ctx.current_scope_kind,
-            ),
             section_card(
                 "What needs your attention",
                 "Filter by type to prioritise what needs action first.",

@@ -55,12 +55,6 @@ async def _church_data_loading_shell(
     target_url: str,
 ) -> Div:
     return page_stack(
-        page_intro(
-            title,
-            subtitle,
-            scope_label=ctx.current_scope_label,
-            scope_kind=ctx.current_scope_kind,
-        ),
         Div(
             Div(
                 H3(section_title, cls="h5 fw-semibold mb-1"),
