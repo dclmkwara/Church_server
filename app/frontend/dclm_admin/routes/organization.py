@@ -5,7 +5,9 @@ import asyncio
 from fasthtml.common import A, Div, Form, H3, H4, Input, P, Select, Option, Textarea
 from starlette.requests import Request
 from starlette.responses import RedirectResponse
-from faststrap import PlaceholderCard, Spinner
+import base64
+from faststrap import Alert, Badge, Button, Icon, PlaceholderCard, Spinner
+from ..components.bulk_import_ui import hierarchy_import_drawer, hierarchy_import_preview
 
 from ..backend import BackendClientError
 from ..auth_context import build_context
@@ -417,7 +419,29 @@ def register_organization_routes(app) -> None:
             active_key="organization",
             title="Hierarchy Explorer",
             subtitle="Church structure and drill-down visibility.",
-            primary_action=None,
+            primary_action=(
+                Div(
+                    A(
+                        Icon("download", cls="me-1"),
+                        "Template",
+                        href="/bulk/templates/hierarchy",
+                        download="DCL_Hierarchy_Import_Template.xlsx",
+                        cls="btn btn-outline-primary btn-sm admin-inline-btn",
+                    ),
+                    primary_button(
+                        "Import Hierarchy",
+                        href="#",
+                        data_bs_toggle="offcanvas",
+                        data_bs_target="#form-drawer",
+                        hx_get=ctx.url_for("/organization/hierarchy/import"),
+                        hx_target="#form-drawer-body",
+                        hx_swap="innerHTML",
+                    ),
+                    cls="d-flex align-items-center gap-2",
+                )
+                if ctx.level >= 4
+                else None
+            ),
             content=body,
         )
 
@@ -620,5 +644,72 @@ def register_organization_routes(app) -> None:
                 _location_panel(ctx, location_key, oob=True),
             ),
             message="Location profile updated.",
+            variant="success",
+        )
+
+    @app.get("/organization/hierarchy/import")
+    async def hierarchy_import_form(request: Request):
+        ctx = build_context(request)
+        object.__setattr__(ctx, "_request", request)
+        if ctx.level < 4:
+            return P("Hierarchy bulk import requires group level or above authority.", cls="text-muted")
+        tree = await OrganizationService.list_hierarchy_tree(request, ctx)
+        states = [row for row in tree if row["kind"] == "state"]
+        return hierarchy_import_drawer(ctx, states)
+
+    @app.post("/organization/hierarchy/import/preview")
+    async def hierarchy_import_preview_route(request: Request):
+        form = await request.form()
+        ctx = build_context(dict(form))
+        object.__setattr__(ctx, "_request", request)
+        upload = form.get("file")
+        state_id = str(form.get("state_id") or "")
+        if not upload or not hasattr(upload, "read"):
+            return Alert("Please select an Excel or CSV file to import.", variant="danger")
+        file_bytes = await upload.read()
+        filename = getattr(upload, "filename", "hierarchy.xlsx") or "hierarchy.xlsx"
+        try:
+            val_result = await OrganizationService.validate_hierarchy_import(request, file_bytes, filename, state_id)
+        except BackendClientError as exc:
+            return Alert(f"Validation failed: {exc}", variant="danger")
+        file_b64 = base64.b64encode(file_bytes).decode("ascii")
+        return hierarchy_import_preview(
+            ctx,
+            valid=val_result.get("valid", False),
+            summary=val_result.get("summary", {}),
+            errors=val_result.get("errors", []),
+            preview=val_result.get("preview", {}),
+            file_bytes_b64=file_b64,
+            filename=filename,
+            state_id=state_id,
+        )
+
+    @app.post("/organization/hierarchy/import/commit")
+    async def hierarchy_import_commit_route(request: Request):
+        form = await request.form()
+        ctx = build_context(dict(form))
+        object.__setattr__(ctx, "_request", request)
+        file_b64 = str(form.get("file_b64") or "")
+        filename = str(form.get("filename") or "hierarchy.xlsx")
+        state_id = str(form.get("state_id") or "")
+        if not file_b64:
+            return Alert("File payload missing, please re-upload.", variant="danger")
+        file_bytes = base64.b64decode(file_b64)
+        try:
+            commit_res = await OrganizationService.commit_hierarchy_import(request, file_bytes, filename, state_id)
+        except BackendClientError as exc:
+            return Alert(f"Commit failed: {exc}", variant="danger")
+
+        created = commit_res.get("created", {})
+        msg = f"Successfully imported {created.get('regions', 0)} region(s), {created.get('groups', 0)} group(s), and {created.get('locations', 0)} location(s)."
+        return simple_toast_response(
+            content=(
+                Div(
+                    H3("Import Complete", cls="h5 fw-bold text-success mb-2"),
+                    P(msg, cls="mb-3"),
+                    A("Refresh Hierarchy Explorer", href=ctx.url_for("/organization/hierarchy"), cls="btn btn-primary btn-sm"),
+                ),
+            ),
+            message=msg,
             variant="success",
         )

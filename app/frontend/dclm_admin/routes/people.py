@@ -3,7 +3,9 @@ from __future__ import annotations
 from fasthtml.common import Div, Form, H3, Input, Option, P, Select, Textarea
 from starlette.requests import Request
 
-from faststrap import Button, PlaceholderCard, Spinner
+import base64
+from faststrap import Alert, Badge, Button, Icon, PlaceholderCard, Spinner
+from ..components.bulk_import_ui import workers_import_drawer, workers_import_preview
 
 from ..backend import BackendClientError
 from ..auth_context import build_context
@@ -598,14 +600,33 @@ def register_people_routes(app) -> None:
             active_key="workers",
             title="Workers",
             subtitle="Worker records and review actions.",
-            primary_action=primary_button(
-                "Register Worker",
-                href="#",
-                data_bs_toggle="offcanvas",
-                data_bs_target="#form-drawer",
-                hx_get=ctx.url_for("/people/workers/new"),
-                hx_target="#form-drawer-body",
-                hx_swap="innerHTML",
+            primary_action=Div(
+                A(
+                    Icon("download", cls="me-1"),
+                    "Template",
+                    href="/bulk/templates/workers",
+                    download="DCL_Workers_Import_Template.xlsx",
+                    cls="btn btn-outline-primary btn-sm admin-inline-btn",
+                ),
+                primary_button(
+                    "Import Workers",
+                    href="#",
+                    data_bs_toggle="offcanvas",
+                    data_bs_target="#form-drawer",
+                    hx_get=ctx.url_for("/people/workers/import"),
+                    hx_target="#form-drawer-body",
+                    hx_swap="innerHTML",
+                ),
+                primary_button(
+                    "Register Worker",
+                    href="#",
+                    data_bs_toggle="offcanvas",
+                    data_bs_target="#form-drawer",
+                    hx_get=ctx.url_for("/people/workers/new"),
+                    hx_target="#form-drawer-body",
+                    hx_swap="innerHTML",
+                ),
+                cls="d-flex align-items-center gap-2",
             ),
             content=body,
             show_shell_intro=False,
@@ -2417,5 +2438,69 @@ def register_people_routes(app) -> None:
                 refreshed,
             ),
             message="User account reactivated.",
+            variant="success",
+        )
+
+    @app.get("/people/workers/import")
+    async def workers_import_form(request: Request):
+        ctx = build_context(request)
+        object.__setattr__(ctx, "_request", request)
+        return workers_import_drawer(ctx)
+
+    @app.post("/people/workers/import/preview")
+    async def workers_import_preview_route(request: Request):
+        form = await request.form()
+        ctx = build_context(dict(form))
+        object.__setattr__(ctx, "_request", request)
+        upload = form.get("file")
+        state_code = str(form.get("state_code") or "KW").strip().upper()
+        if not upload or not hasattr(upload, "read"):
+            return Alert("Please select an Excel or CSV file to import.", variant="danger")
+        file_bytes = await upload.read()
+        filename = getattr(upload, "filename", "workers.xlsx") or "workers.xlsx"
+        try:
+            val_result = await PeopleService.validate_workers_import(request, file_bytes, filename)
+        except BackendClientError as exc:
+            return Alert(f"Validation failed: {exc}", variant="danger")
+        file_b64 = base64.b64encode(file_bytes).decode("ascii")
+        return workers_import_preview(
+            ctx,
+            valid=val_result.get("valid", False),
+            summary=val_result.get("summary", {}),
+            errors=val_result.get("errors", []),
+            preview=val_result.get("preview", []),
+            file_bytes_b64=file_b64,
+            filename=filename,
+            state_code=state_code,
+        )
+
+    @app.post("/people/workers/import/commit")
+    async def workers_import_commit_route(request: Request):
+        form = await request.form()
+        ctx = build_context(dict(form))
+        object.__setattr__(ctx, "_request", request)
+        file_b64 = str(form.get("file_b64") or "")
+        filename = str(form.get("filename") or "workers.xlsx")
+        state_code = str(form.get("state_code") or "KW").strip().upper()
+        if not file_b64:
+            return Alert("File payload missing, please re-upload.", variant="danger")
+        file_bytes = base64.b64decode(file_b64)
+        try:
+            commit_res = await PeopleService.commit_workers_import(request, file_bytes, filename, state_code)
+        except BackendClientError as exc:
+            return Alert(f"Commit failed: {exc}", variant="danger")
+
+        created = commit_res.get("created", {})
+        count = created.get("workers", 0)
+        msg = f"Successfully registered and imported {count} worker(s)."
+        return simple_toast_response(
+            content=(
+                Div(
+                    H3("Import Complete", cls="h5 fw-bold text-success mb-2"),
+                    P(msg, cls="mb-3"),
+                    A("Refresh Workers Directory", href=ctx.url_for("/people/workers"), cls="btn btn-primary btn-sm"),
+                ),
+            ),
+            message=msg,
             variant="success",
         )

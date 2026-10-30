@@ -725,6 +725,24 @@ class PeopleService:
         result = await client.reject_worker(access_token, worker_id, reason)
         return _normalize_worker(result)
 
+    @staticmethod
+    async def download_workers_template(request) -> tuple[bytes, dict[str, str]]:
+        client = async_client(get_api_client())
+        access_token = AuthService.get_access_token(request)
+        return await client.download_workers_template(access_token)
+
+    @staticmethod
+    async def validate_workers_import(request, file_bytes: bytes, filename: str) -> dict[str, Any]:
+        client = async_client(get_api_client())
+        access_token = AuthService.get_access_token(request)
+        return await client.validate_workers_import(access_token, file_bytes, filename)
+
+    @staticmethod
+    async def commit_workers_import(request, file_bytes: bytes, filename: str, state_code: str = "KW") -> dict[str, Any]:
+        client = async_client(get_api_client())
+        access_token = AuthService.get_access_token(request)
+        return await client.commit_workers_import(access_token, file_bytes, filename, state_code)
+
 async def _list_assignable_roles(request) -> list[dict[str, Any]]:
     if await PeopleService.use_mock(request):
         return []

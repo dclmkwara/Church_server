@@ -367,6 +367,24 @@ class OrganizationService:
         await client.upsert_location_profile(access_token, location_key, profile_payload)
         return await OrganizationService.get_location_profile(request, type("Ctx", (), {"current_scope_path": "", "profile": None})(), location_key)
 
+    @staticmethod
+    async def download_hierarchy_template(request) -> tuple[bytes, dict[str, str]]:
+        client = get_api_client()
+        access_token = AuthService.get_access_token(request)
+        return await client.download_hierarchy_template(access_token)
+
+    @staticmethod
+    async def validate_hierarchy_import(request, file_bytes: bytes, filename: str, state_id: str) -> dict[str, Any]:
+        client = get_api_client()
+        access_token = AuthService.get_access_token(request)
+        return await client.validate_hierarchy_import(access_token, file_bytes, filename, state_id)
+
+    @staticmethod
+    async def commit_hierarchy_import(request, file_bytes: bytes, filename: str, state_id: str) -> dict[str, Any]:
+        client = get_api_client()
+        access_token = AuthService.get_access_token(request)
+        return await client.commit_hierarchy_import(access_token, file_bytes, filename, state_id)
+
 OrganizationService._effective_scope_path = staticmethod(OrganizationService.effective_scope_path)
 OrganizationService.list_location_profiles = staticmethod(OrganizationService.list_locations)
 OrganizationService.location_profile_summary = staticmethod(OrganizationService.get_location_profile_summary)

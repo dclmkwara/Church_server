@@ -193,6 +193,9 @@ from app.api.v1.routes.transfers import router as transfers_router, absence_rout
 app.include_router(transfers_router, prefix=f"{settings.API_V1_PREFIX}/transfers", tags=["Workers"])
 app.include_router(absence_router, prefix=f"{settings.API_V1_PREFIX}/attendance/absence-notices", tags=["Worker Attendance"])
 
+from app.api.v1.routes import bulk_import
+app.include_router(bulk_import.router, prefix=f"{settings.API_V1_PREFIX}/bulk", tags=["Bulk Import"])
+
 
 # ── Health & API Info endpoints ────────────────────────────────────────────────
 

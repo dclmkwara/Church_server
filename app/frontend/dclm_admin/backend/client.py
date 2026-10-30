@@ -1022,3 +1022,77 @@ class BackendClient:
     async def create_removal_request(self, access_token: str, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._request("POST", "/approvals/removals", access_token=access_token, json=payload)
 
+
+    # ── Bulk import / export ──────────────────────────────────────────────────
+
+    async def download_hierarchy_template(self, access_token: str) -> tuple[bytes, dict[str, str]]:
+        return await self._request_binary("GET", "/bulk/templates/hierarchy", access_token=access_token)
+
+    async def download_workers_template(self, access_token: str) -> tuple[bytes, dict[str, str]]:
+        return await self._request_binary("GET", "/bulk/templates/workers", access_token=access_token)
+
+    async def validate_hierarchy_import(
+        self, access_token: str, file_bytes: bytes, filename: str, state_id: str
+    ) -> dict[str, Any]:
+        files = {"file": (filename, file_bytes, "application/octet-stream")}
+        data = {"state_id": state_id}
+        url = self.build_url("/bulk/hierarchy/validate")
+        client = _get_async_http_client(self.config)
+        import httpx
+        response = await client.post(
+            url,
+            files=files,
+            data=data,
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def commit_hierarchy_import(
+        self, access_token: str, file_bytes: bytes, filename: str, state_id: str
+    ) -> dict[str, Any]:
+        files = {"file": (filename, file_bytes, "application/octet-stream")}
+        data = {"state_id": state_id}
+        url = self.build_url("/bulk/hierarchy/commit")
+        client = _get_async_http_client(self.config)
+        import httpx
+        response = await client.post(
+            url,
+            files=files,
+            data=data,
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def validate_workers_import(
+        self, access_token: str, file_bytes: bytes, filename: str
+    ) -> dict[str, Any]:
+        files = {"file": (filename, file_bytes, "application/octet-stream")}
+        url = self.build_url("/bulk/workers/validate")
+        client = _get_async_http_client(self.config)
+        import httpx
+        response = await client.post(
+            url,
+            files=files,
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def commit_workers_import(
+        self, access_token: str, file_bytes: bytes, filename: str, state_code: str = "KW"
+    ) -> dict[str, Any]:
+        files = {"file": (filename, file_bytes, "application/octet-stream")}
+        data = {"state_code": state_code}
+        url = self.build_url("/bulk/workers/commit")
+        client = _get_async_http_client(self.config)
+        import httpx
+        response = await client.post(
+            url,
+            files=files,
+            data=data,
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        response.raise_for_status()
+        return response.json()
