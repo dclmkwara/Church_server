@@ -2170,3 +2170,13 @@ html, body {
   max-width: 100% !important;
   min-width: 0 !important;
 }
+
+/* Fix: CSS grid (d-grid / page_stack) children must respect grid cell width.
+   Without min-width:0, intrinsic content width sets the track size and
+   children overflow the grid container on mobile. */
+.d-grid > * {
+  min-width: 0 !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  box-sizing: border-box !important;
+}
