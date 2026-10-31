@@ -109,11 +109,11 @@ async def _program_summary(request: Request, ctx, *, oob: bool = False) -> Div:
     cards = [
         Div(
             stat_card(title, value, note, icon, tone),
-            cls="col-6 col-md-4 col-xl",
+            cls="col-12 col-md-6 col-xl",
         )
         for title, value, note, icon, tone in cards_data
     ]
-    attrs = {"id": "program-summary-cards", "cls": "row g-2 g-md-3 mb-4"}
+    attrs = {"id": "program-summary-cards", "cls": "row g-2 g-md-3 mb-4 mx-0"}
     if oob:
         attrs["hx_swap_oob"] = "outerHTML:#program-summary-cards"
     return Div(*cards, **attrs)

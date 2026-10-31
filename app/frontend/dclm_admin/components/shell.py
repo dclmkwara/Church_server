@@ -348,7 +348,7 @@ def shell_layout(
         Link(rel="shortcut icon", type="image/x-icon", href="/favicon.ico"),
         Link(rel="apple-touch-icon", sizes="180x180", href="/assets/apple-touch-icon.png"),
         Link(rel="manifest", href="/manifest.json"),
-        Link(rel="stylesheet", href="/assets/css/admin.css"),
+        Link(rel="stylesheet", href="/assets/css/admin.css?v=20261031_0550"),
         Script("""
 (function(){
   try {
