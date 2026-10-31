@@ -534,6 +534,14 @@ def register_people_routes(app) -> None:
     @app.get("/people/workers")
     async def workers_page(request: Request, search: str = "", status: str = "", approval: str = ""):
         ctx = build_context(request)
+        filter_status = status
+        filter_approval = approval
+        if status in ("Pending Verification", "pending_verification"):
+            filter_approval = "pending_verification"
+            filter_status = ""
+        elif status == "approved":
+            filter_approval = "approved"
+            filter_status = "" 
         workers_results = await _loading_results(
             "workers-results",
             hx_get=ctx.url_for("/people/workers/list", search=search, status=status, approval=approval),
@@ -554,28 +562,17 @@ def register_people_routes(app) -> None:
                 ),
             ),
             _filter_field(
-                "Worker status",
+                "Status",
                 "workers-filter-status",
                 Select(
                     Option("All status", value=""),
                     Option("Active", value="Active", selected=status == "Active"),
+                    Option("Pending Verification", value="Pending Verification", selected=status in ("Pending Verification", "pending_verification") or approval == "pending_verification"),
+                    Option("Approved", value="approved", selected=status == "approved" or approval == "approved"),
                     Option("Inactive", value="Inactive", selected=status == "Inactive"),
-                    Option("Pending Verification", value="Pending Verification", selected=status == "Pending Verification"),
                     Option("Suspended", value="Suspended", selected=status == "Suspended"),
                     id="workers-filter-status",
                     name="status",
-                    cls="form-select",
-                ),
-            ),
-            _filter_field(
-                "Approval status",
-                "workers-filter-approval",
-                Select(
-                    Option("All approvals", value=""),
-                    Option("Approved", value="approved", selected=approval == "approved"),
-                    Option("Pending verification", value="pending_verification", selected=approval == "pending_verification"),
-                    id="workers-filter-approval",
-                    name="approval",
                     cls="form-select",
                 ),
             ),
@@ -607,25 +604,32 @@ def register_people_routes(app) -> None:
                     download="DCL_Workers_Import_Template.xlsx",
                     cls="btn btn-outline-primary btn-sm admin-inline-btn",
                 ),
-                primary_button(
-                    "Import Workers",
+                A(
+                    Icon("cloud-arrow-up", cls="me-1"),
+                    Span("Import"),
+                    Span(" Workers", cls="d-none d-md-inline"),
                     href="#",
                     data_bs_toggle="offcanvas",
                     data_bs_target="#form-drawer",
                     hx_get=ctx.url_for("/people/workers/import"),
                     hx_target="#form-drawer-body",
                     hx_swap="innerHTML",
+                    cls="btn btn-outline-primary btn-sm admin-inline-btn d-inline-flex align-items-center",
                 ),
-                primary_button(
-                    "Register Worker",
-                    href="#",
+                Button(
+                    Icon("plus-lg"),
+                    Span("Register Worker", cls="d-none d-sm-inline ms-1"),
+                    type="button",
                     data_bs_toggle="offcanvas",
                     data_bs_target="#form-drawer",
                     hx_get=ctx.url_for("/people/workers/new"),
                     hx_target="#form-drawer-body",
                     hx_swap="innerHTML",
+                    cls="btn btn-primary btn-sm admin-inline-btn d-inline-flex align-items-center",
+                    title="Register Worker",
+                    aria_label="Register Worker",
                 ),
-                cls="d-flex align-items-center gap-2",
+                cls="d-flex align-items-center gap-2 flex-wrap",
             ),
             content=body,
             show_shell_intro=False,
@@ -634,8 +638,16 @@ def register_people_routes(app) -> None:
     @app.get("/people/workers/list")
     async def workers_list(request: Request, search: str = "", status: str = "", approval: str = ""):
         ctx = build_context(request)
+        filter_status = status
+        filter_approval = approval
+        if status in ("Pending Verification", "pending_verification"):
+            filter_approval = "pending_verification"
+            filter_status = ""
+        elif status == "approved":
+            filter_approval = "approved"
+            filter_status = ""
         try:
-            return await _workers_table(request, ctx, search=search, status=status, approval=approval)
+            return await _workers_table(request, ctx, search=search, status=filter_status, approval=filter_approval)
         except BackendClientError as exc:
             return Div(empty_state("cloud-slash", "Live worker directory is unavailable", str(exc)), id="workers-results")
 

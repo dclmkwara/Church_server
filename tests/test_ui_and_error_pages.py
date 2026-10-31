@@ -167,3 +167,22 @@ def test_shell_topbar_no_duplicate_menu_button():
     assert "topbar-mobile-menu-btn" not in xml
     # Mobile brand is present
     assert "topbar-mobile-brand" in xml
+
+
+@pytest.mark.asyncio
+async def test_template_download_endpoints():
+    from starlette.requests import Request
+    from app.frontend.dclm_admin.app_factory import download_workers_template_route, download_hierarchy_template_route
+
+    req = Request({"type": "http", "method": "GET", "headers": []})
+
+    resp_w = await download_workers_template_route(req)
+    assert resp_w.status_code == 200
+    assert len(resp_w.body) > 1000
+    assert 'filename="DCL_Workers_Import_Template.xlsx"' in resp_w.headers["content-disposition"]
+
+    resp_h = await download_hierarchy_template_route(req)
+    assert resp_h.status_code == 200
+    assert len(resp_h.body) > 1000
+    assert 'filename="DCL_Hierarchy_Import_Template.xlsx"' in resp_h.headers["content-disposition"]
+

@@ -296,3 +296,31 @@ register_communication_routes(app)
 register_report_routes(app)
 register_system_routes(app)
 register_placeholder_routes(app)
+
+
+@app.get("/bulk/templates/workers")
+async def download_workers_template_route(request: Request):
+    from app.services.bulk_import_service import generate_workers_template
+    xlsx_bytes = generate_workers_template()
+    return Response(
+        content=xlsx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": 'attachment; filename="DCL_Workers_Import_Template.xlsx"',
+            "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        },
+    )
+
+
+@app.get("/bulk/templates/hierarchy")
+async def download_hierarchy_template_route(request: Request):
+    from app.services.bulk_import_service import generate_hierarchy_template
+    xlsx_bytes = generate_hierarchy_template()
+    return Response(
+        content=xlsx_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": 'attachment; filename="DCL_Hierarchy_Import_Template.xlsx"',
+            "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        },
+    )
