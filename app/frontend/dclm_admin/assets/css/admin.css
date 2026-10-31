@@ -953,12 +953,97 @@ h6,
 /* Bottom navigation overrides — the faststrap BottomNav component handles
    most styles; we only override what's needed for the app shell context. */
 .admin-bottom-nav {
-  backdrop-filter: blur(18px);
-  background: rgba(255, 255, 255, 0.94) !important;
-  border-top: 1px solid var(--admin-border) !important;
-  box-shadow: 0 -6px 24px rgba(15, 23, 42, 0.07) !important;
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  background: rgba(255, 255, 255, 0.95) !important;
+  border-top: 1px solid rgba(226, 232, 240, 0.9) !important;
+  box-shadow: 0 -4px 20px rgba(15, 23, 42, 0.06) !important;
   padding-bottom: env(safe-area-inset-bottom) !important;
   z-index: 1025;
+}
+
+.admin-bottom-nav .nav-link,
+.admin-bottom-nav .bottom-nav-menu-btn {
+  text-decoration: none !important;
+  color: var(--admin-text-subtle, #64748b) !important;
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+  position: relative;
+  transition: all 0.15s ease-in-out;
+  padding-top: 0.5rem !important;
+  padding-bottom: 0.45rem !important;
+}
+
+.admin-bottom-nav .nav-link:hover,
+.admin-bottom-nav .bottom-nav-menu-btn:hover {
+  text-decoration: none !important;
+  color: var(--admin-brand-navy, #0F2D5E) !important;
+}
+
+.admin-bottom-nav .nav-link.active {
+  color: var(--admin-brand-blue, #1d4ed8) !important;
+  font-weight: 600 !important;
+  text-decoration: none !important;
+}
+
+.admin-bottom-nav .nav-link.active::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 20%;
+  right: 20%;
+  height: 3px;
+  background: linear-gradient(90deg, #0F2D5E, #1d4ed8);
+  border-radius: 0 0 4px 4px;
+}
+
+.admin-bottom-nav .nav-link:focus,
+.admin-bottom-nav .nav-link:focus-visible,
+.admin-bottom-nav .bottom-nav-menu-btn:focus,
+.admin-bottom-nav .bottom-nav-menu-btn:focus-visible {
+  text-decoration: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* Horizontally scrollable branded tabs */
+.admin-tabs-scroll-container {
+  white-space: nowrap;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+
+.admin-tabs-scroll-container .nav-pills {
+  flex-wrap: nowrap !important;
+  gap: 0.375rem;
+}
+
+.admin-tabs-scroll-container .nav-link {
+  border-radius: 9999px !important;
+  padding: 0.45rem 1.1rem !important;
+  font-size: 0.875rem !important;
+  font-weight: 500 !important;
+  color: var(--admin-text-subtle, #64748b) !important;
+  background: var(--admin-surface, #ffffff) !important;
+  border: 1px solid var(--admin-border, #e2e8f0) !important;
+  transition: all 0.18s ease-in-out;
+  white-space: nowrap;
+}
+
+.admin-tabs-scroll-container .nav-link:hover {
+  color: var(--admin-brand-navy, #0F2D5E) !important;
+  border-color: #cbd5e1 !important;
+  background: rgba(15, 45, 94, 0.04) !important;
+}
+
+.admin-tabs-scroll-container .nav-link.active {
+  background: linear-gradient(135deg, #0F2D5E 0%, #1d4ed8 100%) !important;
+  color: #ffffff !important;
+  border-color: transparent !important;
+  box-shadow: 0 4px 12px rgba(29, 78, 216, 0.25) !important;
+  font-weight: 600 !important;
 }
 
 .admin-primary-btn {
@@ -1638,6 +1723,36 @@ h6,
   background: rgba(15, 23, 42, 0.92) !important;
   border-top: 1px solid rgba(255, 255, 255, 0.08) !important;
   box-shadow: 0 -6px 24px rgba(0, 0, 0, 0.35) !important;
+}
+
+[data-bs-theme="dark"] .admin-bottom-nav .nav-link,
+[data-bs-theme="dark"] .admin-bottom-nav .bottom-nav-menu-btn {
+  color: #94a3b8 !important;
+}
+
+[data-bs-theme="dark"] .admin-bottom-nav .nav-link:hover,
+[data-bs-theme="dark"] .admin-bottom-nav .bottom-nav-menu-btn:hover {
+  color: #f8fafc !important;
+}
+
+[data-bs-theme="dark"] .admin-bottom-nav .nav-link.active {
+  color: #38bdf8 !important;
+}
+
+[data-bs-theme="dark"] .admin-bottom-nav .nav-link.active::after {
+  background: linear-gradient(90deg, #38bdf8, #818cf8);
+}
+
+[data-bs-theme="dark"] .admin-tabs-scroll-container .nav-link {
+  background: rgba(30, 41, 59, 0.7) !important;
+  border-color: #334155 !important;
+  color: #94a3b8 !important;
+}
+
+[data-bs-theme="dark"] .admin-tabs-scroll-container .nav-link.active {
+  background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%) !important;
+  color: #ffffff !important;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3) !important;
 }
 
 [data-bs-theme="dark"] .admin-page-body {

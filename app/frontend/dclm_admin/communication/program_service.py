@@ -294,7 +294,7 @@ class ProgramService:
         return [_normalize_domain(row, events) for row in domains_raw]
 
     @staticmethod
-    async def list_events(
+    async def list_campaigns(
         request,
         ctx,
         *,
@@ -360,7 +360,7 @@ class ProgramService:
         return await request_cached(request, ("programs", "types", scope_path, domain_id), load_rows)
 
     @staticmethod
-    async def list_campaigns(
+    async def list_events(
         request,
         ctx,
         *,

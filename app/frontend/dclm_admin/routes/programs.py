@@ -4,10 +4,10 @@ import asyncio
 from datetime import date
 from typing import Any
 
-from fasthtml.common import Div, Form, H3, H4, Input, Option, P, Select, Span, Textarea
+from fasthtml.common import Div, Form, H3, H4, Input, Label, Option, P, Select, Span, Textarea
 from starlette.requests import Request
 
-from faststrap import Button, PlaceholderCard, Spinner, TabPane, Tabs, ToggleGroup
+from faststrap import Button, Icon, PlaceholderCard, Spinner, TabPane, Tabs, ToggleGroup
 
 from ..auth_context import build_context
 from ..communication import PeopleService, ProgramService
@@ -15,7 +15,7 @@ from ..components.chartjs import bar_chart as _bar_chart
 from ..components.chartjs import donut_chart as _donut_chart
 from ..components.feedback import simple_toast_response
 from ..components.shell import hidden_context_inputs, primary_button, shell_layout
-from ..components.ui import empty_state, filter_field, page_intro, page_stack, responsive_table, section_card, status_badge
+from ..components.ui import empty_state, filter_field, page_intro, page_stack, responsive_table, section_card, stat_card, status_badge
 
 
 EVENT_STATUSES = ["scheduled", "completed", "cancelled", "draft"]
@@ -97,16 +97,26 @@ async def _scope_locations(request: Request, ctx) -> list[str]:
     return options
 
 
-async def _program_summary(request: Request, ctx) -> Div:
+async def _program_summary(request: Request, ctx, *, oob: bool = False) -> Div:
     summary = await ProgramService.summary(request, ctx)
-    return Div(
-        Div(P("Domains", cls="small text-muted mb-1"), H3(str(summary["domains"]), cls="h4 fw-semibold mb-0")),
-        Div(P("Types", cls="small text-muted mb-1"), H3(str(summary["types"]), cls="h4 fw-semibold mb-0")),
-        Div(P("Campaigns", cls="small text-muted mb-1"), H3(str(summary["campaigns"]), cls="h4 fw-semibold mb-0")),
-        Div(P("Events", cls="small text-muted mb-1"), H3(str(summary["events"]), cls="h4 fw-semibold mb-0")),
-        Div(P("Still scheduled", cls="small text-muted mb-1"), H3(str(summary["scheduled"]), cls="h4 fw-semibold mb-0")),
-        cls="counts-stat-grid",
-    )
+    cards_data = [
+        ("Domains", str(summary["domains"]), "Top-level categories", "collection", "primary"),
+        ("Types", str(summary["types"]), "Program categories", "tags", "info"),
+        ("Events", str(summary["campaigns"]), "Church event cycles", "calendar-check", "success"),
+        ("Sessions", str(summary["events"]), "Meeting sessions", "calendar-event", "primary"),
+        ("Scheduled", str(summary["scheduled"]), "Ready / upcoming", "clock-history", "warning"),
+    ]
+    cards = [
+        Div(
+            stat_card(title, value, note, icon, tone),
+            cls="col-6 col-md-4 col-xl",
+        )
+        for title, value, note, icon, tone in cards_data
+    ]
+    attrs = {"id": "program-summary-cards", "cls": "row g-2 g-md-3 mb-4"}
+    if oob:
+        attrs["hx_swap_oob"] = "outerHTML:#program-summary-cards"
+    return Div(*cards, **attrs)
 
 
 async def _domain_mobile_card(ctx, row):
@@ -842,19 +852,22 @@ async def _programs_workspace(
         cls="admin-filter-grid mb-3",
     )
     workspace = Div(
-        Tabs(
-            ("program-domains", "Domains", True),
-            ("program-types", "Types"),
-            ("program-campaigns", "Campaigns"),
-            ("program-events", "Events"),
-            variant="pills",
-            cls="mb-3",
+        Div(
+            Tabs(
+                ("program-domains", "Domains", True),
+                ("program-types", "Types"),
+                ("program-campaigns", "Events"),
+                ("program-events", "Sessions"),
+                variant="pills",
+                cls="admin-nav-pills flex-nowrap",
+            ),
+            cls="admin-tabs-scroll-container overflow-x-auto pb-1 mb-3",
         ),
         Div(
             TabPane(
                 Div(
                     Div(
-                        H4("Program domains", cls="h6 fw-semibold mb-1"),
+                        H4("Program Domains", cls="h6 fw-semibold mb-1"),
                         P("Domains are the top-level categories pastors understand first.", cls="text-muted mb-0"),
                         cls="mb-3",
                     ),
@@ -866,7 +879,7 @@ async def _programs_workspace(
             TabPane(
                 Div(
                     Div(
-                        H4("Program types", cls="h6 fw-semibold mb-1"),
+                        H4("Program Types", cls="h6 fw-semibold mb-1"),
                         P("Types sit under domains and make event creation consistent.", cls="text-muted mb-0"),
                         cls="mb-3",
                     ),
@@ -878,8 +891,8 @@ async def _programs_workspace(
             TabPane(
                 Div(
                     Div(
-                        H4("Program campaigns", cls="h6 fw-semibold mb-1"),
-                        P("Crusades, retreats, and special program cycles begin here before event-level recording starts.", cls="text-muted mb-0"),
+                        H4("Church Events", cls="h6 fw-semibold mb-1"),
+                        P("Crusades, retreats, and special program cycles begin here before session-level recording starts.", cls="text-muted mb-0"),
                         cls="mb-3",
                     ),
                     campaign_filter_form,
@@ -890,8 +903,8 @@ async def _programs_workspace(
             TabPane(
                 Div(
                     Div(
-                        H4("Program events", cls="h6 fw-semibold mb-1"),
-                        P("Events are the actual meetings that counts, finance, and attendance attach to.", cls="text-muted mb-0"),
+                        H4("Event Sessions", cls="h6 fw-semibold mb-1"),
+                        P("Sessions are the actual meetings that counts, finance, and attendance attach to.", cls="text-muted mb-0"),
                         cls="mb-3",
                     ),
                     event_filter_form,
@@ -902,41 +915,35 @@ async def _programs_workspace(
             cls="tab-content",
         ),
     )
-    return section_card(
-        "Programs",
-        "Domains, campaigns, and events for the selected scope.",
+    return Div(
         summary_card,
         Div(
-            primary_button(
-                "Create Campaign",
-                href="#",
-                data_bs_toggle="offcanvas",
-                data_bs_target="#form-drawer",
-                hx_get=ctx.url_for("/church-data/programs/campaigns/new"),
-                hx_target="#form-drawer-body",
-                hx_swap="innerHTML",
-            ),
-            primary_button(
+            Button(
+                Icon("plus-circle", cls="me-1"),
                 "Add Domain",
-                href="#",
+                variant="outline-primary",
+                size="md",
                 data_bs_toggle="offcanvas",
                 data_bs_target="#form-drawer",
                 hx_get=ctx.url_for("/church-data/programs/domains/new"),
                 hx_target="#form-drawer-body",
                 hx_swap="innerHTML",
             ),
-            primary_button(
+            Button(
+                Icon("plus-circle", cls="me-1"),
                 "Add Type",
-                href="#",
+                variant="outline-primary",
+                size="md",
                 data_bs_toggle="offcanvas",
                 data_bs_target="#form-drawer",
                 hx_get=ctx.url_for("/church-data/programs/types/new"),
                 hx_target="#form-drawer-body",
                 hx_swap="innerHTML",
             ),
-            cls="d-grid d-md-flex gap-2 mb-4",
+            cls="d-flex align-items-center gap-2 mb-3",
         ),
         workspace,
+        cls="programs-workspace",
     )
 
 
@@ -987,7 +994,7 @@ def register_program_routes(app) -> None:
             title="Programs",
             subtitle="Domains, types, and event definitions.",
             primary_action=primary_button(
-                "Create Campaign",
+                "Create Event",
                 href="#",
                 data_bs_toggle="offcanvas",
                 data_bs_target="#form-drawer",
@@ -1064,14 +1071,21 @@ def register_program_routes(app) -> None:
     @app.get("/church-data/programs/campaigns/new")
     async def new_campaign_form(request: Request):
         ctx = build_context(request)
-        domains = await ProgramService.list_domains(request, ctx)
-        locations = await PeopleService.list_locations(request, ctx)
+        domains, locations = await asyncio.gather(
+            ProgramService.list_domains(request, ctx),
+            PeopleService.list_locations(request, ctx),
+        )
+        import random
+        default_code = f"EVT-{date.today().year}-{random.randint(101, 999)}"
         return Form(
             *hidden_context_inputs(ctx),
-            H3("Create campaign", cls="h5 fw-semibold"),
-            P("Create the real crusade, retreat, or special program cycle first. Events and reporting will sit under it.", cls="text-muted"),
-            Input(type="text", name="title", placeholder="Campaign title", cls="form-control mb-3", required=True),
-            Input(type="text", name="campaign_code", placeholder="Campaign code", cls="form-control mb-3", required=True),
+            H3("Create Event", cls="h5 fw-semibold"),
+            P("Create the crusade, retreat, or special church event cycle first. Sessions and reporting will sit under it.", cls="text-muted"),
+            Input(type="text", name="title", placeholder="Event title", cls="form-control mb-3", required=True),
+            Div(
+                Label("Event Code (flexible and reusable)", cls="form-label small text-muted mb-1"),
+                Input(type="text", name="campaign_code", value=default_code, placeholder="Event code (e.g. EVT-2026-412)", cls="form-control mb-3", required=True),
+            ),
             Div(
                 Select(
                     Option("Select domain", value=""),
@@ -1127,9 +1141,9 @@ def register_program_routes(app) -> None:
                 cls="form-select mb-3",
             ),
             Input(type="url", name="flyer_url", placeholder="Flyer or publicity URL", cls="form-control mb-3"),
-            Textarea(name="description", placeholder="Short campaign description", cls="form-control mb-3", rows="3"),
+            Textarea(name="description", placeholder="Short event description", cls="form-control mb-3", rows="3"),
             Textarea(name="publicity_note", placeholder="Publicity note", cls="form-control mb-3", rows="2"),
-            Button("Save campaign", variant="success", size="md", type="submit", cls="w-100"),
+            Button("Save Event", variant="success", size="md", type="submit", cls="w-100"),
             hx_post=ctx.url_for("/church-data/programs/campaigns/create"),
             hx_target="#form-drawer-body",
             hx_swap="innerHTML",
@@ -1143,13 +1157,18 @@ def register_program_routes(app) -> None:
         payload = {**data, "path": ctx.current_scope_path}
         row = await ProgramService.create_campaign(request, payload) if await ProgramService.live_enabled(request) else None
         if row is None:
-            return P("Could not save this campaign right now.", cls="text-muted")
+            return P("Could not save this event right now.", cls="text-muted")
         return simple_toast_response(
             content=(
-                Div(H3("Campaign saved", cls="h5 fw-semibold"), P(f"{row['title']} is now ready for event planning and submissions.", cls="mb-0")),
+                Div(
+                    H3("Event saved", cls="h5 fw-semibold text-success"),
+                    P(f"'{row['title']}' is now ready for event planning and submissions.", cls="text-muted mb-3"),
+                    Button("Done", variant="primary", size="md", cls="w-100", data_bs_dismiss="offcanvas"),
+                ),
                 await _campaigns_table(request, ctx, domains=await ProgramService.list_domains(request, ctx), oob=True),
+                await _program_summary(request, ctx, oob=True),
             ),
-            message="Program campaign saved.",
+            message="Event saved successfully.",
             variant="success",
         )
 
@@ -1208,8 +1227,13 @@ def register_program_routes(app) -> None:
             return P("Could not save this program domain right now.", cls="text-muted")
         return simple_toast_response(
             content=(
-                Div(H3("Domain saved", cls="h5 fw-semibold"), P(f"{row['name']} is now available for program types.", cls="mb-0")),
+                Div(
+                    H3("Domain saved", cls="h5 fw-semibold text-success"),
+                    P(f"'{row['name']}' is now available for program types.", cls="text-muted mb-3"),
+                    Button("Done", variant="primary", size="md", cls="w-100", data_bs_dismiss="offcanvas"),
+                ),
                 await _domains_table(request, ctx, oob=True),
+                await _program_summary(request, ctx, oob=True),
             ),
             message="Program domain saved.",
             variant="success",
@@ -1264,8 +1288,13 @@ def register_program_routes(app) -> None:
             return P("Could not save this program type right now.", cls="text-muted")
         return simple_toast_response(
             content=(
-                Div(H3("Type saved", cls="h5 fw-semibold"), P(f"{row['name']} is now ready for event creation.", cls="mb-0")),
+                Div(
+                    H3("Type saved", cls="h5 fw-semibold text-success"),
+                    P(f"'{row['name']}' is now ready for event creation.", cls="text-muted mb-3"),
+                    Button("Done", variant="primary", size="md", cls="w-100", data_bs_dismiss="offcanvas"),
+                ),
                 await _types_table(request, ctx, oob=True),
+                await _program_summary(request, ctx, oob=True),
             ),
             message="Program type saved.",
             variant="success",
@@ -1374,10 +1403,15 @@ def register_program_routes(app) -> None:
             return P("Could not save this event right now.", cls="text-muted")
         return simple_toast_response(
             content=(
-                Div(H3("Event saved", cls="h5 fw-semibold"), P(f"{row['title']} has been added for {row['location']}.", cls="mb-0")),
+                Div(
+                    H3("Session saved", cls="h5 fw-semibold text-success"),
+                    P(f"'{row['title']}' has been added for {row['location']}.", cls="text-muted mb-3"),
+                    Button("Done", variant="primary", size="md", cls="w-100", data_bs_dismiss="offcanvas"),
+                ),
                 await _events_table(request, ctx, oob=True),
+                await _program_summary(request, ctx, oob=True),
             ),
-            message="Program event saved.",
+            message="Program session saved.",
             variant="success",
         )
 

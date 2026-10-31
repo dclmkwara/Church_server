@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fasthtml.common import A, Button, Div, Form, H1, H2, Img, Input, Link, Main, Option, P, Script, Select, Span, Title
+from fasthtml.common import A, Button, Div, Form, H1, H2, Img, Input, Link, Main, Option, P, Script, Select, Small, Span, Title
 
 from faststrap import Badge, BottomNav, BottomNavItem, Drawer, Fx, Icon, Modal, ThemeToggle
 
@@ -301,8 +301,9 @@ def _mobile_bottom_nav(ctx: AdminContext, active_key: str) -> Any:
     nav_items = [
         ("Home", "house", "/dashboard", "dashboard"),
         ("People", "people", "/people/workers", "workers"),
-        ("Inbox", "inbox", "/inbox", "inbox"),
         ("Church", "calendar-event", "/church-data/programs", "programs"),
+        ("Finance", "cash-stack", "/church-data/finance", "finance"),
+        ("Inbox", "inbox", "/inbox", "inbox"),
     ]
     items = [
         BottomNavItem(
@@ -313,16 +314,16 @@ def _mobile_bottom_nav(ctx: AdminContext, active_key: str) -> Any:
         )
         for label, icon, href, key in nav_items
     ]
-    # Menu button — triggers the mobile side-nav offcanvas (no page navigation)
+    # Menu button — triggers the mobile side-nav offcanvas without anchor navigation or focus underline
     items.append(
-        A(
-            Icon("list", cls="bottom-nav-icon"),
-            Span("Menu", cls="bottom-nav-label"),
-            href="#",
+        Button(
+            Icon("list", size="1.25em", cls="mb-1"),
+            Small("Menu", cls="d-block", style="font-size: 0.75rem; line-height: 1;"),
+            type="button",
             data_bs_toggle="offcanvas",
             data_bs_target="#mobile-nav",
             aria_label="Open navigation menu",
-            cls="bottom-nav-item",
+            cls="nav-link d-flex flex-column align-items-center justify-content-center w-100 flex-grow-1 py-2 border-0 bg-transparent text-secondary shadow-none bottom-nav-menu-btn",
         )
     )
     return BottomNav(*items, cls="d-lg-none admin-bottom-nav")

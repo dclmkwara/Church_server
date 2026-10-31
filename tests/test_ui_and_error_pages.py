@@ -74,13 +74,60 @@ def test_shell_mobile_nav_items():
     )
     nav = _mobile_bottom_nav(ctx, "dashboard")
     xml = to_xml(nav)
-    # Check that 5 items exist
+    # Check that items exist
     assert "Home" in xml
     assert "People" in xml
-    assert "Inbox" in xml
     assert "Church" in xml
+    assert "Finance" in xml
+    assert "Inbox" in xml
     assert "Menu" in xml
     assert "/inbox" in xml
+    assert "/church-data/finance" in xml
+    # Verify Menu button is a button without href="#"
+    assert "bottom-nav-menu-btn" in xml
+    assert 'type="button"' in xml
+
+
+@pytest.mark.asyncio
+async def test_program_summary_cards_and_service():
+    from unittest.mock import AsyncMock, patch
+    from starlette.requests import Request
+    from app.frontend.dclm_admin.routes.programs import _program_summary
+    from app.frontend.dclm_admin.communication.program_service import ProgramService
+    from fasthtml.common import to_xml
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/church-data/programs",
+        "headers": [],
+    }
+    request = Request(scope)
+
+    mock_summary = {
+        "domains": 5,
+        "types": 12,
+        "campaigns": 3,
+        "events": 20,
+        "scheduled": 8,
+    }
+
+    with patch.object(ProgramService, "summary", new=AsyncMock(return_value=mock_summary)):
+        rendered = await _program_summary(request, None)
+        xml = to_xml(rendered)
+
+        assert 'id="program-summary-cards"' in xml
+        assert "col-6 col-md-4 col-xl" in xml
+        assert "Domains" in xml
+        assert "Types" in xml
+        assert "Events" in xml
+        assert "Sessions" in xml
+        assert "Scheduled" in xml
+        assert "5" in xml
+        assert "12" in xml
+        assert "3" in xml
+        assert "20" in xml
+        assert "8" in xml
 
 
 def test_shell_topbar_no_duplicate_menu_button():
