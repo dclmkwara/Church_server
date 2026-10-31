@@ -11,6 +11,7 @@ from fasthtml.common import FastHTML
 from faststrap import add_bootstrap, add_pwa, mount_assets
 
 from .async_render import install_async_render_resolution
+from .auth_context import _AuthRedirectRequired
 from .backend import BackendClientError, close_async_http_client
 from .components.error_pages import not_found_response, server_error_response
 from .backend.config import get_backend_config
@@ -41,6 +42,7 @@ mount_assets(app, str(Path(__file__).resolve().parent / "assets"), url_path="/as
 # Custom styled error pages for 404, 500 and unexpected errors
 app.exception_handlers[404] = not_found_response
 app.exception_handlers[500] = server_error_response
+app.exception_handlers[_AuthRedirectRequired] = lambda req, exc: RedirectResponse(exc.location, status_code=303)
 app.exception_handlers[Exception] = server_error_response
 
 add_pwa(

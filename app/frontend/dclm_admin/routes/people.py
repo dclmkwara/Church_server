@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fasthtml.common import A, Div, Form, H3, Input, Option, P, Select, Textarea
+from fasthtml.common import A, Div, Form, H3, Input, Option, P, Select, Span, Textarea
 from starlette.requests import Request
 
 import base64

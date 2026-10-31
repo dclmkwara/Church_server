@@ -4,7 +4,7 @@ import asyncio
 from datetime import date
 from typing import Any
 
-from fasthtml.common import Div, Form, H3, H4, Input, Label, Option, P, Select, Span, Textarea
+from fasthtml.common import Button as HtmlButton, Div, Form, H3, H4, Input, Label, Li, Option, P, Select, Span, Textarea, Ul
 from starlette.requests import Request
 
 from faststrap import Button, Icon, PlaceholderCard, Spinner, TabPane, Tabs, ToggleGroup
@@ -851,18 +851,36 @@ async def _programs_workspace(
         hx_trigger="change from:select",
         cls="admin-filter-grid mb-3",
     )
+    tab_items = [
+        ("program-domains", "Domains", True),
+        ("program-types", "Types", False),
+        ("program-campaigns", "Events", False),
+        ("program-events", "Sessions", False),
+    ]
+    tabs_nav = Ul(
+        *[
+            Li(
+                HtmlButton(
+                    label,
+                    type="button",
+                    role="tab",
+                    aria_controls=tab_id,
+                    aria_selected="true" if active else "false",
+                    data_bs_toggle="tab",
+                    data_bs_target=f"#{tab_id}",
+                    id=f"{tab_id}-tab",
+                    cls=f"nav-link {'active' if active else ''}",
+                ),
+                cls="nav-item",
+                role="presentation",
+            )
+            for tab_id, label, active in tab_items
+        ],
+        role="tablist",
+        cls="nav nav-pills admin-nav-pills admin-tabs-scroll-container mb-3",
+    )
     workspace = Div(
-        Div(
-            Tabs(
-                ("program-domains", "Domains", True),
-                ("program-types", "Types"),
-                ("program-campaigns", "Events"),
-                ("program-events", "Sessions"),
-                variant="pills",
-                cls="admin-nav-pills flex-nowrap",
-            ),
-            cls="admin-tabs-scroll-container overflow-x-auto pb-1 mb-3",
-        ),
+        tabs_nav,
         Div(
             TabPane(
                 Div(

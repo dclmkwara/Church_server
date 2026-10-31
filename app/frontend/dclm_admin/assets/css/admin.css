@@ -1068,47 +1068,68 @@ nav.navbar.admin-bottom-nav {
   box-shadow: none !important;
 }
 
-/* Horizontally scrollable branded tabs — strictly bounded to 100% width */
-.admin-tabs-scroll-container {
+/* Horizontally scrollable branded tabs — strictly bounded to 100% width, styled like skuphase */
+.admin-tabs-scroll-container,
+ul.admin-tabs-scroll-container,
+.nav.admin-tabs-scroll-container {
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
   max-width: 100% !important;
   width: 100% !important;
+  min-width: 0 !important;
   overflow-x: auto !important;
   overflow-y: hidden !important;
-  white-space: nowrap !important;
   -webkit-overflow-scrolling: touch !important;
-  scrollbar-width: thin;
-  display: block !important;
+  scrollbar-width: none !important;
+  gap: 0.5rem !important;
+  padding: 0.25rem 0.2rem 0.5rem 0.2rem !important;
+  margin-bottom: 1rem !important;
+  list-style: none !important;
   box-sizing: border-box !important;
 }
 
+.admin-tabs-scroll-container::-webkit-scrollbar {
+  display: none !important;
+}
+
 .admin-tabs-scroll-container > div {
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
   max-width: 100% !important;
   width: 100% !important;
+  min-width: 0 !important;
   overflow-x: auto !important;
   overflow-y: hidden !important;
   -webkit-overflow-scrolling: touch !important;
+  scrollbar-width: none !important;
 }
 
-.admin-tabs-scroll-container .nav-pills,
-.admin-tabs-scroll-container ul.nav {
-  display: inline-flex !important;
-  flex-wrap: nowrap !important;
-  width: max-content !important;
-  gap: 0.375rem !important;
-  margin-bottom: 0 !important;
-  padding-bottom: 0.25rem !important;
+.admin-tabs-scroll-container > div::-webkit-scrollbar {
+  display: none !important;
+}
+
+.admin-tabs-scroll-container .nav-item {
+  flex: 0 0 auto !important;
+  flex-shrink: 0 !important;
+  display: inline-block !important;
 }
 
 .admin-tabs-scroll-container .nav-link {
   border-radius: 9999px !important;
-  padding: 0.45rem 1.1rem !important;
+  padding: 0.45rem 1.15rem !important;
   font-size: 0.875rem !important;
   font-weight: 500 !important;
   color: var(--admin-text-subtle, #64748b) !important;
   background: var(--admin-surface, #ffffff) !important;
   border: 1px solid var(--admin-border, #e2e8f0) !important;
   transition: all 0.18s ease-in-out;
-  white-space: nowrap;
+  white-space: nowrap !important;
+  flex-shrink: 0 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
 }
 
 .admin-tabs-scroll-container .nav-link:hover {

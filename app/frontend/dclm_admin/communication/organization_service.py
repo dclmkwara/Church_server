@@ -62,7 +62,7 @@ async def _profile_or_none(client, access_token: str, location_id: str) -> dict[
     try:
         return await client.get_location_profile(access_token, location_id)
     except BackendClientError as exc:
-        if "404" in str(exc):
+        if getattr(exc, "status_code", None) == 404 or "404" in str(exc) or "not found" in str(exc).lower():
             return None
         raise
 
