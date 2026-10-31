@@ -1146,6 +1146,65 @@ ul.admin-tabs-scroll-container,
   font-weight: 600 !important;
 }
 
+/* ── admin-nav-pills: pill tab strip (Bootstrap overflow-x-auto, skuphase pattern) ── */
+ul.admin-nav-pills {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+  padding-bottom: 0.5rem !important;
+  list-style: none !important;
+  padding-left: 0 !important;
+}
+
+ul.admin-nav-pills::-webkit-scrollbar {
+  display: none !important;
+}
+
+.admin-nav-pills .nav-item {
+  flex: 0 0 auto !important;
+  flex-shrink: 0 !important;
+}
+
+.admin-nav-pills .nav-link {
+  border-radius: 9999px !important;
+  padding: 0.45rem 1.15rem !important;
+  font-size: 0.875rem !important;
+  font-weight: 500 !important;
+  color: var(--admin-text-subtle, #64748b) !important;
+  background: var(--admin-surface, #ffffff) !important;
+  border: 1px solid var(--admin-border, #e2e8f0) !important;
+  transition: all 0.18s ease-in-out;
+  white-space: nowrap !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.admin-nav-pills .nav-link:hover {
+  color: var(--admin-brand-navy, #0F2D5E) !important;
+  border-color: #cbd5e1 !important;
+  background: rgba(15, 45, 94, 0.04) !important;
+}
+
+.admin-nav-pills .nav-link.active {
+  background: linear-gradient(135deg, #0F2D5E 0%, #1d4ed8 100%) !important;
+  color: #ffffff !important;
+  border-color: transparent !important;
+  box-shadow: 0 4px 12px rgba(29, 78, 216, 0.25) !important;
+  font-weight: 600 !important;
+}
+
+[data-bs-theme="dark"] .admin-nav-pills .nav-link {
+  background: rgba(30, 41, 59, 0.7) !important;
+  border-color: #334155 !important;
+  color: #94a3b8 !important;
+}
+
+[data-bs-theme="dark"] .admin-nav-pills .nav-link.active {
+  background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%) !important;
+  color: #ffffff !important;
+  border-color: transparent !important;
+}
+
 .admin-primary-btn {
   min-height: 42px;
 }

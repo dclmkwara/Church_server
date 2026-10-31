@@ -871,13 +871,13 @@ async def _programs_workspace(
                     id=f"{tab_id}-tab",
                     cls=f"nav-link {'active' if active else ''}",
                 ),
-                cls="nav-item",
+                cls="nav-item flex-shrink-0",
                 role="presentation",
             )
             for tab_id, label, active in tab_items
         ],
         role="tablist",
-        cls="nav nav-pills admin-nav-pills admin-tabs-scroll-container mb-3",
+        cls="nav nav-pills d-flex flex-nowrap overflow-x-auto gap-2 pb-2 mb-3 admin-nav-pills",
     )
     workspace = Div(
         tabs_nav,
@@ -961,7 +961,7 @@ async def _programs_workspace(
             cls="d-flex align-items-center gap-2 mb-3",
         ),
         workspace,
-        cls="programs-workspace",
+        cls="programs-workspace overflow-hidden",
     )
 
 
