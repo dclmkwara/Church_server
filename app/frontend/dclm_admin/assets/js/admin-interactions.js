@@ -36,6 +36,50 @@
     return source.closest ? source.closest(".btn, button, input[type='submit']") : null;
   }
 
+  function shouldShowButtonSpinner(button, sourceElement) {
+    if (!button) return false;
+    // Explicit opt-out
+    if (button.dataset.noSpinner === "true" || button.classList.contains("no-spinner")) return false;
+    // Explicit opt-in
+    if (button.dataset.loadingSpinner === "true" || button.dataset.spinner === "true" || button.classList.contains("has-btn-spinner")) return true;
+
+    // Never show in-button spinners on:
+    // - Modal, drawer, or offcanvas toggles (e.g. Register Worker, Add Domain, Import)
+    if (button.hasAttribute("data-bs-toggle") || button.hasAttribute("data-bs-target")) return false;
+    // - Tabs, pills, nav-links
+    if (button.getAttribute("role") === "tab" || button.classList.contains("nav-link") || button.closest("[role='tablist'], .nav-pills, .nav-tabs, .admin-bottom-nav, .admin-sidebar")) return false;
+    // - Dropdown toggles
+    if (button.getAttribute("data-bs-toggle") === "dropdown" || button.classList.contains("dropdown-toggle") || button.closest(".dropdown-menu")) return false;
+    // - Download buttons or template links
+    if (button.hasAttribute("download") || (button.getAttribute("href") || "").includes("/bulk/templates/")) return false;
+    // - Search or filter inputs / reset triggers
+    if (button.closest(".admin-filter-grid, .admin-search-form")) return false;
+
+    // Allowed restricted areas:
+    // 1. Form submit buttons that perform mutations (POST, PUT, DELETE) inside modals, drawers, or forms
+    if (button.type === "submit" || button.matches("button[type='submit'], input[type='submit']")) {
+      const form = button.form || button.closest("form");
+      if (form) {
+        const method = (form.getAttribute("method") || form.getAttribute("hx-post") || form.getAttribute("hx-put") || form.getAttribute("hx-delete") || "").toUpperCase();
+        if (form.matches("[hx-get]") || method === "GET") return false;
+        return true;
+      }
+      return true;
+    }
+
+    // 2. Buttons with mutating HTMX actions that do partial swaps (hx-post, hx-put, hx-delete, hx-patch)
+    if (button.matches("[hx-post], [hx-put], [hx-delete], [hx-patch]")) {
+      return true;
+    }
+
+    // 3. Elements where the trigger explicitly targets a partial swap indicator
+    if (button.getAttribute("hx-indicator") === "this") {
+      return true;
+    }
+
+    return false;
+  }
+
   function loadingText(button) {
     if (!button) return "Loading";
     return (
@@ -62,6 +106,10 @@
     if (button.tagName === "INPUT") {
       button.dataset.adminOriginalValue = button.value;
       button.value = loadingText(button);
+      return;
+    }
+    if (button.classList.contains("rounded-circle") || (button.offsetWidth && Math.abs(button.offsetWidth - button.offsetHeight) < 4 && button.offsetWidth <= 44)) {
+      button.innerHTML = `<span class="spinner-border spinner-border-sm admin-request-loader" role="status" aria-hidden="true" style="width:1rem;height:1rem;"></span>`;
       return;
     }
     button.innerHTML = `<span class="spinner-border spinner-border-sm me-2 admin-request-loader" role="status" aria-hidden="true"></span><span>${loadingText(button)}</span>`;
@@ -165,10 +213,16 @@
     (event) => {
       const trigger = event.target.closest(loadingSelector);
       if (!trigger) return;
+      // Normal page navigation link: fire top progress loader
+      if (trigger.tagName === "A" && trigger.href && !trigger.href.startsWith("#") && !trigger.hasAttribute("data-bs-toggle")) {
+        startTopLoader();
+      }
       const form = trigger.form || trigger.closest("form");
       if (form && form.matches("[hx-get], [hx-post], [hx-put], [hx-delete]")) return;
       if (trigger.matches("[hx-get], [hx-post], [hx-put], [hx-delete]")) return;
-      window.setTimeout(() => setLoading(trigger), 0);
+      if (shouldShowButtonSpinner(trigger, event.target)) {
+        window.setTimeout(() => setLoading(trigger), 0);
+      }
     },
     true
   );
@@ -319,8 +373,11 @@
 
   /* ── HTMX Event Wiring ──────────────────────────────────────────────── */
   document.body.addEventListener("htmx:beforeRequest", (event) => {
-    setLoading(findButton(event.detail.elt));
     startTopLoader();
+    const btn = findButton(event.detail.elt);
+    if (btn && shouldShowButtonSpinner(btn, event.detail.elt)) {
+      setLoading(btn);
+    }
   });
 
   ["htmx:afterRequest", "htmx:responseError", "htmx:sendError", "htmx:timeout"].forEach((name) => {

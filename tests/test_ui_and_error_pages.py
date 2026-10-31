@@ -186,3 +186,53 @@ async def test_template_download_endpoints():
     assert len(resp_h.body) > 1000
     assert 'filename="DCL_Hierarchy_Import_Template.xlsx"' in resp_h.headers["content-disposition"]
 
+
+@pytest.mark.asyncio
+async def test_auth_redirect_on_expired_token_direct():
+    from starlette.datastructures import Headers
+    from app.frontend.dclm_admin.backend import BackendClientError
+
+    class FakeRequest:
+        method = "GET"
+        url = type("URL", (), {"path": "/church-data/programs"})()
+        headers = Headers({})
+
+    req = FakeRequest()
+    exc = BackendClientError("Could not validate credentials", status_code=401)
+    resp = server_error_response(req, exc)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/login"
+
+
+@pytest.mark.asyncio
+async def test_auth_redirect_on_expired_token_htmx():
+    from starlette.datastructures import Headers
+    from app.frontend.dclm_admin.backend import BackendClientError
+
+    class FakeHtmxRequest:
+        method = "GET"
+        url = type("URL", (), {"path": "/church-data/programs/campaigns/list"})()
+        headers = Headers({"HX-Request": "true", "HX-Current-URL": "https://example.com/church-data/programs"})
+
+    req = FakeHtmxRequest()
+    exc = BackendClientError("Token expired", status_code=401)
+    resp = server_error_response(req, exc)
+    assert resp.status_code == 200
+    assert resp.headers.get("HX-Redirect") == "/login"
+
+
+@pytest.mark.asyncio
+async def test_auth_service_login_redirect_path_htmx():
+    from starlette.datastructures import Headers
+    from app.frontend.dclm_admin.communication import AuthService
+
+    class FakeHtmxRequest:
+        method = "GET"
+        url = type("URL", (), {"path": "/church-data/programs/campaigns/list", "query": ""})()
+        headers = Headers({"HX-Request": "true", "HX-Current-URL": "https://example.com/church-data/programs?tab=events"})
+
+    req = FakeHtmxRequest()
+    login_url = await AuthService.login_redirect_path(req)
+    assert "/login?next=" in login_url
+    assert "%2Fchurch-data%2Fprograms%3Ftab%3Devents" in login_url
+

@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, Response
+from starlette.responses import HTMLResponse, RedirectResponse, Response
 from fasthtml.common import A, Body, Div, H1, H2, Head, Html, Link, Meta, P, Title, to_xml
 from faststrap import Alert, Button, Card, Icon
 
@@ -116,6 +116,15 @@ def not_found_response(request: Request, exc: Exception | None = None) -> Respon
 
 def server_error_response(request: Request, exc: Exception | None = None) -> Response:
     """Custom 500 Internal Server Error response."""
+    # When token expires or cannot be authenticated, send user to login rather than showing 500 error
+    if exc and (
+        getattr(exc, "status_code", None) in (401, 403)
+        or any(k in str(exc).lower() for k in ("unauthorized", "validate credentials", "expired", "not authenticated"))
+    ):
+        if request.headers.get("HX-Request"):
+            return Response(status_code=200, headers={"HX-Redirect": "/login"})
+        return RedirectResponse("/login", status_code=303)
+
     logger.error(
         "Unhandled server error on %s %s: %s",
         request.method,

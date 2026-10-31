@@ -348,7 +348,7 @@ def shell_layout(
         Link(rel="shortcut icon", type="image/x-icon", href="/favicon.ico"),
         Link(rel="apple-touch-icon", sizes="180x180", href="/assets/apple-touch-icon.png"),
         Link(rel="manifest", href="/manifest.json"),
-        Link(rel="stylesheet", href="/assets/css/admin.css?v=20261031_0800"),
+        Link(rel="stylesheet", href="/assets/css/admin.css?v=20261031_0930"),
         Script("""
 (function(){
   try {
@@ -359,7 +359,7 @@ def shell_layout(
 """),
         Script(src="/assets/js/chart.umd.min.js", defer=True),
         Script(src="/assets/js/admin-charts.js", defer=True),
-        Script(src="/assets/js/admin-interactions.js", defer=True),
+        Script(src="/assets/js/admin-interactions.js?v=20261031_0930", defer=True),
         Div(id="admin-loading-bar", cls="admin-loading-bar"),
 
 

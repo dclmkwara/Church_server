@@ -39,10 +39,27 @@ add_bootstrap(app, theme=DCLM_THEME, mode="light", font_family="Inter", font_wei
 setup_theme_defaults()
 mount_assets(app, str(Path(__file__).resolve().parent / "assets"), url_path="/assets")
 
-# Custom styled error pages for 404, 500 and unexpected errors
+# Custom styled error pages and auth exception handlers
+async def _auth_redirect_handler(request: Request, exc: _AuthRedirectRequired) -> Response:
+    if request.headers.get("HX-Request"):
+        return Response(status_code=200, headers={"HX-Redirect": exc.location})
+    return RedirectResponse(exc.location, status_code=303)
+
+async def _backend_client_error_handler(request: Request, exc: BackendClientError) -> Response:
+    if exc.status_code in (401, 403) or any(k in str(exc).lower() for k in ("unauthorized", "validate credentials", "expired", "not authenticated")):
+        login_path = await AuthService.login_redirect_path(request)
+        if request.headers.get("HX-Request"):
+            resp = Response(status_code=200, headers={"HX-Redirect": login_path})
+        else:
+            resp = RedirectResponse(login_path, status_code=303)
+        await AuthService.clear_identity(resp)
+        return resp
+    return server_error_response(request, exc)
+
 app.exception_handlers[404] = not_found_response
 app.exception_handlers[500] = server_error_response
-app.exception_handlers[_AuthRedirectRequired] = lambda req, exc: RedirectResponse(exc.location, status_code=303)
+app.exception_handlers[_AuthRedirectRequired] = _auth_redirect_handler
+app.exception_handlers[BackendClientError] = _backend_client_error_handler
 app.exception_handlers[Exception] = server_error_response
 
 add_pwa(
@@ -125,6 +142,15 @@ class BackendAuthMiddleware(BaseHTTPMiddleware):
             )
             if throttle_expired and AuthService.should_refresh(request):
                 refreshed_identity = await AuthService.refresh_identity(request)
+                if refreshed_identity is None:
+                    # Token expired and could not refresh: redirect user to login
+                    login_path = await AuthService.login_redirect_path(request)
+                    if request.headers.get("HX-Request"):
+                        resp = Response(status_code=200, headers={"HX-Redirect": login_path})
+                    else:
+                        resp = RedirectResponse(login_path, status_code=303)
+                    await AuthService.clear_identity(resp)
+                    return resp
 
         if request.method == "GET" and "profile" not in request.query_params:
             profile_key = AuthService.get_profile_key(request)
@@ -139,13 +165,14 @@ class BackendAuthMiddleware(BaseHTTPMiddleware):
         try:
             response = await call_next(request)
         except BackendClientError as exc:
-            if exc.status_code in (401, 403) and ("validate credentials" in str(exc).lower() or "expired" in str(exc).lower() or "unauthorized" in str(exc).lower()):
+            if exc.status_code in (401, 403) or any(k in str(exc).lower() for k in ("unauthorized", "validate credentials", "expired", "not authenticated")):
                 login_path = await AuthService.login_redirect_path(request)
                 if request.headers.get("HX-Request"):
-                    return Response(status_code=401, headers={"HX-Redirect": login_path})
-                redirect_res = RedirectResponse(login_path, status_code=303)
-                AuthService.clear_identity(redirect_res)
-                return redirect_res
+                    resp = Response(status_code=200, headers={"HX-Redirect": login_path})
+                else:
+                    resp = RedirectResponse(login_path, status_code=303)
+                await AuthService.clear_identity(resp)
+                return resp
             raise
         if refreshed_identity is not None:
             await AuthService.persist_identity(response, refreshed_identity)

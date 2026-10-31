@@ -224,9 +224,20 @@ class AuthService:
 
     @classmethod
     async def login_redirect_path(cls, request: Request) -> str:
-        current = request.url.path
-        if request.url.query:
-            current = f"{current}?{request.url.query}"
+        # Prefer the actual browser page URL for HTMX requests
+        hx_current = request.headers.get("HX-Current-URL")
+        if hx_current:
+            parts = urlsplit(hx_current)
+            current = parts.path
+            if parts.query:
+                current = f"{current}?{parts.query}"
+        else:
+            current = request.url.path
+            if request.url.query:
+                current = f"{current}?{request.url.query}"
+        # Prevent redirect loops back to login or logout
+        if not current or current.startswith("/login") or current.startswith("/logout"):
+            current = "/dashboard"
         return f"/login?{urlencode({'next': current})}"
 
     @classmethod
