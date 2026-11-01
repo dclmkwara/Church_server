@@ -767,7 +767,9 @@ async def run(password: str, reset_passwords: bool, metadata_only: bool = False)
             
             target_path = str(location.path)
             target_loc_id = location.location_id
-            if score == 6:  # State tier
+            if score >= 9:  # Global Admin — org root scope
+                target_path = "org"
+            elif score == 6:  # State tier
                 target_path = str(states[KWARA_STATE_ID].path)
             elif score == 5:  # Region tier
                 target_path = str(region.path)
