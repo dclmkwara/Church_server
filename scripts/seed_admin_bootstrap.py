@@ -6,10 +6,10 @@ import re
 import secrets
 import sys
 from dataclasses import dataclass
-from datetime import datetime, UTC
+from datetime import date, datetime, UTC
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import selectinload
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,7 +26,7 @@ from app.db.init_rbac import init_rbac
 from app.db.session import AsyncSessionLocal, engine
 from app.models.core import generate_display_id, generate_public_person_code
 from app.models.location import Group, Location, Nation, Region, State
-from app.models.programs import ProgramDomain, ProgramType
+from app.models.programs import ProgramCampaign, ProgramDomain, ProgramEvent, ProgramType
 from app.models.user import Role, User, Worker
 from app.schemas.location import GroupCreate, LocationCreate, NationCreate, RegionCreate, StateCreate
 
@@ -127,7 +127,7 @@ CANONICAL_PROGRAM_DOMAINS = {
     },
     "special_programs": {
         "name": "Special Programs",
-        "description": "Irregular major programs that do not fit routine service, retreat, or crusade cycles.",
+        "description": "Special programs that do not fit routine service, retreat, or crusade cycles.",
         "types": [
             ("workers_conference", "Workers Conference"),
             ("leaders_strategic_conference", "Leaders Strategic Conference"),
@@ -553,6 +553,58 @@ async def ensure_program_metadata(db) -> None:
             if changed:
                 db.add(program_type)
                 await db.commit()
+
+    admin_user = (await db.execute(select(User).order_by(User.created_at.asc()))).scalars().first()
+    regular_domain = (await db.execute(select(ProgramDomain).where(ProgramDomain.slug == "regular_services"))).scalars().first()
+    if admin_user and regular_domain:
+        campaign_stmt = select(ProgramCampaign).where(ProgramCampaign.campaign_code == "REG-SERVICES")
+        campaign = (await db.execute(campaign_stmt)).scalars().first()
+        if not campaign:
+            campaign = ProgramCampaign(
+                domain_id=regular_domain.id,
+                path="org",
+                campaign_code="REG-SERVICES",
+                title="Regular Church Services",
+                description="Weekly and recurring routine church services across all locations.",
+                event_mode="regular",
+                reporting_scope="global",
+                status="published",
+                start_date=date(2026, 1, 1),
+                end_date=date(2026, 12, 31),
+                created_by_id=admin_user.user_id,
+            )
+            db.add(campaign)
+            await db.commit()
+            await db.refresh(campaign)
+
+        canonical_services = [
+            ("sunday_worship_service", "Sunday Worship Service"),
+            ("monday_bible_study", "Monday Bible Study"),
+            ("thursday_revival_and_evangelical_training", "Thursday Revival and Evangelical Training"),
+        ]
+        for type_slug, event_title in canonical_services:
+            type_obj = (await db.execute(select(ProgramType).where(ProgramType.slug == type_slug))).scalars().first()
+            if type_obj:
+                ev_stmt = select(ProgramEvent).where(
+                    ProgramEvent.program_type_id == type_obj.id,
+                    text("CAST(program_events.path AS VARCHAR) = 'org'"),
+                    ProgramEvent.title == event_title,
+                )
+                ev = (await db.execute(ev_stmt)).scalars().first()
+                if not ev:
+                    ev = ProgramEvent(
+                        program_type_id=type_obj.id,
+                        campaign_id=campaign.id,
+                        campaign_code=campaign.campaign_code,
+                        path="org",
+                        date=date.today(),
+                        title=event_title,
+                        is_public=True,
+                        event_mode="regular",
+                        reporting_scope="global",
+                    )
+                    db.add(ev)
+                    await db.commit()
 
 async def ensure_role_map(db) -> dict[str, Role]:
     result = await db.execute(select(Role).options(selectinload(Role.score)))

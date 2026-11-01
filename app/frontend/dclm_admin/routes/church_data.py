@@ -18,7 +18,7 @@ from ..mock_data import STORE, TODAY, UNITS
 
 
 FUND_TYPES = ["offering", "tithe"]
-PAYMENT_METHODS = ["Cash", "Bank Transfer", "Mobile Money", "Check"]
+PAYMENT_METHODS = ["Cash", "Bank Transfer", "Mobile Money"]
 RECORD_STATUSES = ["follow_up_pending", "contacted", "integrated"]
 RECORD_GENDERS = ["Male", "Female"]
 ATTENDANCE_STATUSES = ["present", "late", "absent", "excused"]
@@ -27,7 +27,6 @@ PAYMENT_METHOD_VALUES = {
     "Cash": "cash",
     "Bank Transfer": "bank_transfer",
     "Mobile Money": "mobile_money",
-    "Check": "check",
 }
 
 
@@ -81,7 +80,9 @@ async def _scope_locations(request: Request, ctx) -> list[dict[str, str]]:
 
 async def _scope_events(request: Request, ctx) -> list[dict[str, str]]:
     if await ChurchDataService.live_enabled(request):
-        return [{"value": row["event_id"], "label": row["title"]} for row in await ChurchDataService.list_events(request, ctx)]
+        events = await ChurchDataService.list_events(request, ctx)
+        if events:
+            return [{"value": row["event_id"], "label": row["title"]} for row in events]
     return [{"value": event["title"], "label": event["title"]} for event in STORE.list_program_events(ctx.current_scope_path)]
 
 
@@ -997,7 +998,9 @@ def register_church_data_routes(app) -> None:
             Div(
                 Select(
                     Option("Select service", value=""),
-                    *[Option(row["label"], value=row["value"]) for row in events],
+                    *([Option(row["label"], value=row["value"]) for row in events] if events else [
+                        Option("No services scheduled — schedule one under Programs first", value="", disabled=True)
+                    ]),
                     name="service",
                     cls="form-select",
                     required=True,

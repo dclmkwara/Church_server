@@ -341,9 +341,11 @@ async def _worker_detail_panel(request: Request, ctx, worker):
 
 
 async def _user_mobile_card(ctx, user):
+    user_code = user.get("public_code") or user.get("phone") or "No Code"
+    loc_display = user.get("location_display") or user.get("location") or "No Location"
     return Div(
         H3(user["name"], cls="fw-bold mb-0 lh-sm"),
-        P(user["location"], cls="text-muted small mb-2"),
+        P(f"{user_code} • {loc_display}", cls="text-muted small mb-2"),
         Div(*[status_badge(role) for role in user["roles"]], cls="d-flex flex-wrap gap-1 mb-2"),
         Div(status_badge(user["approval_status"]), status_badge(user["status"]), cls="d-flex flex-wrap gap-1 mb-2"),
         Div(
@@ -418,10 +420,12 @@ async def _users_table(request: Request, ctx, *, search: str = "", approval: str
     desktop_rows = []
     mobile_cards = []
     for user in rows:
+        user_code = user.get("public_code") or user.get("phone") or "No Code"
+        loc_display = user.get("location_display") or user.get("location") or "No Location"
         desktop_rows.append(
             [
-                Div(P(user["name"], cls="fw-semibold mb-1"), P(user.get("public_code") or user["phone"], cls="small text-muted mb-0")),
-                user["location"],
+                Div(P(user["name"], cls="fw-semibold mb-1"), P(user_code, cls="small text-muted mb-0")),
+                loc_display,
                 Div(*[status_badge(role) for role in user["roles"]], cls="d-flex flex-wrap gap-1"),
                 status_badge(user["approval_status"]),
                 status_badge(user["status"]),
@@ -2148,11 +2152,14 @@ def register_people_routes(app) -> None:
                 if user["approval_status"] == "pending"
                 else "Live account controls now use the backend role and approval rules."
             )
+            user_code = user.get("public_code") or user.get("phone") or "No Code"
+            loc_display = user.get("location_display") or user.get("location") or "General Scope"
             return Div(
                 H3(user["name"], cls="h5 fw-semibold"),
-                P(user["location"], cls="text-muted"),
+                P(f"{user_code} • {loc_display}", cls="text-muted"),
                 Div(
-                    Div(P("User Code", cls="small text-muted mb-1"), P(user.get("public_code") or user["phone"], cls="fw-semibold mb-0")),
+                    Div(P("User Code", cls="small text-muted mb-1"), P(user_code, cls="fw-semibold mb-0")),
+                    Div(P("Location", cls="small text-muted mb-1"), P(loc_display, cls="fw-semibold mb-0")),
                     Div(P("Phone", cls="small text-muted mb-1"), P(user["phone"], cls="fw-semibold mb-0")),
                     Div(P("Email", cls="small text-muted mb-1"), P(user.get("email") or "Not available", cls="fw-semibold mb-0")),
                     Div(P("Approval", cls="small text-muted mb-1"), status_badge(user["approval_status"])),
@@ -2168,11 +2175,14 @@ def register_people_routes(app) -> None:
                     cls="d-grid gap-2 mt-3",
                 ),
             )
+        user_code = user.get("public_code") or user.get("phone") or "No Code"
+        loc_display = user.get("location_display") or user.get("location") or "General Scope"
         return Div(
             H3(user["name"], cls="h5 fw-semibold"),
-            P(user["location"], cls="text-muted"),
+            P(f"{user_code} • {loc_display}", cls="text-muted"),
             Div(
-                Div(P("User Code", cls="small text-muted mb-1"), P(user.get("public_code") or user["phone"], cls="fw-semibold mb-0")),
+                Div(P("User Code", cls="small text-muted mb-1"), P(user_code, cls="fw-semibold mb-0")),
+                Div(P("Location", cls="small text-muted mb-1"), P(loc_display, cls="fw-semibold mb-0")),
                 Div(P("Phone", cls="small text-muted mb-1"), P(user["phone"], cls="fw-semibold mb-0")),
                 Div(P("Approval", cls="small text-muted mb-1"), status_badge(user["approval_status"])),
                 Div(P("Status", cls="small text-muted mb-1"), status_badge(user["status"])),

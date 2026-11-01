@@ -921,9 +921,22 @@ async def _programs_workspace(
             TabPane(
                 Div(
                     Div(
-                        H4("Event Sessions", cls="h6 fw-semibold mb-1"),
-                        P("Sessions are the actual meetings that counts, finance, and attendance attach to.", cls="text-muted mb-0"),
-                        cls="mb-3",
+                        Div(
+                            H4("Event Sessions", cls="h6 fw-semibold mb-1"),
+                            P("Sessions are the actual meetings that counts, finance, and attendance attach to.", cls="text-muted mb-0"),
+                        ),
+                        Button(
+                            Icon("calendar-plus", cls="me-1"),
+                            "Schedule Service",
+                            variant="primary",
+                            size="sm",
+                            data_bs_toggle="offcanvas",
+                            data_bs_target="#form-drawer",
+                            hx_get=ctx.url_for("/church-data/programs/events/new"),
+                            hx_target="#form-drawer-body",
+                            hx_swap="innerHTML",
+                        ),
+                        cls="d-flex justify-content-between align-items-center mb-3",
                     ),
                     event_filter_form,
                     events_tbl,
@@ -936,6 +949,17 @@ async def _programs_workspace(
     return Div(
         summary_card,
         Div(
+            Button(
+                Icon("calendar-plus", cls="me-1"),
+                "Schedule Service",
+                variant="primary",
+                size="md",
+                data_bs_toggle="offcanvas",
+                data_bs_target="#form-drawer",
+                hx_get=ctx.url_for("/church-data/programs/events/new"),
+                hx_target="#form-drawer-body",
+                hx_swap="innerHTML",
+            ),
             Button(
                 Icon("plus-circle", cls="me-1"),
                 "Add Domain",
@@ -958,7 +982,7 @@ async def _programs_workspace(
                 hx_target="#form-drawer-body",
                 hx_swap="innerHTML",
             ),
-            cls="d-flex align-items-center gap-2 mb-3",
+            cls="d-flex align-items-center gap-2 mb-3 flex-wrap",
         ),
         workspace,
         cls="programs-workspace overflow-hidden",
@@ -1339,6 +1363,10 @@ def register_program_routes(app) -> None:
         ctx = build_context(request)
         domains = await ProgramService.list_domains(request, ctx)
         campaigns = await ProgramService.list_campaigns(request, ctx)
+        raw_locations = await _scope_locations(request, ctx)
+        location_options = [Option(name, value=name) for name in raw_locations]
+        if ctx.level >= 8 or ctx.profile.role_label in ("Global Admin", "National Admin", "State Overseer"):
+            location_options.insert(0, Option("All Churches (Global / Organization-wide)", value="org"))
         return Form(
             *hidden_context_inputs(ctx),
             H3("Create event", cls="h5 fw-semibold"),
@@ -1381,7 +1409,7 @@ def register_program_routes(app) -> None:
             Div(
                 Select(
                     Option("Select location", value=""),
-                    *[Option(name, value=name) for name in await _scope_locations(request, ctx)],
+                    *location_options,
                     name="location",
                     cls="form-select",
                     required=True,
@@ -1407,15 +1435,20 @@ def register_program_routes(app) -> None:
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
         ctx = build_context(data)
-        selected_location = next(
-            (
-                row
-                for row in await PeopleService.list_locations(request, ctx)
-                if (row.get("location_name") or row.get("location_id")) == data.get("location")
-            ),
-            None,
-        )
-        payload = {**data, "path": str(selected_location.get("path") or "") if selected_location else ""}
+        loc_val = data.get("location", "")
+        if loc_val in ("org", "global", "All Churches (Global / Organization-wide)") or loc_val == ctx.current_scope_path:
+            payload_path = "org" if loc_val in ("org", "global", "All Churches (Global / Organization-wide)") else (ctx.current_scope_path or "org")
+        else:
+            selected_location = next(
+                (
+                    row
+                    for row in await PeopleService.list_locations(request, ctx)
+                    if (row.get("location_name") or row.get("location_id")) == loc_val
+                ),
+                None,
+            )
+            payload_path = str(selected_location.get("path") or "") if selected_location else (ctx.current_scope_path or "org")
+        payload = {**data, "path": payload_path}
         row = await ProgramService.create_event(request, payload) if await ProgramService.live_enabled(request) else None
         if row is None:
             return P("Could not save this event right now.", cls="text-muted")

@@ -69,7 +69,7 @@ class CRUDProgramCampaign(CRUDBase[ProgramCampaign, ProgramCampaignCreate, Progr
         self._validate(event_mode=None, reporting_scope=payload.get('reporting_scope'), status=payload.get('status'))
         return await super().update(db, db_obj=db_obj, obj_in=obj_in)
     async def list_by_scope(self, db: AsyncSession, *, scope_path: str, skip: int = 0, limit: int = 100) -> List[ProgramCampaign]:
-        result = await db.execute(select(ProgramCampaign).where(text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path), ProgramCampaign.is_deleted == False).order_by(ProgramCampaign.start_date.desc()).offset(skip).limit(limit))
+        result = await db.execute(select(ProgramCampaign).where(text("(CAST(path AS ltree) <@ CAST(:scope_path AS ltree) OR CAST(:scope_path AS ltree) <@ CAST(path AS ltree))").bindparams(scope_path=scope_path), ProgramCampaign.is_deleted == False).order_by(ProgramCampaign.start_date.desc()).offset(skip).limit(limit))
         return result.scalars().all()
 program_campaign = CRUDProgramCampaign(ProgramCampaign)
 

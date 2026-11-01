@@ -38,7 +38,7 @@ FALLBACK_PROGRAM_DOMAINS: list[dict[str, Any]] = [
         "id": 4,
         "name": "Special Programs",
         "slug": "special_programs",
-        "description": "Irregular major programs that do not fit routine service, retreat, or crusade cycles.",
+        "description": "Special programs that do not fit routine service, retreat, or crusade cycles.",
     },
 ]
 

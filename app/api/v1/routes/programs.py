@@ -60,7 +60,7 @@ async def update_program_type(*, db: AsyncSession = Depends(deps.get_db), type_i
 @router.get('/campaigns', response_model=List[ProgramCampaignResponse], dependencies=[Depends(deps.PermissionChecker('programs:read'))])
 async def read_program_campaigns(db: AsyncSession = Depends(deps.get_db), skip: int = 0, limit: int = 100, current_user: User = Depends(deps.get_current_active_user), scope_path: str = Query(None), domain: str = Query(None), event_mode: str = Query(None), status_value: str = Query(None, alias='status'), campaign_code: str = Query(None)) -> Any:
     search_scope = deps.resolve_scope_path(current_user, scope_path)
-    query = select(ProgramCampaign).where(text('CAST(path AS ltree) <@ CAST(:scope_path AS ltree)').bindparams(scope_path=search_scope), ProgramCampaign.is_deleted == False)
+    query = select(ProgramCampaign).where(text('(CAST(path AS ltree) <@ CAST(:scope_path AS ltree) OR CAST(:scope_path AS ltree) <@ CAST(path AS ltree))').bindparams(scope_path=search_scope), ProgramCampaign.is_deleted == False)
     if domain:
         query = query.join(ProgramDomain, ProgramDomain.id == ProgramCampaign.domain_id)
         query = query.where((ProgramDomain.slug == domain) | (ProgramDomain.name == domain))
@@ -98,7 +98,7 @@ async def update_program_campaign(*, db: AsyncSession = Depends(deps.get_db), ca
 @router.get('/events', response_model=List[ProgramEventResponse], dependencies=[Depends(deps.PermissionChecker('programs:read'))])
 async def read_program_events(db: AsyncSession = Depends(deps.get_db), skip: int = 0, limit: int = 100, current_user: User = Depends(deps.get_current_active_user), scope_path: str = Query(None), program_type: str = Query(None), program_domain: str = Query(None), title: str = Query(None), level: str = Query(None), location_id: str = Query(None), date: str = Query(None), start_month: int = Query(None, ge=1, le=12), end_month: int = Query(None, ge=1, le=12), start_year: int = Query(None, ge=1900, le=2100), end_year: int = Query(None, ge=1900, le=2100), event_mode: str = Query(None), reporting_scope: str = Query(None), audience_segment: str = Query(None), campaign_code: str = Query(None), alpha_location_id: str = Query(None), campaign_id: UUID = Query(None)) -> Any:
     search_scope = deps.resolve_scope_path(current_user, scope_path)
-    query = select(ProgramEvent).where(text('CAST(path AS ltree) <@ CAST(:scope_path AS ltree)').bindparams(scope_path=search_scope))
+    query = select(ProgramEvent).where(text('(CAST(path AS ltree) <@ CAST(:scope_path AS ltree) OR CAST(:scope_path AS ltree) <@ CAST(path AS ltree))').bindparams(scope_path=search_scope))
     if program_type or program_domain:
         query = query.join(ProgramType, ProgramType.id == ProgramEvent.program_type_id)
         if program_domain:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from time import time
 from typing import Any
 
-from ..backend import BackendClientError, format_public_person_code, split_scope_path
+from ..backend import BackendClientError, format_public_person_code, format_scope_display_id, split_scope_path
 from ..backend.config import get_backend_config
 from ..mock_data import STORE
 from .api_client import get_api_client
@@ -47,7 +47,7 @@ def _normalize_worker(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _normalize_user(row: dict[str, Any]) -> dict[str, Any]:
+def _normalize_user(row: dict[str, Any], location_map: dict[str, str] | None = None) -> dict[str, Any]:
     roles_source = row.get("roles") or []
     roles = [str(role.get("role_name") or "") for role in roles_source if role.get("role_name")]
     role_ids = [int(role["id"]) for role in roles_source if role.get("id") is not None]
@@ -55,12 +55,20 @@ def _normalize_user(row: dict[str, Any]) -> dict[str, Any]:
     path = str(row.get("path") or "")
     scope_bits = split_scope_path(path)
     state_value = str(row.get("state") or scope_bits.get("state_id") or "")
+    loc_id = str(row.get("location_id") or "")
+    loc_name = str(row.get("location_name") or (location_map.get(loc_id) if location_map else "") or row.get("location") or "")
+    if not loc_name or (len(loc_name) == 36 and loc_name.count("-") == 4):
+        loc_name = format_scope_display_id(path) if path else "General Scope"
+    public_code = format_public_person_code(state_value, row.get("phone"))
     return {
         "account_id": str(row.get("user_id") or ""),
-        "public_code": format_public_person_code(state_value, row.get("phone")),
+        "user_id": str(row.get("user_id") or ""),
+        "public_code": public_code,
         "name": str(row.get("name") or "Unknown user"),
         "phone": str(row.get("phone") or ""),
-        "location": str(row.get("location_id") or ""),
+        "location": loc_name,
+        "location_id": loc_id,
+        "location_display": loc_name,
         "roles": roles or ["No role assigned"],
         "role_ids": role_ids,
         "approval_status": str(row.get("approval_status") or ""),
@@ -775,7 +783,9 @@ async def _list_user_accounts(request, ctx, *, search: str = "", approval: str =
     scope_path = await PeopleService.effective_scope_path(request, ctx)
     client = async_client(get_api_client())
     access_token = AuthService.get_access_token(request)
-    rows = [_normalize_user(row) for row in await client.list_users(access_token, scope_path=scope_path)]
+    loc_rows = await PeopleService.list_locations(request, ctx)
+    loc_map = {row["location_id"]: (row.get("location_name") or row["location_id"]) for row in loc_rows}
+    rows = [_normalize_user(row, location_map=loc_map) for row in await client.list_users(access_token, scope_path=scope_path)]
     if search:
         term = search.lower().strip()
         rows = [row for row in rows if term in row["name"].lower() or term in row["phone"].lower() or term in row["email"].lower() or any(term in role.lower() for role in row["roles"])]
@@ -793,7 +803,9 @@ async def _get_user(request, account_id: str) -> dict[str, Any] | None:
     client = async_client(get_api_client())
     access_token = AuthService.get_access_token(request)
     detail = await client.get_user_details(access_token, account_id)
-    row = _normalize_user(detail)
+    loc_rows = await maybe_await(client.list_locations(access_token))
+    loc_map = {row.get("location_id", ""): (row.get("location_name") or row.get("location_id", "")) for row in loc_rows}
+    row = _normalize_user(detail, location_map=loc_map)
     worker = detail.get("worker") or {}
     row["worker"] = _normalize_worker(worker) if worker else None
     return row
