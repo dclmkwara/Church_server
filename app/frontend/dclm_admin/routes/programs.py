@@ -109,7 +109,7 @@ async def _program_summary(request: Request, ctx, *, oob: bool = False) -> Div:
     cards = [
         Div(
             stat_card(title, value, note, icon, tone),
-            cls="col-12 col-md-6 col-xl",
+            cls="col-6 col-sm-4 col-xl",
         )
         for title, value, note, icon, tone in cards_data
     ]

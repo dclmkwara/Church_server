@@ -1757,7 +1757,13 @@ ul.admin-nav-pills::-webkit-scrollbar {
   }
 
   .page-intro__title {
-    font-size: clamp(1.7rem, 8vw, 2.1rem);
+    font-size: 1.05rem;
+  }
+
+  /* Stat cards: 2 across on phones */
+  .counts-stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-3);
   }
 
   .metric-card,
@@ -1811,6 +1817,16 @@ ul.admin-nav-pills::-webkit-scrollbar {
 }
 
 @media (max-width: 575.98px) {
+  .metric-card__inner {
+    gap: 0.5rem;
+  }
+
+  .metric-icon-wrap {
+    width: 2rem !important;
+    height: 2rem !important;
+    font-size: 0.95rem;
+  }
+
   .container-fluid {
     padding-left: 0.8rem !important;
     padding-right: 0.8rem !important;
@@ -1850,7 +1866,7 @@ ul.admin-nav-pills::-webkit-scrollbar {
   }
 
   .metric-value {
-    font-size: var(--fs-display-sm);
+    font-size: 1.2rem;
   }
 
   .chartjs-center-value {

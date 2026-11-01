@@ -117,7 +117,7 @@ async def test_program_summary_cards_and_service():
         xml = to_xml(rendered)
 
         assert 'id="program-summary-cards"' in xml
-        assert "col-12 col-md-6 col-xl" in xml
+        assert "col-6 col-sm-4 col-xl" in xml
         assert "Domains" in xml
         assert "Types" in xml
         assert "Events" in xml
