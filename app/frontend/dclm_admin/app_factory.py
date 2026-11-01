@@ -46,7 +46,7 @@ async def _auth_redirect_handler(request: Request, exc: _AuthRedirectRequired) -
     return RedirectResponse(exc.location, status_code=303)
 
 async def _backend_client_error_handler(request: Request, exc: BackendClientError) -> Response:
-    if exc.status_code in (401, 403) or any(k in str(exc).lower() for k in ("unauthorized", "validate credentials", "expired", "not authenticated")):
+    if exc.status_code in (401, 403) or any(k in str(exc).lower() for k in ("unauthorized", "validate credentials", "expired", "not authenticated", "session required", "backend session", "token")):
         login_path = await AuthService.login_redirect_path(request)
         if request.headers.get("HX-Request"):
             resp = Response(status_code=200, headers={"HX-Redirect": login_path})
@@ -165,7 +165,7 @@ class BackendAuthMiddleware(BaseHTTPMiddleware):
         try:
             response = await call_next(request)
         except BackendClientError as exc:
-            if exc.status_code in (401, 403) or any(k in str(exc).lower() for k in ("unauthorized", "validate credentials", "expired", "not authenticated")):
+            if exc.status_code in (401, 403) or any(k in str(exc).lower() for k in ("unauthorized", "validate credentials", "expired", "not authenticated", "session required", "backend session", "token")):
                 login_path = await AuthService.login_redirect_path(request)
                 if request.headers.get("HX-Request"):
                     resp = Response(status_code=200, headers={"HX-Redirect": login_path})

@@ -1061,19 +1061,25 @@ def register_program_routes(app) -> None:
         campaign_status: str = "",
     ):
         ctx = build_context(request)
-        return await _programs_workspace(
-            request,
-            ctx,
-            event_search=event_search,
-            domain_id=domain_id,
-            type_id=type_id,
-            status=status,
-            location=location,
-            types_domain_id=types_domain_id,
-            campaign_domain_id=campaign_domain_id,
-            campaign_event_mode=campaign_event_mode,
-            campaign_status=campaign_status,
-        )
+        try:
+            return await _programs_workspace(
+                request,
+                ctx,
+                event_search=event_search,
+                domain_id=domain_id,
+                type_id=type_id,
+                status=status,
+                location=location,
+                types_domain_id=types_domain_id,
+                campaign_domain_id=campaign_domain_id,
+                campaign_event_mode=campaign_event_mode,
+                campaign_status=campaign_status,
+            )
+        except BackendClientError as exc:
+            login_path = await AuthService.login_redirect_path(request)
+            if request.headers.get("HX-Request"):
+                return Response(status_code=200, headers={"HX-Redirect": login_path})
+            return RedirectResponse(login_path, status_code=303)
 
     @app.get("/church-data/programs/types/list")
     async def types_list(request: Request, types_domain_id: str = ""):
