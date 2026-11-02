@@ -10,7 +10,8 @@ from .api_client import get_api_client
 from .async_compat import async_client, dual_mode_class, maybe_await
 from .auth_service import AuthService
 from .request_cache import request_cached
-from .ttl_cache import ttl_cached
+from .ttl_cache import invalidate_ttl_prefix, ttl_cached
+from .pagination import fetch_all_pages
 
 
 def _sort_key(row: dict[str, Any]) -> tuple[str, str]:
@@ -269,13 +270,12 @@ class PeopleService:
             client = async_client(get_api_client())
             access_token = AuthService.get_access_token(request)
             try:
-                source = (
-                    await client.list_pending_workers(access_token, scope_path=scope_path)
-                    if approval == "pending_verification"
-                    else await client.list_workers(access_token, scope_path=scope_path)
-                )
+                if approval == "pending_verification":
+                    source = await fetch_all_pages(lambda skip, limit: client.list_pending_workers(access_token, scope_path=scope_path, skip=skip, limit=limit))
+                else:
+                    source = await fetch_all_pages(lambda skip, limit: client.list_workers(access_token, scope_path=scope_path, skip=skip, limit=limit), page_size=100)
             except BackendClientError:
-                return []
+                raise
             return [_normalize_worker(row) for row in source]
 
         rows = await request_cached(request, ("people", "workers", scope_path, approval), load_rows)
@@ -298,57 +298,18 @@ class PeopleService:
         return sorted(rows, key=_sort_key)
 
     @staticmethod
-    async def list_users(request, worker_id: str) -> dict[str, Any] | None:
-        if await PeopleService.use_mock(request):
-            row = STORE.get_worker(worker_id)
-            return _with_public_code(row) if row else None
-        client = async_client(get_api_client())
-        access_token = AuthService.get_access_token(request)
-        async def load_worker() -> dict[str, Any]:
-            row = await maybe_await(ttl_cached(
-                ("people", "worker", worker_id),
-                60.0,
-                lambda: client.get_worker(access_token, worker_id),
-            ))
-            return _normalize_worker(row)
-
-        return await request_cached(request, ("people", "worker", worker_id), load_worker)
-
-    @staticmethod
-    async def list_pending_workers(request, ctx, *, search: str = "", approval: str = "", status: str = "") -> list[dict[str, Any]]:
+    async def list_users(request, ctx, *, search: str = "", approval: str = "", status: str = "") -> list[dict[str, Any]]:
         if await PeopleService.use_mock(request):
             return [_with_public_code(row) for row in STORE.list_users(ctx.current_scope_path, search=search, approval=approval, status=status)]
-        scope_path = await PeopleService.effective_scope_path(request, ctx)
-
-        async def load_rows() -> list[dict[str, Any]]:
-            client = async_client(get_api_client())
-            access_token = AuthService.get_access_token(request)
-            try:
-                rows = await client.list_users(access_token, scope_path=scope_path)
-            except BackendClientError:
-                return []
-            return [_normalize_user(row) for row in rows]
-
-        rows = await request_cached(request, ("people", "users", scope_path), load_rows)
-        if search:
-            term = search.lower().strip()
-            rows = [
-                row
-                for row in rows
-                if term in row["name"].lower()
-                or term in row["location"].lower()
-                or any(term in role.lower() for role in row["roles"])
-                or term in row.get("public_code", "").lower()
-                or term in row["phone"].lower()
-            ]
-        if approval:
-            rows = [row for row in rows if row["approval_status"] == approval]
-        if status:
-            rows = [row for row in rows if row["status"] == status]
-        return sorted(rows, key=_sort_key)
+        return await _list_user_accounts(request, ctx, search=search, approval=approval, status=status)
 
     @staticmethod
-    async def list_pending_users(request, account_id: str) -> dict[str, Any] | None:
+    async def get_worker(request, worker_id: str) -> dict[str, Any] | None:
+        return await _get_worker_by_id(request, worker_id)
+
+    @staticmethod
+    @staticmethod
+    async def get_user(request, account_id: str) -> dict[str, Any] | None:
         if await PeopleService.use_mock(request):
             row = STORE.get_user(account_id)
             return _with_public_code(row) if row else None
@@ -369,7 +330,7 @@ class PeopleService:
         return await request_cached(request, ("people", "user", account_id), load_user)
 
     @staticmethod
-    async def get_worker(request, ctx, worker_id: str) -> dict[str, Any] | None:
+    async def get_user_by_worker(request, ctx, worker_id: str) -> dict[str, Any] | None:
         if await PeopleService.use_mock(request):
             row = STORE.get_user_by_worker(worker_id)
             return _with_public_code(row) if row else None
@@ -380,7 +341,7 @@ class PeopleService:
         return next((row for row in rows if row.get("worker_id") == worker_id), None)
 
     @staticmethod
-    async def get_user_details(request, ctx, *, search: str = "", status: str = "", appointed_role: str = "") -> list[dict[str, Any]]:
+    async def list_official_appointments(request, ctx, *, search: str = "", status: str = "", appointed_role: str = "") -> list[dict[str, Any]]:
         if await PeopleService.use_mock(request):
             return STORE.list_official_appointments(
                 ctx.current_scope_path,
@@ -413,7 +374,7 @@ class PeopleService:
         return sorted(rows, key=lambda row: (row["appointment_date"], row["worker_name"].lower()), reverse=True)
 
     @staticmethod
-    async def list_members(request, ctx) -> dict[str, int]:
+    async def official_appointment_summary(request, ctx) -> dict[str, int]:
         if await PeopleService.use_mock(request):
             return STORE.official_appointment_summary(ctx.current_scope_path)
         rows = await PeopleService.list_official_appointments(request, ctx)
@@ -426,7 +387,7 @@ class PeopleService:
         }
 
     @staticmethod
-    async def list_locations(request, appointment_id: str) -> dict[str, Any] | None:
+    async def get_official_appointment(request, appointment_id: str) -> dict[str, Any] | None:
         if await PeopleService.use_mock(request):
             return STORE.get_official_appointment(appointment_id)
         client = async_client(get_api_client())
@@ -442,7 +403,7 @@ class PeopleService:
         return await request_cached(request, ("people", "official_appointment", appointment_id), load_appointment)
 
     @staticmethod
-    async def list_official_appointments(request, payload: dict[str, Any]) -> dict[str, Any] | None:
+    async def create_official_appointment(request, payload: dict[str, Any]) -> dict[str, Any] | None:
         if await PeopleService.use_mock(request):
             return None
         client = async_client(get_api_client())
@@ -451,7 +412,7 @@ class PeopleService:
         return _normalize_official_appointment(result)
 
     @staticmethod
-    async def get_official_appointment(request, appointment_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+    async def update_official_appointment(request, appointment_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
         if await PeopleService.use_mock(request):
             return None
         client = async_client(get_api_client())
@@ -460,13 +421,14 @@ class PeopleService:
         return _normalize_official_appointment(result)
 
     @staticmethod
-    async def approve_user(request, appointment_id: str, note: str | None = None) -> dict[str, Any] | None:
+    async def approve_user(request, account_id: str) -> dict[str, Any] | None:
         if await PeopleService.use_mock(request):
             return None
         client = async_client(get_api_client())
         access_token = AuthService.get_access_token(request)
-        result = await client.revoke_official_appointment(access_token, appointment_id, note)
-        return _normalize_official_appointment(result)
+        result = await client.approve_user(access_token, account_id)
+        invalidate_ttl_prefix(("people", "users"))
+        return _normalize_user(result)
 
     @staticmethod
     async def reject_user(request, account_id: str, reason: str | None = None) -> dict[str, Any] | None:
@@ -474,118 +436,61 @@ class PeopleService:
             return None
         client = async_client(get_api_client())
         access_token = AuthService.get_access_token(request)
-        result = await client.deactivate_user(access_token, account_id, reason)
+        result = await client.reject_user(access_token, account_id, reason or "Rejected by administrator")
+        invalidate_ttl_prefix(("people", "users"))
         return _normalize_user(result)
 
     @staticmethod
-    async def deactivate_user(request, account_id: str) -> dict[str, Any] | None:
+    async def deactivate_user(request, account_id: str, reason: str | None = None) -> dict[str, Any] | None:
+        if await PeopleService.use_mock(request):
+            return None
+        client = async_client(get_api_client())
+        access_token = AuthService.get_access_token(request)
+        result = await client.deactivate_user(access_token, account_id, reason)
+        invalidate_ttl_prefix(("people", "users"))
+        return _normalize_user(result)
+
+    @staticmethod
+    async def reactivate_user(request, account_id: str) -> dict[str, Any] | None:
         if await PeopleService.use_mock(request):
             return None
         client = async_client(get_api_client())
         access_token = AuthService.get_access_token(request)
         result = await client.reactivate_user(access_token, account_id)
+        invalidate_ttl_prefix(("people", "users"))
         return _normalize_user(result)
 
     @staticmethod
-    async def reactivate_user(request) -> list[dict[str, Any]]:
+    async def approve_worker(request, worker_id: str) -> dict[str, Any] | None:
         if await PeopleService.use_mock(request):
-            return []
+            return STORE.approve_worker(worker_id, actor_name="Administrator")
         client = async_client(get_api_client())
         access_token = AuthService.get_access_token(request)
-        rows = await request_cached(
-            request,
-            ("people", "assignable_roles"),
-            lambda: ttl_cached(
-                ("people", "assignable_roles"),
-                60.0,
-                lambda: client.list_available_roles(access_token),
-            ),
-        )
-        return sorted([_normalize_role(row) for row in rows], key=lambda row: str(row["role_name"]).lower())
+        result = await client.approve_worker(access_token, worker_id)
+        invalidate_ttl_prefix(("people", "workers"))
+        return _normalize_worker(result)
 
     @staticmethod
-    async def approve_worker(request, ctx) -> list[dict[str, Any]]:
+    async def reject_worker(request, worker_id: str, reason: str = "Rejected by administrator") -> dict[str, Any] | None:
         if await PeopleService.use_mock(request):
-            return [
-                {
-                    "location_id": str(row.get("location_id") or row.get("location") or ""),
-                    "location_name": str(row.get("location") or row.get("location_id") or ""),
-                    "path": str(row.get("path") or ""),
-                    "group_id": "",
-                    "church_type": row.get("church_type", ""),
-                }
-                for row in STORE.visible_locations(ctx.current_scope_path)
-            ]
-        scope_path = await PeopleService.effective_scope_path(request, ctx)
-
-        async def load_rows() -> list[dict[str, Any]]:
-            client = async_client(get_api_client())
-            access_token = AuthService.get_access_token(request)
-            try:
-                rows = await maybe_await(ttl_cached(
-                    ("people", "locations"),
-                    60.0,
-                    lambda: client.list_locations(access_token),
-                ))
-                return [_normalize_location(row) for row in rows]
-            except BackendClientError:
-                return _fallback_locations(ctx, await PeopleService.list_workers(request, ctx))
-
-        rows = await request_cached(request, ("people", "locations"), load_rows)
-        filtered = [row for row in rows if not scope_path or row["path"].startswith(scope_path)]
-        return sorted(filtered, key=lambda row: (row["location_name"].lower(), row["location_id"]))
-
-    @staticmethod
-    async def reject_worker(request, location_id: str) -> dict[str, Any] | None:
-        if await PeopleService.use_mock(request):
-            visible = next((row for row in STORE.visible_locations("") if row["location_id"] == location_id), None)
-            if visible is None:
-                return None
-            return {
-                "location_id": visible["location_id"],
-                "location_name": visible["location"],
-                "church_type": visible.get("church_type", ""),
-                "group_id": "",
-                "group_name": visible.get("group", ""),
-                "region_id": "",
-                "region_name": visible.get("region", ""),
-                "state_id": "",
-                "state_name": visible.get("state", ""),
-            }
+            return STORE.reject_worker(worker_id, actor_name="Administrator", reason=reason)
         client = async_client(get_api_client())
         access_token = AuthService.get_access_token(request)
-        async def load_details() -> dict[str, Any]:
-            row = await maybe_await(ttl_cached(
-                ("people", "location_details", location_id),
-                120.0,
-                lambda: client.get_location_details(access_token, location_id),
-            ))
-            return _normalize_location_details(row)
-
-        return await request_cached(request, ("people", "location_details", location_id), load_details)
+        result = await client.reject_worker(access_token, worker_id, reason)
+        invalidate_ttl_prefix(("people", "workers"))
+        return _normalize_worker(result)
 
     @staticmethod
-    async def create_worker(request, *, location_id: str | None = None) -> list[dict[str, Any]]:
+    async def create_worker(request, payload: dict[str, Any]) -> dict[str, Any] | None:
         if await PeopleService.use_mock(request):
-            return []
+            return None
         client = async_client(get_api_client())
         access_token = AuthService.get_access_token(request)
-        async def load_rows() -> list[dict[str, Any]]:
-            try:
-                rows = await maybe_await(ttl_cached(
-                    ("people", "fellowships", location_id or ""),
-                    45.0,
-                    lambda: client.list_fellowships(access_token, location_id=location_id, limit=500),
-                ))
-                return [_normalize_fellowship(row) for row in rows]
-            except BackendClientError:
-                return []
-
-        rows = await request_cached(request, ("people", "fellowships", location_id or ""), load_rows)
-        return sorted(rows, key=lambda row: (row["name"].lower(), row["location"].lower()))
-
+        result = await client.create_worker(access_token, payload)
+        invalidate_ttl_prefix(("people", "workers"))
+        return _normalize_worker(result)
     @staticmethod
-    async def create_user(request, ctx, *, search: str = "", location_id: str = "", status: str = "", fellowship_id: str = "") -> list[dict[str, Any]]:
+    async def list_members_legacy(request, ctx, *, search: str = "", location_id: str = "", status: str = "", fellowship_id: str = "") -> list[dict[str, Any]]:
         if await PeopleService.use_mock(request):
             rows = STORE.list_church_members(
                 ctx.current_scope_path,
@@ -630,7 +535,11 @@ class PeopleService:
         return sorted(rows, key=lambda row: (row["name"].lower(), row["location"].lower()))
 
     @staticmethod
-    async def create_member(request, ctx) -> dict[str, int]:
+    async def list_members(request, ctx, *, search: str = "", location_id: str = "", status: str = "", fellowship_id: str = "") -> list[dict[str, Any]]:
+        return await _list_members(request, ctx, search=search, location_id=location_id, status=status, fellowship_id=fellowship_id)
+
+    @staticmethod
+    async def member_summary(request, ctx) -> dict[str, int]:
         if await PeopleService.use_mock(request):
             return STORE.church_member_summary(ctx.current_scope_path)
         rows = await PeopleService.list_members(request, ctx)
@@ -640,6 +549,29 @@ class PeopleService:
             "active": sum(1 for row in rows if row["status"] == "active"),
             "fellowships": len(represented),
         }
+
+    @staticmethod
+    async def create_member(request, payload: dict[str, Any]) -> dict[str, Any] | None:
+        if await PeopleService.use_mock(request):
+            return None
+        client = async_client(get_api_client())
+        access_token = AuthService.get_access_token(request)
+        row = await client.create_member(access_token, payload)
+        fellowship_lookup = {item["fellowship_id"]: item for item in await PeopleService.list_fellowships(request, location_id=str(row.get("location_id") or "") or None)}
+        return _normalize_member(row, fellowship_lookup)
+
+    @staticmethod
+    @staticmethod
+    async def create_official_appointment(request, payload: dict[str, Any]) -> dict[str, Any] | None:
+        return await _create_official_appointment(request, payload)
+
+    @staticmethod
+    async def update_official_appointment(request, appointment_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+        return await _update_official_appointment(request, appointment_id, payload)
+
+    @staticmethod
+    async def revoke_official_appointment(request, appointment_id: str, note: str | None = None) -> dict[str, Any] | None:
+        return await _revoke_official_appointment(request, appointment_id, note)
 
     @staticmethod
     async def list_available_roles(request, member_id: str) -> dict[str, Any] | None:
@@ -661,17 +593,21 @@ class PeopleService:
         return await request_cached(request, ("people", "member", member_id), load_member)
 
     @staticmethod
-    async def list_rbac_roles(request, payload: dict[str, Any]) -> dict[str, Any] | None:
+    async def get_member(request, member_id: str) -> dict[str, Any] | None:
         if await PeopleService.use_mock(request):
-            return None
+            return STORE.get_church_member(member_id)
         client = async_client(get_api_client())
         access_token = AuthService.get_access_token(request)
-        row = await client.create_member(access_token, payload)
+        row = await client.get_member(access_token, member_id)
         fellowship_lookup = {item["fellowship_id"]: item for item in await PeopleService.list_fellowships(request, location_id=str(row.get("location_id") or "") or None)}
         return _normalize_member(row, fellowship_lookup)
 
     @staticmethod
-    async def get_rbac_role(request, payload: dict[str, Any]) -> dict[str, Any] | None:
+    async def get_official_appointment(request, appointment_id: str) -> dict[str, Any] | None:
+        return await _get_official_appointment(request, appointment_id)
+
+    @staticmethod
+    async def create_worker(request, payload: dict[str, Any]) -> dict[str, Any] | None:
         if await PeopleService.use_mock(request):
             return None
         client = async_client(get_api_client())
@@ -698,25 +634,25 @@ class PeopleService:
         return _normalize_user(result)
 
     @staticmethod
-    async def assign_roles(request, account_id: str) -> dict[str, Any] | None:
+    async def approve_official_appointment(request, appointment_id: str, note: str | None = None) -> dict[str, Any] | None:
         if await PeopleService.use_mock(request):
             return None
         client = async_client(get_api_client())
         access_token = AuthService.get_access_token(request)
-        result = await client.approve_user(access_token, account_id)
-        return _normalize_user(result)
+        result = await client.revoke_official_appointment(access_token, appointment_id, note)
+        return _normalize_official_appointment(result)
 
     @staticmethod
-    async def create_official_appointment(request, account_id: str, reason: str) -> dict[str, Any] | None:
+    async def reject_official_appointment(request, account_id: str, reason: str) -> dict[str, Any] | None:
         if await PeopleService.use_mock(request):
             return None
         client = async_client(get_api_client())
         access_token = AuthService.get_access_token(request)
-        result = await client.reject_user(access_token, account_id, reason)
+        result = await client.deactivate_user(access_token, account_id, reason)
         return _normalize_user(result)
 
     @staticmethod
-    async def update_official_appointment(request, worker_id: str) -> dict[str, Any] | None:
+    async def approve_worker_legacy(request, worker_id: str) -> dict[str, Any] | None:
         if not await PeopleService.live_enabled(request):
             return None
         client = async_client(get_api_client())
@@ -725,7 +661,7 @@ class PeopleService:
         return _normalize_worker(result)
 
     @staticmethod
-    async def revoke_official_appointment(request, worker_id: str, reason: str) -> dict[str, Any] | None:
+    async def reject_worker_legacy(request, worker_id: str, reason: str) -> dict[str, Any] | None:
         if not await PeopleService.live_enabled(request):
             return None
         client = async_client(get_api_client())
@@ -785,7 +721,8 @@ async def _list_user_accounts(request, ctx, *, search: str = "", approval: str =
     access_token = AuthService.get_access_token(request)
     loc_rows = await PeopleService.list_locations(request, ctx)
     loc_map = {row["location_id"]: (row.get("location_name") or row["location_id"]) for row in loc_rows}
-    rows = [_normalize_user(row, location_map=loc_map) for row in await client.list_users(access_token, scope_path=scope_path)]
+    source = await fetch_all_pages(lambda skip, limit: client.list_users(access_token, scope_path=scope_path, skip=skip, limit=limit), page_size=100)
+    rows = [_normalize_user(row, location_map=loc_map) for row in source]
     if search:
         term = search.lower().strip()
         rows = [row for row in rows if term in row["name"].lower() or term in row["phone"].lower() or term in row["email"].lower() or any(term in role.lower() for role in row["roles"])]
@@ -843,9 +780,10 @@ async def _list_locations(request, ctx) -> list[dict[str, Any]]:
     client = async_client(get_api_client())
     access_token = AuthService.get_access_token(request)
     try:
-        rows = [_normalize_location(row) for row in await client.list_locations(access_token)]
+        source = await fetch_all_pages(lambda skip, limit: client.list_locations(access_token, skip=skip, limit=limit))
+        rows = [_normalize_location(row) for row in source]
     except BackendClientError:
-        rows = _fallback_locations(ctx, await PeopleService.list_workers(request, ctx))
+        raise
     filtered = [row for row in rows if not scope_path or row["path"].startswith(scope_path)]
     return sorted(filtered, key=lambda row: (row["location_name"].lower(), row["location_id"]))
 
@@ -856,9 +794,10 @@ async def _list_fellowships(request, *, location_id: str | None = None) -> list[
     client = async_client(get_api_client())
     access_token = AuthService.get_access_token(request)
     try:
-        rows = [_normalize_fellowship(row) for row in await client.list_fellowships(access_token, location_id=location_id, limit=500)]
+        source = await fetch_all_pages(lambda skip, limit: client.list_fellowships(access_token, location_id=location_id, skip=skip, limit=limit))
+        rows = [_normalize_fellowship(row) for row in source]
     except BackendClientError:
-        return []
+        raise
     return sorted(rows, key=lambda row: (row["name"].lower(), row["location"].lower()))
 
 
@@ -872,7 +811,7 @@ async def _list_members(request, ctx, *, search: str = "", location_id: str = ""
     fellowship_lookup = {row["fellowship_id"]: row for row in fellowships}
     rows = [
         _normalize_member(row, fellowship_lookup)
-        for row in await client.list_members(access_token, scope_path=scope_path, location_id=location_id or None, limit=500)
+        for row in await fetch_all_pages(lambda skip, limit: client.list_members(access_token, scope_path=scope_path, location_id=location_id or None, skip=skip, limit=limit))
     ]
     if search:
         term = search.lower().strip()
@@ -965,9 +904,18 @@ PeopleService.list_assignable_roles = staticmethod(_list_assignable_roles)
 PeopleService.update_user_roles = staticmethod(_update_user_roles)
 PeopleService.get_worker = staticmethod(_get_worker_by_id)
 PeopleService.list_users = staticmethod(_list_user_accounts)
-PeopleService.get_user = staticmethod(_get_user)
+PeopleService.get_user = staticmethod(PeopleService.get_user)
 PeopleService.get_user_by_worker = staticmethod(_get_user_by_worker)
-PeopleService.create_user = staticmethod(_create_user_account)
+PeopleService.create_user_account = staticmethod(_create_user_account)
+PeopleService.create_worker = staticmethod(PeopleService.create_worker)
+PeopleService.approve_user = staticmethod(PeopleService.approve_user)
+PeopleService.reject_user = staticmethod(PeopleService.reject_user)
+PeopleService.deactivate_user = staticmethod(PeopleService.deactivate_user)
+PeopleService.reactivate_user = staticmethod(PeopleService.reactivate_user)
+PeopleService.approve_worker = staticmethod(PeopleService.approve_worker)
+PeopleService.reject_worker = staticmethod(PeopleService.reject_worker)
+PeopleService.update_user_roles = staticmethod(_update_user_roles)
+PeopleService.create_member = staticmethod(PeopleService.create_member)
 PeopleService.list_locations = staticmethod(_list_locations)
 PeopleService.list_fellowships = staticmethod(_list_fellowships)
 PeopleService.list_members = staticmethod(_list_members)

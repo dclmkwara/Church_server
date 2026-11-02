@@ -3,18 +3,20 @@ Sync Routes.
 
 Handles batch synchronization from offline clients.
 """
-from typing import Any, List, Dict
+from typing import Any, List, Dict, Tuple
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Body, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import and_, or_, select, func, text
-from datetime import datetime
+from sqlalchemy import and_, or_, select, func, tuple_
+from datetime import datetime, timezone
+import logging
 
 from app.api import deps
 from app.models.location import Fellowship
 from app.models.user import User
 from app.schemas.sync import SyncBatchRequest, SyncBatchResponse, SyncResult
+from app.db.filters import scope_filter
 
 # Import CRUD modules
 from app.crud.crud_counts import count as crud_count
@@ -28,11 +30,15 @@ from app.crud.crud_fellowship_activities import (
 )
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 MAX_SYNC_BATCH_RECORDS = 500
 
 
 def _parse_iso_datetime(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _sync_batch_size(batch: SyncBatchRequest) -> int:
@@ -81,14 +87,14 @@ async def _ensure_sync_item_in_scope(
             scope_cache[cache_key] = True
 
 
-def _scope_filter(scope_path: str):
-    return text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
+def _scope_filter(model: Any, scope_path: str):
+    return scope_filter(model.path, scope_path)
 
 
 def _changed_since_filter(model: Any, since_dt: datetime, scope_path: str):
     return and_(
         or_(model.created_at > since_dt, model.last_modify > since_dt),
-        _scope_filter(scope_path),
+        _scope_filter(model, scope_path),
     )
 
 
@@ -98,14 +104,38 @@ async def _fetch_changes(
     since_dt: datetime,
     scope_path: str,
     limit: int,
-) -> List[Any]:
+    *,
+    as_of: datetime,
+    position: Dict[str, str] | None = None,
+) -> Tuple[List[Any], bool, Dict[str, str] | None]:
+    changed_at = func.coalesce(model.last_modify, model.created_at)
+    conditions = [
+        or_(model.created_at > since_dt, model.last_modify > since_dt),
+        changed_at <= as_of,
+        _scope_filter(model, scope_path),
+    ]
+    if position:
+        try:
+            cursor_time = _parse_iso_datetime(position["changed_at"])
+            cursor_id = UUID(position["id"])
+        except (KeyError, ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="Invalid incremental sync cursor")
+        conditions.append(tuple_(changed_at, model.id) > tuple_(cursor_time, cursor_id))
     result = await db.execute(
         select(model)
-        .where(_changed_since_filter(model, since_dt, scope_path))
-        .order_by(model.last_modify.asc(), model.created_at.asc())
-        .limit(limit)
+        .where(*conditions)
+        .order_by(changed_at.asc(), model.id.asc())
+        .limit(limit + 1)
     )
-    return result.scalars().all()
+    rows = result.scalars().all()
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    next_position = None
+    if rows:
+        last = rows[-1]
+        stamp = last.last_modify or last.created_at
+        next_position = {"changed_at": stamp.isoformat(), "id": str(last.id)}
+    return rows, has_more, next_position
 
 
 def _sync_payload(obj: Any, **extra: Any) -> Dict[str, Any]:
@@ -132,7 +162,7 @@ async def _client_id_conflicts(
         func.count(model.id).label("count")
     ).where(
         model.client_id.isnot(None),
-        text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
+        _scope_filter(model, scope_path)
     ).group_by(model.client_id).having(func.count(model.id) > 1).limit(limit)
     result = await db.execute(query)
     conflicts = []
@@ -142,37 +172,6 @@ async def _client_id_conflicts(
             "model": model_key,
             "kind": "client_id",
             "client_id": str(row.client_id),
-            "count": row.count,
-        })
-    return conflicts
-
-
-async def _counts_key_conflicts(
-    db: AsyncSession,
-    scope_path: str,
-    limit: int = 50,
-) -> List[Dict[str, Any]]:
-    from app.models.counts import Count
-    query = select(
-        Count.location_id,
-        Count.date,
-        Count.event_id,
-        func.count(Count.id).label("count"),
-    ).where(
-        text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
-    ).group_by(Count.location_id, Count.date, Count.event_id).having(func.count(Count.id) > 1).limit(limit)
-    result = await db.execute(query)
-    conflicts = []
-    for row in result:
-        event_id = row.event_id if row.event_id else "none"
-        key = f"{row.location_id}|{row.date.isoformat()}|{event_id}"
-        conflicts.append({
-            "conflict_id": f"counts:key:{key}",
-            "model": "counts",
-            "kind": "key",
-            "location_id": row.location_id,
-            "date": str(row.date),
-            "event_id": str(row.event_id) if row.event_id else None,
             "count": row.count,
         })
     return conflicts
@@ -191,7 +190,7 @@ async def _offerings_key_conflicts(
         Offering.fund_type,
         func.count(Offering.id).label("count"),
     ).where(
-        text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
+        _scope_filter(Offering, scope_path)
     ).group_by(Offering.location_id, Offering.date, Offering.event_id, Offering.fund_type).having(func.count(Offering.id) > 1).limit(limit)
     result = await db.execute(query)
     conflicts = []
@@ -222,7 +221,7 @@ async def _attendance_key_conflicts(
         WorkerAttendance.event_id,
         func.count(WorkerAttendance.id).label("count"),
     ).where(
-        text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
+        _scope_filter(WorkerAttendance, scope_path)
     ).group_by(WorkerAttendance.worker_id, WorkerAttendance.event_id).having(func.count(WorkerAttendance.id) > 1).limit(limit)
     result = await db.execute(query)
     conflicts = []
@@ -256,28 +255,27 @@ async def process_sync_list(
         try:
             await _ensure_sync_item_in_scope(db, current_user, item, scope_cache)
 
-            # Most CRUD create methods we built accept `obj_in` and `user_id` (except some maybe)
-            # We need to standardize or handle exceptions.
-            # Our CRUD methods currently check client_id and return existing if found.
-            
-            # Note: Not all CRUD create methods accept user_id (e.g. FellowshipMember).
-            # We'll need a quick check or try/except, or standardizing.
-            
-            # Simple check for user_id requirement based on model type? 
-            # Or just pass it as kwarg and let python ignore if not needed? No, that throws generic error.
-            # Let's check signatures or just try/except.
-            
-            # Inspecting our code:
-            # - Count, Offering, Record, WorkerAttendance, FellowshipAttendance, FellowshipOffering: accept user_id
-            # - FellowshipMember: DOES NOT accept user_id (only obj_in)
-            
-            # Warning: This is a bit fragile. 
-            
-            if crud_module == crud_fellowship_member:
-                 db_obj = await crud_module.create(db, obj_in=item)
-            else:
-                 # Standard logic with user_id
-                 db_obj = await crud_module.create(db, obj_in=item, user_id=current_user.user_id)
+            client_id = getattr(item, "client_id", None)
+            if client_id is not None:
+                existing = (await db.execute(
+                    select(crud_module.model).where(crud_module.model.client_id == client_id)
+                )).scalars().first()
+                if existing is not None:
+                    deps.ensure_path_in_scope(
+                        current_user, getattr(existing, "path", None),
+                        detail="Existing sync record is outside your scope",
+                    )
+                    result.duplicates += 1
+                    results_list.append({
+                        "client_id": str(client_id),
+                        "id": str(existing.id),
+                        "status": "duplicate",
+                    })
+                    continue
+
+            db_obj = await crud_module.create(
+                db, obj_in=item, user_id=current_user.user_id
+            )
             
             # How do we know if it was a duplicate?
             # Our CRUD returns the object. If created_at is old, it's a duplicate.
@@ -285,24 +283,36 @@ async def process_sync_list(
             # Ideally CRUD should return a tuple or we check `client_id` manually?
             # For now, let's just mark as synced.
             
-            status = "synced"
-            # If we wanted to distinguish, we'd need CRUD changes.
-            # For MVP Sync, just returning the ID is sufficient for client to map.
+            is_duplicate = bool(getattr(db_obj, "_was_duplicate_submission", False))
+            if is_duplicate:
+                deps.ensure_path_in_scope(
+                    current_user, getattr(db_obj, "path", None),
+                    detail="Existing sync record is outside your scope",
+                )
+                result.duplicates += 1
+            else:
+                result.synced += 1
             
             results_list.append({
                 "client_id": item.client_id,
                 "id": db_obj.id,
-                "status": status
+                "status": "duplicate" if is_duplicate else "synced",
+                "outcome": "duplicate" if is_duplicate else "created",
             })
-            result.synced += 1
             
         except Exception as e:
             await db.rollback()
             result.errors += 1
+            if isinstance(e, HTTPException):
+                error_detail = str(e.detail)
+            else:
+                logger.exception("Sync item processing failed")
+                error_detail = "Unable to process this sync item"
             results_list.append({
                 "client_id": getattr(item, 'client_id', None),
-                "error": str(e),
-                "status": "error"
+                "error": error_detail,
+                "status": "error",
+                "outcome": "error",
             })
             
     result.details = results_list
@@ -362,36 +372,76 @@ async def get_incremental_changes(
     db: AsyncSession = Depends(deps.get_db),
     since: str = Query(..., description="ISO timestamp of last sync"),
     limit: int = Query(500, ge=1, le=1000, description="Maximum changed records per bucket"),
+    cursor: str | None = Query(None, description="Opaque continuation cursor returned by the previous page"),
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Dict[str, Any]:
     """
     Get incremental changes since a specific timestamp.
-    
-    Returns only records created/updated after the given timestamp,
-    filtered by user's scope. More efficient than full batch sync.
+
+    On the first request omit `cursor`. If `sync.has_more` is true, send the
+    returned `sync.next_cursor` with the same `since` value until the server
+    returns `has_more=false`; then start the next cycle with `sync.next_since`.
+    The existing resource arrays remain unchanged for older clients.
     """
-    from datetime import datetime
     from app.models.counts import Count
     from app.models.offerings import Offering
     from app.models.records import Record
     from app.models.attendance import WorkerAttendance
     from app.models.fellowship_activities import FellowshipMember, FellowshipAttendance, FellowshipOffering
     
+    import json
     try:
-        since_dt = datetime.fromisoformat(since.replace('Z', '+00:00'))
+        since_dt = _parse_iso_datetime(since)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid timestamp format. Use ISO 8601.")
+
+    try:
+        cursor_data = json.loads(cursor) if cursor else {}
+        if not isinstance(cursor_data, dict):
+            raise ValueError
+        as_of = _parse_iso_datetime(cursor_data.get("as_of", datetime.now(timezone.utc).isoformat()))
+        positions = cursor_data.get("positions", {})
+        if not isinstance(positions, dict):
+            raise ValueError
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid incremental sync cursor")
     
     # Get user's scope path
-    scope_path = str(current_user.path)
+    scope_path = deps.effective_scope_path(current_user)
     
-    counts = await _fetch_changes(db, Count, since_dt, scope_path, limit)
-    offerings = await _fetch_changes(db, Offering, since_dt, scope_path, limit)
-    records = await _fetch_changes(db, Record, since_dt, scope_path, limit)
-    worker_attendance = await _fetch_changes(db, WorkerAttendance, since_dt, scope_path, limit)
-    fellowship_members = await _fetch_changes(db, FellowshipMember, since_dt, scope_path, limit)
-    fellowship_attendance = await _fetch_changes(db, FellowshipAttendance, since_dt, scope_path, limit)
-    fellowship_offerings = await _fetch_changes(db, FellowshipOffering, since_dt, scope_path, limit)
+    bucket_models = {
+        "counts": Count,
+        "offerings": Offering,
+        "records": Record,
+        "worker_attendance": WorkerAttendance,
+        "fellowship_members": FellowshipMember,
+        "fellowship_attendance": FellowshipAttendance,
+        "fellowship_offerings": FellowshipOffering,
+    }
+    pages = {}
+    next_positions = {}
+    has_more = {}
+    for name, model in bucket_models.items():
+        rows, more, next_position = await _fetch_changes(
+            db, model, since_dt, scope_path, limit,
+            as_of=as_of,
+            position=positions.get(name),
+        )
+        pages[name] = rows
+        has_more[name] = more
+        if next_position:
+            next_positions[name] = next_position
+        elif name in positions:
+            next_positions[name] = positions[name]
+
+    counts = pages["counts"]
+    offerings = pages["offerings"]
+    records = pages["records"]
+    worker_attendance = pages["worker_attendance"]
+    fellowship_members = pages["fellowship_members"]
+    fellowship_attendance = pages["fellowship_attendance"]
+    fellowship_offerings = pages["fellowship_offerings"]
+    more_changes = any(has_more.values())
     
     return {
         "since": since,
@@ -423,6 +473,16 @@ async def get_incremental_changes(
             + len(fellowship_attendance)
             + len(fellowship_offerings)
         ),
+        "sync": {
+            "has_more": more_changes,
+            "as_of": as_of.isoformat(),
+            "next_since": None if more_changes else as_of.isoformat(),
+            "next_cursor": json.dumps({"as_of": as_of.isoformat(), "positions": next_positions}) if more_changes else None,
+            "buckets": {
+                name: {"has_more": has_more[name], "count": len(pages[name])}
+                for name in bucket_models
+            },
+        },
     }
 
 
@@ -441,7 +501,7 @@ async def get_sync_conflicts(
     Returns records that have potential conflicts (e.g., duplicate client_ids,
     same date/location combinations, etc.)
     """
-    scope_path = str(current_user.path)
+    scope_path = deps.effective_scope_path(current_user)
     conflicts: List[Dict[str, Any]] = []
 
     from app.models.counts import Count
@@ -458,7 +518,6 @@ async def get_sync_conflicts(
     conflicts.extend(await _client_id_conflicts(db, FellowshipAttendance, "fellowship_attendance", scope_path))
     conflicts.extend(await _client_id_conflicts(db, FellowshipOffering, "fellowship_offerings", scope_path))
 
-    conflicts.extend(await _counts_key_conflicts(db, scope_path))
     conflicts.extend(await _offerings_key_conflicts(db, scope_path))
     conflicts.extend(await _attendance_key_conflicts(db, scope_path))
 
@@ -489,7 +548,7 @@ async def resolve_conflict(
         raise HTTPException(status_code=400, detail="Invalid conflict_id format")
     model_key, kind, key = parts
 
-    scope_path = str(current_user.path)
+    scope_path = deps.effective_scope_path(current_user)
 
     model_map = {
         "counts": "Count",
@@ -528,7 +587,7 @@ async def resolve_conflict(
             raise HTTPException(status_code=400, detail="Invalid client_id format")
         query = select(model).where(
             model.client_id == client_uuid,
-            text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
+            _scope_filter(model, scope_path)
         )
         records = (await db.execute(query)).scalars().all()
         if len(records) < 2:
@@ -546,20 +605,15 @@ async def resolve_conflict(
             raise HTTPException(status_code=400, detail="Invalid resolution strategy")
     elif kind == "key":
         if model_key == "counts":
-            parts_key = key.split("|")
-            if len(parts_key) != 3:
-                raise HTTPException(status_code=400, detail="Invalid key format")
-            location_id, date_str, event_id = parts_key
-            date_val = _parse_iso_datetime(date_str)
-            event_val = None if event_id in ("none", "null", "") else UUID(event_id)
-            query = select(Count).where(
-                Count.location_id == location_id,
-                Count.date == date_val,
-                Count.event_id == event_val,
-                text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path),
+            raise HTTPException(
+                status_code=400,
+                detail="Population counts are independent submissions; event/location is not a duplicate key",
             )
-            records = (await db.execute(query)).scalars().all()
         elif model_key == "offerings":
+            raise HTTPException(
+                status_code=409,
+                detail="Offering key collisions require financial reconciliation; automatic resolution is disabled",
+            )
             parts_key = key.split("|")
             if len(parts_key) != 4:
                 raise HTTPException(status_code=400, detail="Invalid key format")
@@ -571,10 +625,14 @@ async def resolve_conflict(
                 Offering.date == date_val,
                 Offering.event_id == event_val,
                 Offering.fund_type == fund_type,
-                text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path),
+                _scope_filter(Offering, scope_path),
             )
             records = (await db.execute(query)).scalars().all()
         elif model_key == "worker_attendance":
+            raise HTTPException(
+                status_code=409,
+                detail="Attendance key collisions require review; automatic resolution is disabled",
+            )
             parts_key = key.split("|")
             if len(parts_key) != 2:
                 raise HTTPException(status_code=400, detail="Invalid key format")
@@ -582,7 +640,7 @@ async def resolve_conflict(
             query = select(WorkerAttendance).where(
                 WorkerAttendance.worker_id == UUID(worker_id),
                 WorkerAttendance.event_id == UUID(event_id),
-                text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path),
+                _scope_filter(WorkerAttendance, scope_path),
             )
             records = (await db.execute(query)).scalars().all()
         else:
@@ -600,17 +658,7 @@ async def resolve_conflict(
         elif resolution == "merge":
             keep = records[-1]
             delete = [r for r in records if r is not keep]
-            if model_key == "counts":
-                keep.adult_male = sum(r.adult_male or 0 for r in records)
-                keep.adult_female = sum(r.adult_female or 0 for r in records)
-                keep.youth_male = sum(r.youth_male or 0 for r in records)
-                keep.youth_female = sum(r.youth_female or 0 for r in records)
-                keep.boys = sum(r.boys or 0 for r in records)
-                keep.girls = sum(r.girls or 0 for r in records)
-                keep.calculate_total()
-                keep.operation = "UPDATE"
-                keep.last_modify = datetime.utcnow()
-            elif model_key == "offerings":
+            if model_key == "offerings":
                 keep.amount = sum(r.amount or 0 for r in records)
                 keep.operation = "UPDATE"
                 keep.last_modify = datetime.utcnow()

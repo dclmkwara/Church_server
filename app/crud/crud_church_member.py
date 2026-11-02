@@ -3,11 +3,13 @@ CRUD operations for ChurchMember.
 """
 from typing import List, Optional
 from uuid import UUID
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.church_member import ChurchMember
 from app.schemas.church_member import ChurchMemberCreate, ChurchMemberUpdate
+from app.db.filters import scope_filter
+from app.crud.idempotency import commit_idempotent, mark_existing_submission
 
 
 async def create(
@@ -18,15 +20,29 @@ async def create(
     path: str,
 ) -> ChurchMember:
     """Register a new church member."""
+    if obj_in.client_id:
+        existing = (await db.execute(
+            select(ChurchMember).where(ChurchMember.client_id == obj_in.client_id)
+        )).scalars().first()
+        if existing:
+            return mark_existing_submission(existing)
     db_obj = ChurchMember(
         **obj_in.model_dump(exclude_unset=True),
         path=path,
         entered_by_id=user_id,
     )
     db.add(db_obj)
-    await db.commit()
-    await db.refresh(db_obj)
-    return db_obj
+    return await commit_idempotent(
+        db,
+        db_obj,
+        client_id=obj_in.client_id,
+        lookup=lambda session, client_id: _get_by_client_id(session, client_id),
+    )
+
+
+async def _get_by_client_id(db: AsyncSession, client_id: UUID) -> Optional[ChurchMember]:
+    result = await db.execute(select(ChurchMember).where(ChurchMember.client_id == client_id))
+    return result.scalars().first()
 
 
 async def get(db: AsyncSession, *, member_id: UUID) -> Optional[ChurchMember]:
@@ -65,7 +81,7 @@ async def get_multi_by_scope(
 ) -> List[ChurchMember]:
     """Get members within a hierarchy scope."""
     query = select(ChurchMember).where(
-        text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path),
+        scope_filter(ChurchMember.path, scope_path),
         ChurchMember.is_deleted == False,
     ).offset(skip).limit(limit).order_by(ChurchMember.name)
     result = await db.execute(query)

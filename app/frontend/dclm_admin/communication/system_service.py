@@ -602,7 +602,7 @@ class SystemService:
         return _normalize_public_prayer(row)
 
     @staticmethod
-    async def delete_media_gallery(request) -> list[dict[str, Any]]:
+    async def list_rbac_roles(request) -> list[dict[str, Any]]:
         if not await SystemService.live_enabled(request):
             return []
         client = async_client(get_api_client())
@@ -620,7 +620,7 @@ class SystemService:
         return sorted(rows, key=lambda row: (-row["level"], row["name"].lower()))
 
     @staticmethod
-    async def list_media_items(request, *, family: str = "all", search: str = "") -> list[dict[str, Any]]:
+    async def list_rbac_permissions(request, *, family: str = "all", search: str = "") -> list[dict[str, Any]]:
         if not await SystemService.live_enabled(request):
             return []
         client = async_client(get_api_client())
@@ -650,7 +650,7 @@ class SystemService:
         return sorted(rows, key=lambda row: (row["family"], row["key"]))
 
     @staticmethod
-    async def create_media_item(request, role_id: str) -> dict[str, Any] | None:
+    async def get_rbac_role(request, role_id: str) -> dict[str, Any] | None:
         if not await SystemService.live_enabled(request):
             return None
         client = async_client(get_api_client())
@@ -658,7 +658,7 @@ class SystemService:
         return _normalize_rbac_role(await client.get_rbac_role(access_token, role_id))
 
     @staticmethod
-    async def delete_media_item(request, permission_id: str) -> dict[str, Any] | None:
+    async def get_rbac_permission(request, permission_id: str) -> dict[str, Any] | None:
         if not await SystemService.live_enabled(request):
             return None
         client = async_client(get_api_client())
@@ -666,7 +666,7 @@ class SystemService:
         return _normalize_rbac_permission(await client.get_rbac_permission(access_token, permission_id))
 
     @staticmethod
-    async def list_rbac_roles_system(request, role_id: str, *, description: str, permission_ids: list[int]) -> dict[str, Any] | None:
+    async def update_rbac_role(request, role_id: str, *, description: str, permission_ids: list[int]) -> dict[str, Any] | None:
         if not await SystemService.live_enabled(request):
             return None
         client = async_client(get_api_client())
@@ -969,11 +969,6 @@ SystemService.sync_conflict_summary = staticmethod(_system_sync_conflict_summary
 SystemService.sync_changes_snapshot = staticmethod(_system_sync_changes_snapshot)
 SystemService.sync_mode_note = staticmethod(_system_sync_mode_note)
 SystemService.resolve_sync_conflict = staticmethod(_system_resolve_sync_conflict)
-SystemService.list_rbac_roles = staticmethod(SystemService.delete_media_gallery)
-SystemService.list_rbac_permissions = staticmethod(SystemService.list_media_items)
-SystemService.get_rbac_role = staticmethod(SystemService.create_media_item)
-SystemService.get_rbac_permission = staticmethod(SystemService.delete_media_item)
-SystemService.update_rbac_role = staticmethod(SystemService.list_rbac_roles_system)
 SystemService.run_utility = staticmethod(_system_run_utility)
 
 

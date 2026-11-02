@@ -2,7 +2,7 @@
 from datetime import date, datetime
 from typing import Optional
 from uuid import UUID
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 class ProgramDomainBase(BaseModel):
     name: str = Field(..., description="Program Domain Name")
@@ -62,7 +62,14 @@ class ProgramCampaignBase(BaseModel):
     publicity_note: Optional[str] = None
 
 class ProgramCampaignCreate(ProgramCampaignBase):
-    pass
+    @model_validator(mode="after")
+    def validate_windows(self):
+        if self.start_date > self.end_date:
+            raise ValueError("start_date must be on or before end_date")
+        if (self.collection_window_start and self.collection_window_end
+                and self.collection_window_start > self.collection_window_end):
+            raise ValueError("collection_window_start must be on or before collection_window_end")
+        return self
 
 class ProgramCampaignUpdate(BaseModel):
     title: Optional[str] = None
@@ -102,7 +109,12 @@ class ProgramEventBase(BaseModel):
     audience_segment: Optional[str] = None
 
 class ProgramEventCreate(ProgramEventBase):
-    pass
+    @model_validator(mode="after")
+    def validate_windows(self):
+        if (self.collection_window_start and self.collection_window_end
+                and self.collection_window_start > self.collection_window_end):
+            raise ValueError("collection_window_start must be on or before collection_window_end")
+        return self
 
 class ProgramEventUpdate(BaseModel):
     program_type_id: Optional[int] = None

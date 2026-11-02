@@ -165,5 +165,15 @@ def register_auth_routes(app) -> None:
     async def logout(request: Request):
         destination = "/login" if get_backend_config().enabled else "/dashboard"
         response = RedirectResponse(destination, status_code=303)
+        refresh_token = AuthService.get_refresh_token(request)
+        if get_backend_config().enabled and refresh_token:
+            try:
+                from ..communication.api_client import get_api_client
+
+                await get_api_client().logout(refresh_token)
+            except BackendClientError:
+                # Always clear browser credentials even when the backend is
+                # unavailable; revocation is best effort during logout.
+                pass
         await AuthService.clear_identity(response)
         return response

@@ -4,6 +4,7 @@ import asyncio
 import datetime
 
 from fasthtml.common import Div, Form, H3, H4, Input, Option, P, Select, Textarea
+from decimal import Decimal, InvalidOperation
 from starlette.requests import Request
 
 from faststrap import Badge, Button, PlaceholderCard, Spinner, TabPane, Tabs
@@ -11,10 +12,12 @@ from faststrap import Badge, Button, PlaceholderCard, Spinner, TabPane, Tabs
 from ..backend import BackendClientError
 from ..auth_context import build_context
 from ..communication import ChurchDataService, PeopleService
+from ..communication.count_aggregation import aggregate_count_submissions
 from ..components.feedback import simple_toast_response
-from ..components.shell import hidden_context_inputs, primary_button, shell_layout
+from ..components.shell import hidden_context_inputs, shell_layout
 from ..components.ui import empty_state, filter_field, format_naira, page_intro, page_stack, responsive_table, section_card, stat_card, status_badge
-from ..mock_data import STORE, TODAY, UNITS
+from ..mock_data import STORE, UNITS
+from ..source_intake import reject_source_submission, source_intake_notice
 
 
 FUND_TYPES = ["offering", "tithe"]
@@ -100,12 +103,14 @@ async def _method_badge(method: str):
 
 
 async def _count_mobile_card(ctx, row):
+    sections = row.get("sections") or [row.get("usher_section") or row.get("assignment_id") or "Not specified"]
     return Div(
         H3(row["event_title"], cls="h6 fw-semibold mb-1"),
         P(f"{row['location']} - {row['date']}", cls="text-muted mb-3"),
+        P(f"Sections: {', '.join(sections)}", cls="small text-muted mb-2"),
         Div(
             Div(P("Total", cls="small text-muted mb-1"), P(str(row["total"]), cls="fw-semibold mb-0")),
-            Div(P("Submitted by", cls="small text-muted mb-1"), P(row["submitted_by"], cls="fw-semibold mb-0")),
+            Div(P("Usher submissions", cls="small text-muted mb-1"), P(str(row.get("submissions", 1)), cls="fw-semibold mb-0")),
             cls="drawer-two-up mb-3",
         ),
         Button(
@@ -124,15 +129,15 @@ async def _count_mobile_card(ctx, row):
 
 
 async def _count_stats(request: Request, ctx, *, oob: bool = False) -> Div:
-    summary = await ChurchDataService.count_summary(request, ctx) if await ChurchDataService.live_enabled(request) else STORE.counts_summary(ctx.current_scope_path)
+    summary = await ChurchDataService.count_summary(request, ctx)
     _month = datetime.date.today().strftime("%B")
     _year = datetime.date.today().year
     return _summary_grid(
         [
-            ("Latest total", str(summary["latest_total"]), "Most recent attendance count", "bar-chart"),
-            (f"{_month} total", str(summary["monthly_total"]), f"Total records for {_month}", "calendar3"),
-            ("Locations reporting", str(summary["locations_reporting"]), "Branches that have submitted", "geo-alt"),
-            ("Average record", str(summary["average_total"]), "Typical attendance size", "calculator"),
+            ("Latest service attendance", str(summary["latest_total"]), "Sum of all usher sections for the latest event, date, and location", "bar-chart"),
+            (f"{_month} attendance", str(summary["monthly_total"]), f"Service totals in {_month} after combining usher sections", "calendar3"),
+            ("Locations reporting", str(summary["locations_reporting"]), "Locations with service counts this month", "geo-alt"),
+            ("Average service", str(summary["average_total"]), "Average total per event, date, and location", "calculator"),
         ],
         grid_id="counts-stats",
         grid_cls="counts-stat-grid",
@@ -148,6 +153,7 @@ async def _counts_table(request: Request, ctx, *, location: str = "", event_titl
             attrs["hx_swap_oob"] = "outerHTML:#counts-results"
         return Div(empty_state("bar-chart", "No count records", "No attendance counts are available."), **attrs)
 
+    rows = aggregate_count_submissions(rows)
     desktop_rows = []
     mobile_cards = []
     for row in rows:
@@ -157,7 +163,7 @@ async def _counts_table(request: Request, ctx, *, location: str = "", event_titl
                 row["date"],
                 row["location"],
                 row["total"],
-                row["submitted_by"],
+                Div(P(f"{row['submissions']} usher section(s)", cls="fw-semibold mb-1"), P(", ".join(row["sections"]) or "Section not specified", cls="small text-muted mb-0")),
                 Button(
                     "View",
                     variant="outline-primary",
@@ -172,7 +178,7 @@ async def _counts_table(request: Request, ctx, *, location: str = "", event_titl
         )
         mobile_cards.append(await _count_mobile_card(ctx, row))
     return responsive_table(
-        ["Event", "Date", "Location", "Total", "Submitted By", "Action"],
+        ["Event", "Date", "Location", "Combined Total", "Sections", "Action"],
         desktop_rows,
         mobile_cards,
         results_id="counts-results",
@@ -185,6 +191,7 @@ async def _finance_mobile_card(ctx, row):
         Div(
             H3(format_naira(row["amount"]), cls="h5 fw-semibold mb-1"),
             _fund_badge(row["fund_type"]),
+            status_badge(row.get("status") or "unknown"),
             cls="d-flex align-items-start justify-content-between gap-3 mb-2",
         ),
         P(f"{row['event_title']} - {row['location']}", cls="text-muted mb-2"),
@@ -210,10 +217,10 @@ async def _finance_stats(request: Request, ctx, *, oob: bool = False) -> Div:
     _year = datetime.date.today().year
     return _summary_grid(
         [
-            ("This month", format_naira(summary["month_total"]), f"Recorded finance entries for {_month}", "cash-coin"),
-            ("This year", format_naira(summary["year_total"]), f"All entries in {_year}", "piggy-bank"),
-            ("Average entry", format_naira(summary["average_entry"]), "Helps pastors spot unusual values", "calculator"),
-            ("Entry count", str(summary["entries"]), "Offerings and tithes combined", "receipt"),
+            ("Approved this month", format_naira(summary["month_total"]), f"{_month} {_year} · {summary.get('month_approved_count', 0)} entries · event date", "cash-coin"),
+            ("Approved this year", format_naira(summary["year_total"]), f"Jan–{_month} {_year} · {summary.get('approved_count', 0)} entries", "piggy-bank"),
+            ("Awaiting review", format_naira(summary.get("pending_total", 0)), f"{summary.get('pending_count', 0)} new · {summary.get('corrected_count', 0)} corrected · excluded from approved totals", "hourglass-split"),
+            ("Rejected", str(summary.get("rejected_count", 0)), "Rejected entries are excluded from approved totals", "x-circle"),
         ],
         grid_id="finance-stats",
         grid_cls="counts-stat-grid",
@@ -240,7 +247,7 @@ async def _finance_table(request: Request, ctx, *, fund_type: str = "", location
                 row["date"],
                 row["event_title"],
                 row["location"],
-                Div(P(format_naira(row["amount"]), cls="fw-semibold mb-1"), _fund_badge(row["fund_type"])),
+                Div(P(format_naira(row["amount"]), cls="fw-semibold mb-1"), _fund_badge(row["fund_type"]), status_badge(row.get("status") or "unknown")),
                 _method_badge(row["method"]),
                 row["submitted_by"],
                 Button(
@@ -257,7 +264,7 @@ async def _finance_table(request: Request, ctx, *, fund_type: str = "", location
         )
         mobile_cards.append(await _finance_mobile_card(ctx, row))
     return responsive_table(
-        ["Date", "Event", "Location", "Amount", "Method", "Entered By", "Action"],
+        ["Event date", "Event", "Location", "Amount / Status", "Method", "Entered By", "Action"],
         desktop_rows,
         mobile_cards,
         results_id="finance-results",
@@ -465,7 +472,7 @@ def register_church_data_routes(app) -> None:
             request,
             ctx,
             title="Program Counts",
-            subtitle="Record and review service attendance.",
+            subtitle="Review service attendance from the data-sourcing app.",
             section_title="Count overview",
             section_note="Recent attendance totals and count records.",
             target_url=ctx.url_for("/church-data/counts/content", location=location, event_title=event_title),
@@ -475,16 +482,8 @@ def register_church_data_routes(app) -> None:
             request_path=request.url.path,
             active_key="counts",
             title="Program Counts",
-            subtitle="Service attendance records.",
-            primary_action=primary_button(
-                "Submit Count",
-                href="#",
-                data_bs_toggle="offcanvas",
-                data_bs_target="#form-drawer",
-                hx_get=ctx.url_for("/church-data/counts/new"),
-                hx_target="#form-drawer-body",
-                hx_swap="innerHTML",
-            ),
+            subtitle="Combined service attendance records.",
+            primary_action=None,
             content=body,
             show_shell_intro=False,
         )
@@ -529,6 +528,7 @@ def register_church_data_routes(app) -> None:
         return section_card(
             "Count overview",
             "Recent attendance totals and count records.",
+            source_intake_notice("Service attendance counts"),
             stats_div,
             filter_form,
             table_div,
@@ -541,116 +541,50 @@ def register_church_data_routes(app) -> None:
 
     @app.get("/church-data/counts/new")
     async def new_count_form(request: Request):
-        ctx = build_context(request)
-        events = await _scope_events(request, ctx)
-        locations = await _scope_locations(request, ctx)
-        return Form(
-            *hidden_context_inputs(ctx),
-            H3("Submit count", cls="h5 fw-semibold"),
-            P("Enter the attendance figures for the selected event.", cls="text-muted"),
-            Div(
-                Select(
-                    Option("Select event", value=""),
-                    *[Option(row["label"], value=row["value"]) for row in events],
-                    name="event_title",
-                    cls="form-select",
-                    required=True,
-                ),
-                Select(
-                    Option("Select location", value=""),
-                    *[Option(row["label"], value=row["value"]) for row in locations],
-                    name="location",
-                    cls="form-select",
-                    required=True,
-                ),
-                cls="drawer-two-up mb-3",
-            ),
-            Div(
-                Input(type="date", name="date", value=TODAY.isoformat(), cls="form-control", required=True),
-                Input(type="text", name="submitted_by", placeholder="Submitted by", cls="form-control", required=not await ChurchDataService.live_enabled(request), disabled=await ChurchDataService.live_enabled(request)),
-                cls="drawer-two-up mb-3",
-            ),
-            Div(
-                Input(type="number", min="0", name="adult_male", placeholder="Adult male", cls="form-control", required=True),
-                Input(type="number", min="0", name="adult_female", placeholder="Adult female", cls="form-control", required=True),
-                cls="drawer-two-up mb-3",
-            ),
-            Div(
-                Input(type="number", min="0", name="youth_male", placeholder="Youth male", cls="form-control", required=True),
-                Input(type="number", min="0", name="youth_female", placeholder="Youth female", cls="form-control", required=True),
-                cls="drawer-two-up mb-3",
-            ),
-            Div(
-                Input(type="number", min="0", name="boys", placeholder="Boys", cls="form-control", required=True),
-                Input(type="number", min="0", name="girls", placeholder="Girls", cls="form-control", required=True),
-                cls="drawer-two-up mb-3",
-            ),
-            Button("Save count", variant="success", size="md", type="submit", cls="w-100"),
-            hx_post=ctx.url_for("/church-data/counts/create"),
-            hx_target="#form-drawer-body",
-            hx_swap="innerHTML",
-        )
+        return source_intake_notice("Service attendance counts")
 
     @app.post("/church-data/counts/create")
     async def create_count(request: Request):
-        form = await request.form()
-        data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
-        try:
-            row = (
-                await ChurchDataService.create_count(
-                    request,
-                    {
-                        "event_id": data.get("event_title", "").strip(),
-                        "location_id": data.get("location", "").strip(),
-                        "adult_male": int(data.get("adult_male", "0") or 0),
-                        "adult_female": int(data.get("adult_female", "0") or 0),
-                        "youth_male": int(data.get("youth_male", "0") or 0),
-                        "youth_female": int(data.get("youth_female", "0") or 0),
-                        "boys": int(data.get("boys", "0") or 0),
-                        "girls": int(data.get("girls", "0") or 0),
-                        "note": data.get("note", "").strip() or None,
-                    },
-                )
-                if await ChurchDataService.live_enabled(request)
-                else STORE.add_count(data)
-            )
-        except BackendClientError as exc:
-            return P(f"Could not submit this count right now: {exc}", cls="text-muted")
-        if row is None:
-            return P("Count could not be submitted.", cls="text-muted")
-        return simple_toast_response(
-            content=(
-                Div(
-                    H3("Count submitted", cls="h5 fw-semibold"),
-                    P(f"{row['event_title']} for {row['location']} now shows a total of {row['total']}.", cls="mb-0"),
-                ),
-                await _counts_table(request, ctx, oob=True),
-                _count_stats(request, ctx, oob=True),
-            ),
-            message="Count submitted successfully.",
-            variant="success",
-        )
+        return reject_source_submission()
 
     @app.get("/church-data/counts/{count_id}/drawer")
     async def count_drawer(request: Request, count_id: str):
         ctx = build_context(request)
-        row = next((entry for entry in await ChurchDataService.list_counts(request, ctx) if entry["count_id"] == count_id), None) if await ChurchDataService.live_enabled(request) else STORE.get_count(count_id)
+        source_rows = await ChurchDataService.list_counts(request, ctx) if await ChurchDataService.live_enabled(request) else STORE.list_counts(ctx.current_scope_path)
+        row = next((entry for entry in source_rows if entry["count_id"] == count_id), None)
         if row is None:
             return P("Count not found.", cls="text-muted")
+        service_rows = [
+            entry for entry in source_rows
+            if (entry["event_id"], entry["date"], entry["location_id"])
+            == (row["event_id"], row["date"], row["location_id"])
+        ]
+        category_fields = ("adult_male", "adult_female", "youth_male", "youth_female", "boys", "girls")
+        combined = {field: sum(int(entry.get(field) or 0) for entry in service_rows) for field in category_fields}
         return Div(
             H3(row["event_title"], cls="h5 fw-semibold"),
             P(f"{row['location']} - {row['date']}", cls="text-muted"),
+            P(f"Combined from {len(service_rows)} usher submission(s)", cls="small text-muted"),
             Div(
-                Div(P("Adult male", cls="small text-muted mb-1"), P(str(row["adult_male"]), cls="fw-semibold mb-0")),
-                Div(P("Adult female", cls="small text-muted mb-1"), P(str(row["adult_female"]), cls="fw-semibold mb-0")),
-                Div(P("Youth male", cls="small text-muted mb-1"), P(str(row["youth_male"]), cls="fw-semibold mb-0")),
-                Div(P("Youth female", cls="small text-muted mb-1"), P(str(row["youth_female"]), cls="fw-semibold mb-0")),
-                Div(P("Boys", cls="small text-muted mb-1"), P(str(row["boys"]), cls="fw-semibold mb-0")),
-                Div(P("Girls", cls="small text-muted mb-1"), P(str(row["girls"]), cls="fw-semibold mb-0")),
+                Div(P("Adult male", cls="small text-muted mb-1"), P(str(combined["adult_male"]), cls="fw-semibold mb-0")),
+                Div(P("Adult female", cls="small text-muted mb-1"), P(str(combined["adult_female"]), cls="fw-semibold mb-0")),
+                Div(P("Youth male", cls="small text-muted mb-1"), P(str(combined["youth_male"]), cls="fw-semibold mb-0")),
+                Div(P("Youth female", cls="small text-muted mb-1"), P(str(combined["youth_female"]), cls="fw-semibold mb-0")),
+                Div(P("Boys", cls="small text-muted mb-1"), P(str(combined["boys"]), cls="fw-semibold mb-0")),
+                Div(P("Girls", cls="small text-muted mb-1"), P(str(combined["girls"]), cls="fw-semibold mb-0")),
                 cls="drawer-meta-grid",
             ),
-            Div(P("Total", cls="small text-muted mb-1"), P(str(row["total"]), cls="display-6 fw-semibold mb-0"), cls="drawer-note-box mt-3"),
+            Div(P("Combined total", cls="small text-muted mb-1"), P(str(sum(combined.values())), cls="display-6 fw-semibold mb-0"), cls="drawer-note-box mt-3"),
+            H4("Submissions", cls="h6 fw-semibold mt-4"),
+            *[
+                Div(
+                    P(f"{entry.get('usher_section') or 'Section not specified'} - {entry.get('submitted_by') or 'Submitter unavailable'}", cls="fw-semibold mb-1"),
+                    P(f"{entry.get('total', 0)} people | Assignment: {entry.get('assignment_id') or 'Not linked'}", cls="small text-muted mb-1"),
+                    P(entry.get("note") or "", cls="small mb-0") if entry.get("note") else "",
+                    cls="border rounded p-3 mb-2",
+                )
+                for entry in service_rows
+            ],
         )
 
     @app.get("/church-data/finance")
@@ -671,15 +605,7 @@ def register_church_data_routes(app) -> None:
             active_key="finance",
             title="Offerings and Tithes",
             subtitle="Offering, tithe, and payment records.",
-            primary_action=primary_button(
-                "Record Entry",
-                href="#",
-                data_bs_toggle="offcanvas",
-                data_bs_target="#form-drawer",
-                hx_get=ctx.url_for("/church-data/finance/new"),
-                hx_target="#form-drawer-body",
-                hx_swap="innerHTML",
-            ),
+            primary_action=None,
             content=body,
             show_shell_intro=False,
         )
@@ -733,6 +659,7 @@ def register_church_data_routes(app) -> None:
         return section_card(
             "Finance overview",
             "Offering, tithe, and payment records.",
+            source_intake_notice("Tithe and offering entries"),
             stats,
             filter_form,
             table,
@@ -745,121 +672,185 @@ def register_church_data_routes(app) -> None:
 
     @app.get("/church-data/finance/new")
     async def new_finance_form(request: Request):
-        ctx = build_context(request)
-        events = await _scope_events(request, ctx)
-        locations = await _scope_locations(request, ctx)
-        return Form(
-            *hidden_context_inputs(ctx),
-            H3("Record finance entry", cls="h5 fw-semibold"),
-            P("Enter the amount, fund type, and payment details.", cls="text-muted"),
-            Div(
-                Select(
-                    Option("Select fund type", value=""),
-                    *[Option(name.title(), value=name) for name in FUND_TYPES],
-                    name="fund_type",
-                    cls="form-select",
-                    required=True,
-                ),
-                Select(
-                    Option("Select payment method", value=""),
-                    *[Option(name, value=name) for name in PAYMENT_METHODS],
-                    name="method",
-                    cls="form-select",
-                    required=True,
-                ),
-                cls="drawer-two-up mb-3",
-            ),
-            Div(
-                Select(
-                    Option("Select event", value=""),
-                    *[Option(row["label"], value=row["value"]) for row in events],
-                    name="event_title",
-                    cls="form-select",
-                    required=True,
-                ),
-                Select(
-                    Option("Select location", value=""),
-                    *[Option(row["label"], value=row["value"]) for row in locations],
-                    name="location",
-                    cls="form-select",
-                    required=True,
-                ),
-                cls="drawer-two-up mb-3",
-            ),
-            Div(
-                Input(type="date", name="date", value=TODAY.isoformat(), cls="form-control", required=True),
-                Input(type="number", min="0", name="amount", placeholder="Amount in naira", cls="form-control", required=True),
-                cls="drawer-two-up mb-3",
-            ),
-            Input(type="text", name="submitted_by", placeholder="Recorded by", cls="form-control mb-3", required=not await ChurchDataService.live_enabled(request), disabled=await ChurchDataService.live_enabled(request)),
-            Textarea(name="notes", placeholder="Optional note for treasury review", cls="form-control mb-3", rows="3"),
-            Button("Save entry", variant="success", size="md", type="submit", cls="w-100"),
-            hx_post=ctx.url_for("/church-data/finance/create"),
-            hx_target="#form-drawer-body",
-            hx_swap="innerHTML",
-        )
+        return source_intake_notice("Tithe and offering entries")
 
     @app.post("/church-data/finance/create")
     async def create_finance(request: Request):
-        form = await request.form()
-        data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
-        try:
-            row = (
-                await ChurchDataService.create_finance(
-                    request,
-                    {
-                        "event_id": data.get("event_title", "").strip(),
-                        "location_id": data.get("location", "").strip(),
-                        "amount": data.get("amount", "").strip(),
-                        "payment_method": PAYMENT_METHOD_VALUES.get(data.get("method", "").strip(), "cash"),
-                        "fund_type": data.get("fund_type", "").strip() or "offering",
-                        "note": data.get("notes", "").strip() or None,
-                    },
-                )
-                if await ChurchDataService.live_enabled(request)
-                else STORE.add_finance(data)
-            )
-        except BackendClientError as exc:
-            return P(f"Could not save this finance entry right now: {exc}", cls="text-muted")
-        if row is None:
-            return P("Finance entry could not be saved.", cls="text-muted")
-        return simple_toast_response(
-            content=(
-                Div(
-                    H3("Finance entry saved", cls="h5 fw-semibold"),
-                    P(
-                        f"{row['fund_type'].title()} for {row['location']} was recorded as {format_naira(row['amount'])}.",
-                        cls="mb-0",
-                    ),
-                ),
-                await _finance_table(request, ctx, oob=True),
-                _finance_stats(request, ctx, oob=True),
-            ),
-            message="Finance entry saved.",
-            variant="success",
-        )
+        return reject_source_submission()
 
-    @app.get("/church-data/finance/{entry_id}/drawer")
-    async def finance_drawer(request: Request, entry_id: str):
+    async def _render_finance_drawer(request: Request, entry_id: str):
         ctx = build_context(request)
-        row = next((entry for entry in await ChurchDataService.list_finance(request, ctx) if entry["entry_id"] == entry_id), None) if await ChurchDataService.live_enabled(request) else STORE.get_finance_entry(entry_id)
+        try:
+            row = await ChurchDataService.get_finance_entry(request, ctx, entry_id)
+        except BackendClientError as exc:
+            return P(f"Could not load this finance entry right now: {exc}", cls="text-muted")
         if row is None:
             return P("Finance entry not found.", cls="text-muted")
+        audit = []
+        if ctx.has_permission("offerings:read") and await ChurchDataService.live_enabled(request):
+            try:
+                audit = await ChurchDataService.finance_audit_history(request, entry_id)
+            except BackendClientError as exc:
+                return P(f"Finance details loaded, but audit history could not be loaded: {exc}", cls="text-muted")
+        review_form = ""
+        if row.get("status") in {"pending", "corrected"} and ctx.has_permission("offerings:review"):
+            review_form = Form(
+                P("A rejection requires a reason of at least 20 characters. The submitter cannot review their own entry.", cls="small text-muted"),
+                Textarea(name="note", placeholder="Review note (required for rejection)", cls="form-control", rows="3"),
+                Div(
+                    Button("Approve", type="submit", name="decision", value="approved", variant="success", size="md"),
+                    Button("Reject", type="submit", name="decision", value="rejected", variant="outline-danger", size="md"),
+                    cls="d-flex gap-2 mt-2",
+                ),
+                hx_post=ctx.url_for(f"/church-data/finance/{entry_id}/review"),
+                hx_target="#detail-drawer-body",
+                hx_swap="innerHTML",
+                cls="border rounded p-3 mt-3",
+            )
+        correction_form = ""
+        if row.get("status") != "reversed" and ctx.has_permission("offerings:update"):
+            correction_form = Form(
+                H4("Correct entry", cls="h6 fw-semibold"),
+                P("Corrections require a reason and return the entry to pending review.", cls="small text-muted"),
+                Input(type="number", name="amount", min="0.01", step="0.01", placeholder=f"Amount (current {row['amount']:.2f})", cls="form-control mb-2"),
+                Select(Option("Keep fund type", value=""), Option("Offering", value="offering"), Option("Tithe", value="tithe"), cls="form-select mb-2", name="fund_type"),
+                Select(Option("Keep payment method", value=""), *[Option(label, value=value) for value, label in (("cash", "Cash"), ("bank_transfer", "Bank Transfer"), ("mobile_money", "Mobile Money"), ("check", "Check"))], cls="form-select mb-2", name="payment_method"),
+                Textarea(name="note", placeholder="Replacement submitter note (optional)", cls="form-control mb-2", rows="2"),
+                Textarea(name="reason", placeholder="Correction reason (minimum 20 characters)", cls="form-control", rows="3", required=True),
+                Button("Submit correction", type="submit", variant="outline-primary", size="md", cls="mt-2"),
+                hx_post=ctx.url_for(f"/church-data/finance/{entry_id}/correction"),
+                hx_target="#detail-drawer-body",
+                hx_swap="innerHTML",
+                cls="border rounded p-3 mt-3",
+            )
+        reversal_form = ""
+        if row.get("status") == "approved" and ctx.has_permission("offerings:update"):
+            reversal_form = Form(
+                H4("Reverse approved entry", cls="h6 fw-semibold"),
+                P("Reversal removes this amount from approved totals and is permanently recorded in the audit history. The original entry is retained.", cls="small text-muted"),
+                Textarea(name="reason", placeholder="Reversal reason (minimum 20 characters)", cls="form-control", rows="3", required=True),
+                Button("Reverse entry", type="submit", variant="outline-danger", size="md", cls="mt-2"),
+                hx_post=ctx.url_for(f"/church-data/finance/{entry_id}/reverse"),
+                hx_target="#detail-drawer-body",
+                hx_swap="innerHTML",
+                cls="border border-danger-subtle rounded p-3 mt-3",
+            )
         return Div(
             H3(row["event_title"], cls="h5 fw-semibold"),
-            P(f"{row['location']} - {row['date']}", cls="text-muted"),
+            P(f"{row['location']} - event date {row.get('entry_date') or row['date']}", cls="text-muted"),
             Div(
                 P(format_naira(row["amount"]), cls="display-6 fw-semibold mb-2"),
-                Div(_fund_badge(row["fund_type"]), _method_badge(row["method"]), cls="d-flex flex-wrap gap-2"),
+                Div(_fund_badge(row["fund_type"]), _method_badge(row["method"]), status_badge(row.get("status") or "unknown"), cls="d-flex flex-wrap gap-2"),
                 cls="drawer-note-box mb-3",
             ),
             Div(
                 Div(P("Entered by", cls="small text-muted mb-1"), P(row["submitted_by"], cls="fw-semibold mb-0")),
-                Div(P("Notes", cls="small text-muted mb-1"), P(row.get("notes") or "No note added.", cls="fw-semibold mb-0")),
+                Div(P("Entry date / created", cls="small text-muted mb-1"), P(f"{row.get('entry_date') or '—'} / {row.get('created_at') or '—'}", cls="fw-semibold mb-0")),
+                Div(P("Reviewed by / at", cls="small text-muted mb-1"), P(f"{row.get('reviewed_by_id') or 'Not reviewed'} / {row.get('reviewed_at') or '—'}", cls="fw-semibold mb-0")),
+                Div(P("Review note", cls="small text-muted mb-1"), P(row.get("review_note") or "No review note.", cls="fw-semibold mb-0")),
+                Div(P("Submitter note", cls="small text-muted mb-1"), P(row.get("notes") or "No note added.", cls="fw-semibold mb-0")),
                 cls="drawer-meta-grid",
             ),
+            review_form,
+            correction_form,
+            reversal_form,
+            Div(
+                H4("Review and correction history", cls="h6 fw-semibold mt-4"),
+                *[
+                    Div(
+                        P(f"{str(item.get('action') or 'action').replace('_', ' ').title()} · {item.get('created_at') or ''}", cls="fw-semibold mb-1"),
+                        P(item.get("reason") or "No reason supplied.", cls="small mb-1"),
+                        P(f"Actor: {item.get('actor_id') or 'Unknown'}", cls="small text-muted mb-0"),
+                        cls="border rounded p-2 mb-2",
+                    )
+                    for item in audit
+                ] or [P("No review or correction history.", cls="small text-muted")],
+            ) if ctx.has_permission("offerings:read") else "",
         )
+
+    @app.get("/church-data/finance/{entry_id}/drawer")
+    async def finance_drawer(request: Request, entry_id: str):
+        return await _render_finance_drawer(request, entry_id)
+
+    @app.post("/church-data/finance/{entry_id}/review")
+    async def finance_review_action(request: Request, entry_id: str):
+        ctx = build_context(request)
+        if not ctx.has_permission("offerings:review"):
+            return P("You do not have permission to review finance entries.", cls="text-danger")
+        form = await request.form()
+        decision = str(form.get("decision") or "")
+        note = str(form.get("note") or "").strip()
+        if decision not in {"approved", "rejected"}:
+            return P("Choose approve or reject.", cls="text-danger")
+        if decision == "rejected" and len(note) < 20:
+            return P("A rejection reason must contain at least 20 characters.", cls="text-danger")
+        try:
+            await ChurchDataService.review_finance(request, entry_id, decision=decision, note=note)
+            drawer = await _render_finance_drawer(request, entry_id)
+            return simple_toast_response(
+                (drawer, await _finance_stats(request, ctx, oob=True), await _finance_table(request, ctx, oob=True)),
+                f"Finance entry {decision}.", title="Finance review saved",
+            )
+        except BackendClientError as exc:
+            return P(f"Finance review was not saved: {exc}", cls="text-danger")
+
+    @app.post("/church-data/finance/{entry_id}/correction")
+    async def finance_correction_action(request: Request, entry_id: str):
+        ctx = build_context(request)
+        if not ctx.has_permission("offerings:update"):
+            return P("You do not have permission to correct finance entries.", cls="text-danger")
+        form = await request.form()
+        reason = str(form.get("reason") or "").strip()
+        if len(reason) < 20:
+            return P("A correction reason must contain at least 20 characters.", cls="text-danger")
+        payload = {"reason": reason}
+        for field in ("fund_type", "payment_method"):
+            value = str(form.get(field) or "").strip()
+            if value:
+                payload[field] = value
+        amount = str(form.get("amount") or "").strip()
+        if amount:
+            try:
+                parsed_amount = Decimal(amount)
+            except InvalidOperation:
+                return P("Enter a valid amount with no more than two decimal places.", cls="text-danger")
+            if parsed_amount <= 0 or parsed_amount.quantize(Decimal("0.01")) != parsed_amount:
+                return P("Enter a positive amount with no more than two decimal places.", cls="text-danger")
+            payload["amount"] = str(parsed_amount)
+        note = str(form.get("note") or "").strip()
+        if note:
+            payload["note"] = note
+        if len(payload) == 1:
+            return P("Change at least one finance field before submitting a correction.", cls="text-danger")
+        try:
+            await ChurchDataService.correct_finance(request, entry_id, payload)
+            drawer = await _render_finance_drawer(request, entry_id)
+            return simple_toast_response(
+                (drawer, await _finance_stats(request, ctx, oob=True), await _finance_table(request, ctx, oob=True)),
+                "The corrected entry is pending review.", title="Finance correction saved", variant="warning",
+            )
+        except BackendClientError as exc:
+            return P(f"Finance correction was not saved: {exc}", cls="text-danger")
+
+    @app.post("/church-data/finance/{entry_id}/reverse")
+    async def finance_reversal_action(request: Request, entry_id: str):
+        ctx = build_context(request)
+        if not ctx.has_permission("offerings:update"):
+            return P("You do not have permission to reverse finance entries.", cls="text-danger")
+        form = await request.form()
+        reason = str(form.get("reason") or "").strip()
+        if len(reason) < 20:
+            return P("A reversal reason must contain at least 20 characters.", cls="text-danger")
+        try:
+            await ChurchDataService.reverse_finance(request, entry_id, reason)
+            drawer = await _render_finance_drawer(request, entry_id)
+            return simple_toast_response(
+                (drawer, await _finance_stats(request, ctx, oob=True), await _finance_table(request, ctx, oob=True)),
+                "The approved amount has been reversed and removed from approved totals.",
+                title="Finance entry reversed", variant="warning",
+            )
+        except BackendClientError as exc:
+            return P(f"Finance reversal was not saved: {exc}", cls="text-danger")
 
     @app.get("/church-data/newcomers")
     async def newcomers_page(request: Request, search: str = "", status: str = "", location: str = "", gender: str = ""):
@@ -879,15 +870,7 @@ def register_church_data_routes(app) -> None:
             active_key="newcomers",
             title="Newcomers and Converts",
             subtitle="Follow-up tracking for people newly attending or newly converted.",
-            primary_action=primary_button(
-                "Add Record",
-                href="#",
-                data_bs_toggle="offcanvas",
-                data_bs_target="#form-drawer",
-                hx_get=ctx.url_for("/church-data/newcomers/new"),
-                hx_target="#form-drawer-body",
-                hx_swap="innerHTML",
-            ),
+            primary_action=None,
             content=body,
             show_shell_intro=False,
         )
@@ -954,6 +937,7 @@ def register_church_data_routes(app) -> None:
         return section_card(
             "Follow-up records",
             "Newcomer and convert records.",
+            source_intake_notice("Newcomer and convert registrations"),
             filter_form,
             workspace,
         )
@@ -965,107 +949,11 @@ def register_church_data_routes(app) -> None:
 
     @app.get("/church-data/newcomers/new")
     async def new_record_form(request: Request):
-        ctx = build_context(request)
-        events = await _scope_events(request, ctx)
-        locations = await _scope_locations(request, ctx)
-        return Form(
-            *hidden_context_inputs(ctx),
-            H3("Add follow-up record", cls="h5 fw-semibold"),
-            P("Add the person and follow-up assignment.", cls="text-muted"),
-            Div(
-                Select(
-                    Option("Select type", value=""),
-                    Option("Newcomer", value="newcomer"),
-                    Option("Convert", value="convert"),
-                    name="record_type",
-                    cls="form-select",
-                    required=True,
-                ),
-                Select(
-                    Option("Select gender", value=""),
-                    *[Option(name, value=name) for name in RECORD_GENDERS],
-                    name="gender",
-                    cls="form-select",
-                    required=True,
-                ),
-                cls="drawer-two-up mb-3",
-            ),
-            Div(
-                Input(type="text", name="name", placeholder="Full name", cls="form-control", required=True),
-                Input(type="text", name="phone", placeholder="Phone number", cls="form-control", required=True),
-                cls="drawer-two-up mb-3",
-            ),
-            Div(
-                Select(
-                    Option("Select service", value=""),
-                    *([Option(row["label"], value=row["value"]) for row in events] if events else [
-                        Option("No services scheduled — schedule one under Programs first", value="", disabled=True)
-                    ]),
-                    name="service",
-                    cls="form-select",
-                    required=True,
-                ),
-                Select(
-                    Option("Select location", value=""),
-                    *[Option(row["label"], value=row["value"]) for row in locations],
-                    name="location",
-                    cls="form-select",
-                    required=True,
-                ),
-                cls="drawer-two-up mb-3",
-            ),
-            Div(
-                Select(
-                    Option("Follow-up status", value=""),
-                    *[Option(name.replace("_", " ").title(), value=name) for name in RECORD_STATUSES],
-                    name="status",
-                    cls="form-select",
-                    required=True,
-                ),
-                Input(type="date", name="date", value=TODAY.isoformat(), cls="form-control", required=True),
-                cls="drawer-two-up mb-3",
-            ),
-            Input(type="text", name="assigned_to", placeholder="Assigned follow-up worker", cls="form-control mb-3", required=True),
-            Textarea(name="notes", placeholder="Pastoral note or follow-up plan", cls="form-control mb-3", rows="3"),
-            Button("Save record", variant="success", size="md", type="submit", cls="w-100"),
-            hx_post=ctx.url_for("/church-data/newcomers/create"),
-            hx_target="#form-drawer-body",
-            hx_swap="innerHTML",
-        )
+        return source_intake_notice("Newcomer and convert registrations")
 
     @app.post("/church-data/newcomers/create")
     async def create_record(request: Request):
-        form = await request.form()
-        data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
-        if await ChurchDataService.live_enabled(request):
-            payload = {
-                "event_id": data["service"],
-                "location_id": data["location"],
-                "record_type": data["record_type"],
-                "name": data["name"],
-                "gender": data["gender"],
-                "phone": data["phone"],
-                "details": {
-                    "assigned_to": data.get("assigned_to", ""),
-                    "follow_up_date": data.get("date", ""),
-                },
-                "note": data.get("notes", ""),
-            }
-            row = await ChurchDataService.create_record(request, payload)
-        else:
-            row = STORE.add_record(data)
-        return simple_toast_response(
-            content=(
-                Div(
-                    H3("Follow-up record saved", cls="h5 fw-semibold"),
-                    P(f"{row['name']} was added to {row['record_type'].replace('_', ' ')} follow-up.", cls="mb-0"),
-                ),
-                _records_workspace(request, ctx, oob=True),
-            ),
-            message="Follow-up record saved.",
-            variant="success",
-        )
+        return reject_source_submission()
 
     @app.get("/church-data/newcomers/{record_id}/drawer")
     async def record_drawer(request: Request, record_id: str):
@@ -1116,15 +1004,7 @@ def register_church_data_routes(app) -> None:
             active_key="attendance",
             title="Worker Attendance",
             subtitle="Record and review worker attendance by service and location.",
-            primary_action=primary_button(
-                "Mark Attendance",
-                href="#",
-                data_bs_toggle="offcanvas",
-                data_bs_target="#form-drawer",
-                hx_get=ctx.url_for("/church-data/attendance/new"),
-                hx_target="#form-drawer-body",
-                hx_swap="innerHTML",
-            ),
+            primary_action=None,
             content=body,
             show_shell_intro=False,
         )
@@ -1195,6 +1075,7 @@ def register_church_data_routes(app) -> None:
         return section_card(
             "Attendance overview",
             "Attendance totals, filters, and records.",
+            source_intake_notice("Worker and leader attendance"),
             stats_div,
             filter_form,
             table_div,
@@ -1213,96 +1094,11 @@ def register_church_data_routes(app) -> None:
 
     @app.get("/church-data/attendance/new")
     async def new_attendance_form(request: Request):
-        ctx = build_context(request)
-        workers = await PeopleService.list_workers(request, ctx) if await ChurchDataService.live_enabled(request) else STORE.list_workers(ctx.current_scope_path)
-        events = await _scope_events(request, ctx)
-        locations = await _scope_locations(request, ctx)
-        return Form(
-            *hidden_context_inputs(ctx),
-            H3("Mark attendance", cls="h5 fw-semibold"),
-            P("Select the event, worker, and attendance status.", cls="text-muted"),
-            Div(
-                Select(
-                    Option("Select event", value=""),
-                    *[Option(row["label"], value=row["value"]) for row in events],
-                    name="event_title",
-                    cls="form-select",
-                    required=True,
-                ),
-                Select(
-                    Option("Select location", value=""),
-                    *[Option(row["label"], value=row["value"]) for row in locations],
-                    name="location",
-                    cls="form-select",
-                    required=True,
-                ),
-                cls="drawer-two-up mb-3",
-            ),
-            Div(
-                Select(
-                    Option("Select worker", value=""),
-                    *[
-                        Option(f"{worker['name']} - {worker.get('unit', 'General')}", value=worker["worker_id"])
-                        for worker in workers
-                    ],
-                    name="worker_id",
-                    cls="form-select",
-                    required=True,
-                ),
-                Select(
-                    Option("Select status", value=""),
-                    *[Option(name.title(), value=name) for name in ATTENDANCE_STATUSES],
-                    name="status",
-                    cls="form-select",
-                    required=True,
-                ),
-                cls="drawer-two-up mb-3",
-            ),
-            (
-                Div(
-                    Input(type="date", name="date", value=TODAY.isoformat(), cls="form-control", required=True),
-                    Input(type="text", name="recorded_by", placeholder="Recorded by", cls="form-control", required=True),
-                    cls="drawer-two-up mb-3",
-                )
-                if not await ChurchDataService.live_enabled(request)
-                else P("Recorded by the signed-in backend user automatically.", cls="small text-muted mb-3")
-            ),
-            Textarea(name="reason", placeholder="Reason or quick note", cls="form-control mb-3", rows="3"),
-            Button("Save attendance", variant="success", size="md", type="submit", cls="w-100"),
-            hx_post=ctx.url_for("/church-data/attendance/create"),
-            hx_target="#form-drawer-body",
-            hx_swap="innerHTML",
-        )
+        return source_intake_notice("Worker and leader attendance")
 
     @app.post("/church-data/attendance/create")
     async def create_attendance(request: Request):
-        form = await request.form()
-        data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
-        if await ChurchDataService.live_enabled(request):
-            payload = {
-                "event_id": data["event_title"],
-                "location_id": data["location"],
-                "worker_id": data["worker_id"],
-                "status": data["status"],
-                "reason": data.get("reason") or None,
-                "note": data.get("reason") or None,
-            }
-            row = await ChurchDataService.create_attendance(request, payload)
-        else:
-            row = STORE.add_attendance(data)
-        return simple_toast_response(
-            content=(
-                Div(
-                    H3("Attendance saved", cls="h5 fw-semibold"),
-                    P(f"{row['worker_name']} was marked {row['status']} for {row['event_title']}.", cls="mb-0"),
-                ),
-                await _attendance_table(request, ctx, oob=True),
-                _attendance_stats(request, ctx, oob=True),
-            ),
-            message="Attendance saved.",
-            variant="success",
-        )
+        return reject_source_submission()
 
     @app.get("/church-data/attendance/{attendance_id}/drawer")
     async def attendance_drawer(request: Request, attendance_id: str):

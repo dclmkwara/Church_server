@@ -2,7 +2,7 @@
 
 ## Overview
 
-The database is **PostgreSQL 16** with the `ltree` extension enabled. All models use **UUID primary keys** (except a few reference tables that use auto-increment integers). All major tables include soft-delete (`is_deleted`) and full timestamps (`created_at`, `updated_at`).
+The application targets **PostgreSQL** and uses the `ltree` extension. This document is a high-level reference, not an authoritative current schema contract: columns and constraints must be verified against `app/models/` and the Alembic migration chain before operational use. UUIDs, soft deletes, timestamps, and idempotency fields are not universal across every table. PostgreSQL RLS policies and table partitioning are not installed.
 
 ---
 
@@ -10,10 +10,10 @@ The database is **PostgreSQL 16** with the `ltree` extension enabled. All models
 
 | Principle | Implementation |
 |---|---|
-| Hierarchical data | `ltree` path columns with GIST indexing on every major table |
-| Soft deletes | `is_deleted BOOLEAN DEFAULT FALSE` on all data tables |
-| Audit trail | `created_at`, `updated_at` on all tables; `entered_by_id` FK on data tables |
-| Idempotent sync | `client_id UUID` on data tables submitted from mobile apps |
+| Hierarchical data | `ltree` path columns on applicable hierarchy and operational models; indexes vary by model |
+| Soft deletes | `is_deleted` is used on selected models, not universally |
+| Audit trail | Timestamp and actor fields vary; this is not a complete system-wide audit log |
+| Idempotent sync | Idempotency keys are implemented on selected submission routes, not every write/table |
 | Flexible metadata | `JSONB` columns for sparse/flexible data (newcomer details, review audits) |
 | No circular FKs | `User` references `Worker`, never the other way around |
 

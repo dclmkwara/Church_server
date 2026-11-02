@@ -52,7 +52,10 @@ async def read_newcomers(
 ) -> Any:
     """List newcomer records with scope filtering."""
     search_scope = deps.resolve_scope_path(current_user, scope_path)
-    records = await crud_record.get_multi_by_scope(db, scope_path=search_scope, skip=skip, limit=limit)
+    records = deps.filter_rows_in_scope(
+        await crud_record.get_multi_by_scope(db, scope_path=search_scope, skip=skip, limit=limit),
+        current_user,
+    )
     return [r for r in records if r.record_type == "newcomer"]
 
 

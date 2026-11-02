@@ -122,7 +122,7 @@ The **Deeper Life Church Management (DCLM) System** is a comprehensive church ma
 
 - **Manage** hierarchical church structure (6 levels: Nation → State → Region → Group → Location → Fellowship)
 - **Track** attendance, offerings, and newcomer records
-- **Support** offline data collection with automatic synchronization
+- **Accept** client-keyed batch submissions; offline device operation and full retry behavior still require verification
 - **Enable** fellowship activities (members, testimonies, prayers)
 - **Provide** real-time analytics and reports
 - **Facilitate** communication between pastors and members
@@ -132,12 +132,12 @@ The **Deeper Life Church Management (DCLM) System** is a comprehensive church ma
 
 ✅ **Hierarchical Organization** - 6-level church structure with ltree-based queries  
 ✅ **Role-Based Access Control** - 9-level score system (Worker → Global Admin)  
-✅ **Offline-First** - Mobile apps work without internet, sync when online  
-✅ **Row-Level Security** - Database-enforced data isolation  
+- **Batch Sync API** - Accepts client-keyed submissions; offline client behavior and conflict recovery still require device-level verification
+- **Application-Level Scope Checks** - Backend queries apply hierarchy filters; PostgreSQL RLS policies are not installed
 ✅ **Media Management** - Photo/video galleries for events  
 ✅ **Public API** - Endpoints for public website integration  
-✅ **Real-Time Analytics** - Population, financial, and attendance insights  
-✅ **Audit Logging** - Complete action history for accountability
+- **Analytics and Reports** - Population, financial, and attendance summaries with materialized-view freshness limits
+- **Audit History** - Some sensitive workflows have audit records; a complete system-wide action history is not established
 
 ---
 
@@ -185,29 +185,21 @@ The **Deeper Life Church Management (DCLM) System** is a comprehensive church ma
 
 ## 🏗️ Architecture Highlights
 
-### Async-First Design
+### Async Database Access
 
-- Non-blocking I/O for 10x+ concurrency
-- asyncpg driver for PostgreSQL
-- Async SQLAlchemy ORM
+- Async SQLAlchemy and asyncpg are used for PostgreSQL access.
+- No benchmark establishes a 10x concurrency or latency improvement; capacity depends on deployment and workload.
 
 ### ltree Hierarchy
 
-- O(log n) ancestor/descendant queries
-- GIST indexing for performance
+- Ancestor/descendant path filtering
+- Index use and query performance depend on plans and have not been benchmarked
 - Path-based scoping (e.g., `org.234.kw.iln.ile.001`)
 
-### Row-Level Security (RLS)
+### Database Security and Scaling Status
 
-- Database-enforced access control
-- Scope injection via session variables
-- Cannot be bypassed at application level
-
-### Table Partitioning
-
-- Yearly partitions for `counts`, `offerings`, `attendance`
-- Automatic partition creation
-- Improved query performance on historical data
+- The application applies role and hierarchy scope checks. PostgreSQL row-level security policies are not present, so database-level isolation is not established.
+- Counts, offerings, and attendance are not partitioned. Partitioning is a future option requiring volume and query-plan evidence.
 
 ### Score-Based Access Control
 
@@ -265,17 +257,17 @@ Score 9:   Global Admin     → Entire organization
 - [x] Hierarchy Management (6 levels)
 - [x] RBAC with Score-based Access
 - [x] Data Collection (Counts, Offerings, Records, Attendance)
-- [x] Offline Sync with Idempotency
+- [x] Batch Sync API (offline client behavior and full retry guarantees still require verification)
 - [x] Fellowship Features (Members, Testimonies, Prayers)
 - [x] Media Management (Galleries, Items)
 - [x] Public API (Events, Locations, Galleries)
 - [x] Reports & Analytics
-- [x] Password Recovery
+- [ ] Self-service password recovery delivery (reset email delivery is not implemented)
 - [x] User Approval Workflow
 - [x] Notification Polling
-- [x] Row-Level Security (RLS)
-- [x] Table Partitioning
-- [x] Audit Logging
+- [ ] PostgreSQL Row-Level Security policies
+- [ ] Table partitioning
+- [ ] Complete system-wide audit logging
 
 ### 🚧 Next Steps
 

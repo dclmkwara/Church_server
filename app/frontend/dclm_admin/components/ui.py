@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
 
 from fasthtml.common import A, Div, H2, H3, H4, Label, P, Span
@@ -7,8 +8,9 @@ from fasthtml.common import A, Div, H2, H3, H4, Label, P, Span
 from faststrap import Badge, BsTable, BsTBody, BsTCell, BsTHead, BsTRow, Button, Card, EmptyState, Fx, Icon
 
 
-def format_naira(amount: int) -> str:
-    return f"N{amount:,.0f}"
+def format_naira(amount: int | float | Decimal) -> str:
+    value = Decimal(str(amount or 0))
+    return f"N{value:,.2f}" if value != value.to_integral_value() else f"N{value:,.0f}"
 
 
 def status_badge(label: str) -> Any:

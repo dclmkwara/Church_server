@@ -50,7 +50,7 @@ async def list_official_appointments(
 ):
     _ensure_min_score(current_user, 4, "Group-level access required for official appointments")
     search_scope = deps.resolve_scope_path(current_user, scope_path)
-    return await official_appointment.list_by_scope(
+    rows = await official_appointment.list_by_scope(
         db,
         scope_path=search_scope,
         search=search,
@@ -59,6 +59,7 @@ async def list_official_appointments(
         skip=skip,
         limit=limit,
     )
+    return deps.filter_rows_in_scope(rows, current_user)
 
 
 @router.post(

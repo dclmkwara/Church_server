@@ -8,9 +8,10 @@ from ..backend.config import get_backend_config
 from .api_client import get_api_client
 from .async_compat import async_client, dual_mode_class, maybe_await
 from .auth_service import AuthService
+from .pagination import fetch_all_pages
 from .people_service import PeopleService
 from .request_cache import request_cached
-from .ttl_cache import ttl_cached
+from .ttl_cache import invalidate_ttl_prefix, ttl_cached
 
 
 def _safe_date(raw: Any) -> str:
@@ -137,28 +138,38 @@ class CommunicationService:
         return split_scope_path(identity.scope_path if identity and identity.scope_path else ctx.current_scope_path)
 
     @staticmethod
+    async def _scope_bits(request, ctx) -> dict[str, str]:
+        return await CommunicationService.effective_scope_path(request, ctx)
+
+    @staticmethod
     async def list_announcements(request, ctx, *, search: str = "", status: str = "all", meeting: str = "") -> list[dict[str, Any]]:
+        identity = AuthService.get_identity(request)
+        effective_path = str(identity.scope_path if identity and identity.scope_path else ctx.current_scope_path or "")
+        identity_key = str(identity.user_id if identity else "demo")
+        cache_key = ("communication", "announcements", identity_key, effective_path, meeting or "", status or "all")
+
         async def load_rows() -> list[dict[str, Any]]:
             client = async_client(get_api_client())
             access_token = await CommunicationService.use_mock(request)
             try:
                 source = await maybe_await(ttl_cached(
-                    ("communication", "announcements", meeting or "", status or "all"),
+                    cache_key,
                     45.0,
-                    lambda: client.list_announcements(
-                        access_token,
-                        meeting=meeting or None,
-                        is_active=False if status == "archived" else None,
-                        limit=200,
-                    ),
+                        lambda: fetch_all_pages(lambda skip, limit: client.list_announcements(
+                            access_token,
+                            meeting=meeting or None,
+                            is_active=False if status == "archived" else None,
+                            skip=skip,
+                            limit=limit,
+                        ), page_size=200),
                 ))
             except BackendClientError:
-                return []
+                raise
             return [_normalize_announcement(row) for row in source]
 
         rows = await request_cached(
             request,
-            ("communication", "announcements", meeting or "", status or "all"),
+            cache_key,
             load_rows,
         )
         if status != "all":
@@ -176,7 +187,7 @@ class CommunicationService:
         return sorted(rows, key=lambda row: (row["meeting_date"], row["title"].lower()), reverse=True)
 
     @staticmethod
-    async def get_announcement(request, ctx) -> dict[str, int]:
+    async def announcement_summary_legacy(request, ctx) -> dict[str, int]:
         rows = await CommunicationService.list_announcements(request, ctx)
         return {
             "total": len(rows),
@@ -186,7 +197,7 @@ class CommunicationService:
         }
 
     @staticmethod
-    async def create_announcement(request, announcement_id: str) -> dict[str, Any] | None:
+    async def get_announcement_legacy(request, announcement_id: str) -> dict[str, Any] | None:
         client = async_client(get_api_client())
         try:
             row = await client.get_announcement(await CommunicationService.use_mock(request), announcement_id)
@@ -195,12 +206,15 @@ class CommunicationService:
         return _normalize_announcement(row)
 
     @staticmethod
-    async def update_announcement(request, ctx, payload: dict[str, str]) -> dict[str, Any]:
+    async def create_announcement_legacy(request, ctx, payload: dict[str, str]) -> dict[str, Any]:
         client = async_client(get_api_client())
         scope_bits = await CommunicationService._scope_bits(request, ctx)
         meeting_date = payload.get("meeting_date") or date.today().isoformat()
+        region_id = scope_bits.get("region_id") or scope_bits.get("state_id") or scope_bits.get("nation_id") or scope_bits.get("location_id")
+        if not region_id:
+            raise BackendClientError("The current church scope does not have a valid announcement region.")
         backend_payload = {
-            "region_id": scope_bits.get("region_id") or scope_bits.get("state_id") or scope_bits.get("nation_id") or "DCM",
+            "region_id": region_id,
             "region_name": payload.get("audience") or ctx.current_scope_label,
             "meeting": payload.get("meeting") or "special_notice",
             "date": meeting_date,
@@ -210,10 +224,11 @@ class CommunicationService:
         created = await client.create_announcement(await CommunicationService.use_mock(request), backend_payload)
         if payload.get("submit_action") == "publish":
             created = await client.publish_announcement(await CommunicationService.use_mock(request), str(created.get("id") or ""))
+        invalidate_ttl_prefix(("communication", "announcements"))
         return _normalize_announcement(created)
 
     @staticmethod
-    async def publish_announcement(request, ctx, announcement_id: str, payload: dict[str, str]) -> dict[str, Any]:
+    async def update_announcement_legacy(request, ctx, announcement_id: str, payload: dict[str, str]) -> dict[str, Any]:
         client = async_client(get_api_client())
         backend_payload = {
             "region_name": payload.get("audience") or ctx.current_scope_label,
@@ -225,39 +240,47 @@ class CommunicationService:
         updated = await client.update_announcement(await CommunicationService.use_mock(request), announcement_id, backend_payload)
         if payload.get("submit_action") == "publish":
             updated = await client.publish_announcement(await CommunicationService.use_mock(request), announcement_id)
+        invalidate_ttl_prefix(("communication", "announcements"))
         return _normalize_announcement(updated)
 
     @staticmethod
-    async def delete_announcement(request, announcement_id: str, *, action: str) -> dict[str, Any]:
+    async def set_announcement_status_legacy(request, announcement_id: str, *, action: str) -> dict[str, Any]:
         client = async_client(get_api_client())
         token = await CommunicationService.use_mock(request)
         if action == "publish":
             return _normalize_announcement(await client.publish_announcement(token, announcement_id))
-        current = await client.get_announcement(token, announcement_id)
         if action == "archive":
-            return _normalize_announcement(await client.update_announcement(token, announcement_id, {"is_active": False}))
-        return _normalize_announcement(await client.update_announcement(token, announcement_id, {"is_active": True}))
+            updated = await client.update_announcement(token, announcement_id, {"is_active": False})
+        elif action == "draft":
+            updated = await client.update_announcement(token, announcement_id, {"is_active": True})
+        else:
+            raise BackendClientError("Unsupported announcement status action.")
+        invalidate_ttl_prefix(("communication", "announcements"))
+        return _normalize_announcement(updated)
 
     @staticmethod
     async def list_galleries(request, ctx, *, search: str = "", visibility: str = "all") -> list[dict[str, Any]]:
+        identity = AuthService.get_identity(request)
+        scope_path = identity.scope_path if identity and identity.scope_path else ctx.current_scope_path
+        identity_key = str(identity.user_id if identity else "demo")
+        gallery_cache_key = ("communication", "galleries", identity_key, scope_path)
+
         async def load_rows() -> list[dict[str, Any]]:
             client = async_client(get_api_client())
             access_token = await CommunicationService.use_mock(request)
-            identity = AuthService.get_identity(request)
-            scope_path = identity.scope_path if identity and identity.scope_path else ctx.current_scope_path
             try:
                 source = await maybe_await(ttl_cached(
-                    ("communication", "galleries", scope_path),
+                    gallery_cache_key,
                     45.0,
-                    lambda: client.list_media_galleries(access_token, scope_path=scope_path, limit=200),
+                    lambda: fetch_all_pages(lambda skip, limit: client.list_media_galleries(access_token, scope_path=scope_path, skip=skip, limit=limit), page_size=200),
                 ))
             except BackendClientError:
-                return []
+                raise
             return [_normalize_gallery(row) for row in source]
 
         rows = await request_cached(
             request,
-            ("communication", "galleries", getattr(ctx, "current_scope_path", "")),
+            gallery_cache_key,
             load_rows,
         )
         if visibility != "all":
@@ -274,7 +297,7 @@ class CommunicationService:
         return sorted(rows, key=lambda row: (row["event_date"], row["title"].lower()), reverse=True)
 
     @staticmethod
-    async def get_gallery(request, ctx) -> dict[str, int]:
+    async def media_summary_legacy(request, ctx) -> dict[str, int]:
         rows = await CommunicationService.list_galleries(request, ctx)
         items = [item for row in rows for item in row["items"]]
         return {
@@ -285,7 +308,7 @@ class CommunicationService:
         }
 
     @staticmethod
-    async def create_gallery(request, ctx, gallery_id: str) -> dict[str, Any] | None:
+    async def get_gallery_legacy(request, ctx, gallery_id: str) -> dict[str, Any] | None:
         client = async_client(get_api_client())
         access_token = await CommunicationService.use_mock(request)
         gallery = _normalize_gallery(await client.get_media_gallery(access_token, gallery_id))
@@ -296,7 +319,7 @@ class CommunicationService:
         return gallery
 
     @staticmethod
-    async def delete_gallery(request, ctx, payload: dict[str, str]) -> dict[str, Any]:
+    async def create_gallery_legacy(request, ctx, payload: dict[str, str]) -> dict[str, Any]:
         client = async_client(get_api_client())
         locations = await PeopleService.list_locations(request, ctx)
         scope_bits = await CommunicationService._scope_bits(request, ctx)
@@ -311,6 +334,7 @@ class CommunicationService:
                 "is_public": payload.get("visibility") == "national_share",
             },
         )
+        invalidate_ttl_prefix(("communication", "galleries"))
         return _normalize_gallery(created)
 
     @staticmethod
@@ -352,6 +376,7 @@ class CommunicationService:
                 "is_cover": False,
             },
         )
+        invalidate_ttl_prefix(("communication", "galleries"))
         gallery = await CommunicationService.get_gallery(request, ctx, gallery_id)
         base_gallery = {
             "id": gallery_id,
@@ -362,25 +387,139 @@ class CommunicationService:
         return _normalize_media_item(created, base_gallery)
 
     @staticmethod
-    async def delete_media_item(request, ctx, gallery_id: str) -> dict[str, Any] | None:
+    async def delete_gallery_legacy(request, ctx, gallery_id: str) -> dict[str, Any] | None:
         gallery = await CommunicationService.get_gallery(request, ctx, gallery_id)
-        get_api_client().delete_media_gallery(await CommunicationService.use_mock(request), gallery_id)
+        await async_client(get_api_client()).delete_media_gallery(await CommunicationService.use_mock(request), gallery_id)
+        invalidate_ttl_prefix(("communication", "galleries"))
         return gallery
 
     @staticmethod
-    async def media_summary(request, ctx, item_id: str) -> dict[str, Any] | None:
+    async def delete_media_item_legacy(request, ctx, item_id: str) -> dict[str, Any] | None:
         item = await CommunicationService.get_media_item(request, ctx, item_id)
-        get_api_client().delete_media_item(await CommunicationService.use_mock(request), item_id)
+        await async_client(get_api_client()).delete_media_item(await CommunicationService.use_mock(request), item_id)
+        invalidate_ttl_prefix(("communication", "galleries"))
         return item
 
 
-CommunicationService.announcement_summary = staticmethod(CommunicationService.get_announcement)
-CommunicationService.get_announcement = staticmethod(CommunicationService.create_announcement)
-CommunicationService.create_announcement = staticmethod(CommunicationService.update_announcement)
-CommunicationService.update_announcement = staticmethod(CommunicationService.publish_announcement)
-CommunicationService.set_announcement_status = staticmethod(CommunicationService.delete_announcement)
-CommunicationService.media_summary = staticmethod(CommunicationService.get_gallery)
-CommunicationService.get_gallery = staticmethod(CommunicationService.create_gallery)
+async def _announcement_summary(request, ctx):
+    rows = await CommunicationService.list_announcements(request, ctx)
+    return {"total": len(rows), "published": sum(row["status"] == "published" for row in rows), "drafts": sum(row["status"] == "draft" for row in rows), "archived": sum(row["status"] == "archived" for row in rows)}
+
+
+async def _get_announcement(request, announcement_id: str):
+    client = async_client(get_api_client())
+    row = await client.get_announcement(await CommunicationService.use_mock(request), announcement_id)
+    return _normalize_announcement(row)
+
+
+async def _create_announcement(request, ctx, payload: dict[str, str]):
+    client = async_client(get_api_client())
+    scope_bits = await CommunicationService._scope_bits(request, ctx)
+    region_id = scope_bits.get("region_id") or scope_bits.get("state_id") or scope_bits.get("nation_id") or scope_bits.get("location_id")
+    if not region_id:
+        raise BackendClientError("The current church scope does not have a valid announcement region.")
+    created = await client.create_announcement(await CommunicationService.use_mock(request), {
+        "region_id": region_id,
+        "region_name": payload.get("audience") or ctx.current_scope_label,
+        "meeting": payload.get("meeting") or "special_notice",
+        "date": payload.get("meeting_date") or date.today().isoformat(),
+        "items": _build_announcement_items(payload),
+        "is_active": payload.get("submit_action") != "archive",
+    })
+    if payload.get("submit_action") == "publish":
+        created = await client.publish_announcement(await CommunicationService.use_mock(request), str(created.get("id") or ""))
+    invalidate_ttl_prefix(("communication", "announcements"))
+    return _normalize_announcement(created)
+
+
+async def _update_announcement(request, ctx, announcement_id: str, payload: dict[str, str]):
+    client = async_client(get_api_client())
+    updated = await client.update_announcement(await CommunicationService.use_mock(request), announcement_id, {
+        "region_name": payload.get("audience") or ctx.current_scope_label,
+        "meeting": payload.get("meeting") or None,
+        "date": payload.get("meeting_date") or None,
+        "items": _build_announcement_items(payload),
+        "is_active": True,
+    })
+    if payload.get("submit_action") == "publish":
+        updated = await client.publish_announcement(await CommunicationService.use_mock(request), announcement_id)
+    invalidate_ttl_prefix(("communication", "announcements"))
+    return _normalize_announcement(updated)
+
+
+async def _set_announcement_status(request, announcement_id: str, *, action: str):
+    client = async_client(get_api_client())
+    token = await CommunicationService.use_mock(request)
+    if action == "publish":
+        updated = await client.publish_announcement(token, announcement_id)
+    elif action in {"archive", "draft"}:
+        updated = await client.update_announcement(token, announcement_id, {"is_active": action == "draft"})
+    else:
+        raise BackendClientError("Unsupported announcement status action.")
+    invalidate_ttl_prefix(("communication", "announcements"))
+    return _normalize_announcement(updated)
+
+
+async def _media_summary(request, ctx):
+    rows = await CommunicationService.list_galleries(request, ctx)
+    items = [item for row in rows for item in row["items"]]
+    return {"galleries": len(rows), "items": len(items), "videos": sum(item["media_type"] == "video" for item in items), "shared_upward": sum(row["visibility"] == "national_share" for row in rows)}
+
+
+async def _get_gallery(request, ctx, gallery_id: str):
+    client = async_client(get_api_client())
+    row = _normalize_gallery(await client.get_media_gallery(await CommunicationService.use_mock(request), gallery_id))
+    row["items"] = await CommunicationService.list_media_items(request, ctx, gallery_id=gallery_id)
+    row["item_count"] = len(row["items"])
+    row["photo_count"] = sum(item["media_type"] == "photo" for item in row["items"])
+    row["video_count"] = sum(item["media_type"] == "video" for item in row["items"])
+    return row
+
+
+async def _create_gallery(request, ctx, payload: dict[str, str]):
+    client = async_client(get_api_client())
+    locations = await PeopleService.list_locations(request, ctx)
+    scope_bits = await CommunicationService._scope_bits(request, ctx)
+    location_id = scope_bits.get("location_id") or (locations[0]["location_id"] if locations else "")
+    if not location_id:
+        raise BackendClientError("A location in the current scope is required to create a gallery.")
+    created = await client.create_media_gallery(await CommunicationService.use_mock(request), {
+        "title": payload.get("title") or "Gallery",
+        "description": payload.get("description") or None,
+        "location_id": location_id,
+        "slug": (payload.get("title") or "gallery").lower().replace(" ", "-"),
+        "is_public": payload.get("visibility") == "national_share",
+    })
+    invalidate_ttl_prefix(("communication", "galleries"))
+    return _normalize_gallery(created)
+
+
+async def _delete_gallery(request, ctx, gallery_id: str):
+    gallery = await _get_gallery(request, ctx, gallery_id)
+    await async_client(get_api_client()).delete_media_gallery(await CommunicationService.use_mock(request), gallery_id)
+    invalidate_ttl_prefix(("communication", "galleries"))
+    return gallery
+
+
+async def _delete_media_item(request, ctx, item_id: str):
+    item = await CommunicationService.get_media_item(request, ctx, item_id)
+    if item is None:
+        return None
+    await async_client(get_api_client()).delete_media_item(await CommunicationService.use_mock(request), item_id)
+    invalidate_ttl_prefix(("communication", "galleries"))
+    return item
+
+
+CommunicationService.announcement_summary = staticmethod(_announcement_summary)
+CommunicationService.get_announcement = staticmethod(_get_announcement)
+CommunicationService.create_announcement = staticmethod(_create_announcement)
+CommunicationService.update_announcement = staticmethod(_update_announcement)
+CommunicationService.set_announcement_status = staticmethod(_set_announcement_status)
+CommunicationService.media_summary = staticmethod(_media_summary)
+CommunicationService.get_gallery = staticmethod(_get_gallery)
+CommunicationService.create_gallery = staticmethod(_create_gallery)
+CommunicationService.delete_gallery = staticmethod(_delete_gallery)
+CommunicationService.delete_media_item = staticmethod(_delete_media_item)
 
 dual_mode_class(CommunicationService)
 

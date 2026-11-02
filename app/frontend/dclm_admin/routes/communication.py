@@ -12,6 +12,7 @@ from starlette.responses import RedirectResponse
 from faststrap import Accordion, AccordionItem, Button, Card, FilterBar, Image, PlaceholderCard, Spinner, TabPane, Tabs, ToggleGroup
 
 from ..auth_context import build_context
+from ..backend import BackendClientError
 from ..communication import CommunicationService
 from ..components.feedback import simple_toast_response
 from ..components.shell import hidden_context_inputs, shell_layout
@@ -1011,10 +1012,16 @@ def register_communication_routes(app) -> None:
         ctx = build_context(data)
         if ctx.level < 5:
             return RedirectResponse(ctx.url_for("/communication"), status_code=303)
-        if await _communication_live(request):
-            await CommunicationService.create_announcement(request, ctx, data)
-        else:
-            STORE.add_announcement(data, scope_path=ctx.current_scope_path, author_name=ctx.profile.user_name)
+        try:
+            created = (
+                await CommunicationService.create_announcement(request, ctx, data)
+                if await _communication_live(request)
+                else STORE.add_announcement(data, scope_path=ctx.current_scope_path, author_name=ctx.profile.user_name)
+            )
+        except BackendClientError as exc:
+            return P(f"Could not create the announcement: {exc}", cls="text-muted")
+        if created is None:
+            return P("Announcement was not created.", cls="text-muted")
         return RedirectResponse(ctx.url_for("/communication"), status_code=303)
 
     @app.post("/communication/{announcement_id}/update")
@@ -1025,10 +1032,16 @@ def register_communication_routes(app) -> None:
         row = await _announcement_row(request, ctx, announcement_id)
         if ctx.level < 5 or row is None:
             return RedirectResponse(ctx.url_for("/communication"), status_code=303)
-        if await _communication_live(request):
-            await CommunicationService.update_announcement(request, ctx, announcement_id, data)
-        else:
-            STORE.update_announcement(announcement_id, data, actor_name=ctx.profile.user_name)
+        try:
+            updated = (
+                await CommunicationService.update_announcement(request, ctx, announcement_id, data)
+                if await _communication_live(request)
+                else STORE.update_announcement(announcement_id, data, actor_name=ctx.profile.user_name)
+            )
+        except BackendClientError as exc:
+            return P(f"Could not update the announcement: {exc}", cls="text-muted")
+        if updated is None:
+            return P("Announcement was not updated.", cls="text-muted")
         return RedirectResponse(ctx.url_for("/communication"), status_code=303)
 
     @app.get("/communication/{announcement_id}/status")
@@ -1072,16 +1085,19 @@ def register_communication_routes(app) -> None:
         row = await _announcement_row(request, ctx, announcement_id)
         if row is None:
             return P("Communication entry not found.", cls="text-muted")
-        updated = (
-            await CommunicationService.set_announcement_status(request, announcement_id, action=data.get("action", "publish"))
-            if await _communication_live(request)
-            else STORE.set_announcement_status(
-                announcement_id,
-                action=data.get("action", "publish"),
-                actor_name=ctx.profile.user_name,
-                note=data.get("note", ""),
+        try:
+            updated = (
+                await CommunicationService.set_announcement_status(request, announcement_id, action=data.get("action", "publish"))
+                if await _communication_live(request)
+                else STORE.set_announcement_status(
+                    announcement_id,
+                    action=data.get("action", "publish"),
+                    actor_name=ctx.profile.user_name,
+                    note=data.get("note", ""),
+                )
             )
-        )
+        except BackendClientError as exc:
+            return P(f"Could not update announcement status: {exc}", cls="text-muted")
         if updated is None:
             return P("Communication entry not found.", cls="text-muted")
         search_filter = data.get("search_filter", "")
@@ -1244,12 +1260,17 @@ def register_communication_routes(app) -> None:
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
         ctx = build_context(data)
-        gallery = await CommunicationService.create_gallery(request, ctx, data) if await _communication_live(request) else STORE.add_media_gallery(
-            data,
-            scope_path=ctx.current_scope_path,
-            scope_label=ctx.current_scope_label,
-            actor_name=ctx.profile.user_name,
-        )
+        try:
+            gallery = await CommunicationService.create_gallery(request, ctx, data) if await _communication_live(request) else STORE.add_media_gallery(
+                data,
+                scope_path=ctx.current_scope_path,
+                scope_label=ctx.current_scope_label,
+                actor_name=ctx.profile.user_name,
+            )
+        except BackendClientError as exc:
+            return P(f"Could not create this gallery: {exc}", cls="text-muted")
+        if gallery is None:
+            return P("Gallery was not created.", cls="text-muted")
         return simple_toast_response(
             content=(
                 Div(H3("Gallery created", cls="h5 fw-semibold"), P(f"{gallery['title']} is now available for uploads.", cls="mb-0")),
@@ -1351,7 +1372,12 @@ def register_communication_routes(app) -> None:
         gallery = await _gallery_row(request, ctx, gallery_id)
         if gallery is None:
             return P("Gallery not found.", cls="text-muted")
-        item = await CommunicationService.create_media_item(request, ctx, gallery_id, data) if await _communication_live(request) else STORE.add_media_item(gallery_id, data, actor_name=ctx.profile.user_name)
+        try:
+            item = await CommunicationService.create_media_item(request, ctx, gallery_id, data) if await _communication_live(request) else STORE.add_media_item(gallery_id, data, actor_name=ctx.profile.user_name)
+        except BackendClientError as exc:
+            return P(f"Could not save this media item: {exc}", cls="text-muted")
+        if item is None:
+            return P("Media item was not saved.", cls="text-muted")
         if item is None:
             return P("Unable to save media item.", cls="text-muted")
         return simple_toast_response(
@@ -1391,7 +1417,10 @@ def register_communication_routes(app) -> None:
         gallery = await _gallery_row(request, ctx, gallery_id)
         if gallery is None:
             return P("Gallery not found.", cls="text-muted")
-        removed = await CommunicationService.delete_gallery(request, ctx, gallery_id) if await _communication_live(request) else STORE.delete_media_gallery(gallery_id, actor_name=ctx.profile.user_name)
+        try:
+            removed = await CommunicationService.delete_gallery(request, ctx, gallery_id) if await _communication_live(request) else STORE.delete_media_gallery(gallery_id, actor_name=ctx.profile.user_name)
+        except BackendClientError as exc:
+            return P(f"Could not delete this gallery: {exc}", cls="text-muted")
         if removed is None:
             return P("Gallery not found.", cls="text-muted")
         return simple_toast_response(
@@ -1434,7 +1463,10 @@ def register_communication_routes(app) -> None:
         if item is None:
             return P("Media item not found.", cls="text-muted")
         gallery_id = item["gallery_id"]
-        removed = await CommunicationService.delete_media_item(request, ctx, item_id) if await _communication_live(request) else STORE.delete_media_item(item_id, actor_name=ctx.profile.user_name)
+        try:
+            removed = await CommunicationService.delete_media_item(request, ctx, item_id) if await _communication_live(request) else STORE.delete_media_item(item_id, actor_name=ctx.profile.user_name)
+        except BackendClientError as exc:
+            return P(f"Could not delete this media item: {exc}", cls="text-muted")
         if removed is None:
             return P("Media item not found.", cls="text-muted")
         return simple_toast_response(

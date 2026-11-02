@@ -25,7 +25,7 @@ Example hierarchy path:
 from typing import List, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 
 from app.api import deps
 from app.crud import crud_location
@@ -38,9 +38,13 @@ router = APIRouter()
 
 def _ensure_hierarchy_visible(current_user: User, node: Any, *, detail: str = "Hierarchy node outside your scope") -> None:
     node_path = getattr(node, "path", None)
+    scope_path = deps.effective_scope_path(current_user)
+    if deps.highest_role_score(current_user) == 8:
+        deps.ensure_path_in_scope(current_user, node_path, detail=detail)
+        return
     if not (
-        deps.path_in_scope(current_user.path, node_path)
-        or deps.path_in_scope(node_path, current_user.path)
+        deps.path_in_scope(scope_path, node_path)
+        or deps.path_in_scope(node_path, scope_path)
     ):
         raise HTTPException(status_code=403, detail=detail)
 
@@ -50,7 +54,12 @@ def _ensure_hierarchy_mutable(current_user: User, node: Any, *, detail: str = "H
 
 
 def _hierarchy_visible_filter(path_column: Any, current_user: User):
-    scope = str(current_user.path)
+    scope = deps.effective_scope_path(current_user)
+    if deps.highest_role_score(current_user) == 8:
+        return and_(
+            path_column.op("<@")(scope),
+            deps.nation_scope_condition(path_column, current_user),
+        )
     return or_(path_column.op("<@")(scope), path_column.op("@>")(scope))
 
 
@@ -1175,8 +1184,10 @@ async def get_hierarchy_tree(
         .order_by(Fellowship.path)
     )).scalars().all()
 
+    scope_path = deps.effective_scope_path(current_user)
+
     def is_visible(path: object) -> bool:
-        return deps.path_in_scope(current_user.path, path) or deps.path_in_scope(path, current_user.path)
+        return deps.path_in_scope(scope_path, path) or deps.path_in_scope(path, scope_path)
 
     # Map nodes into TreeNode objects
     nodes_map = {}  # path -> TreeNode

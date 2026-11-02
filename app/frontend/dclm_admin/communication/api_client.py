@@ -30,6 +30,9 @@ class APIClient:
     async def refresh(self, refresh_token: str) -> dict[str, Any]:
         return await self._backend_client.refresh(refresh_token)
 
+    async def logout(self, refresh_token: str) -> None:
+        await self._backend_client.logout(refresh_token)
+
     async def get_current_user(self, access_token: str) -> dict[str, Any]:
         return await self._backend_client.get_current_user(access_token)
 
@@ -294,8 +297,8 @@ class APIClient:
     async def create_user(self, access_token: str, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._backend_client.create_user(access_token, payload)
 
-    async def list_program_events(self, access_token: str, *, scope_path: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
-        return await self._backend_client.list_program_events(access_token, scope_path=scope_path, limit=limit)
+    async def list_program_events(self, access_token: str, *, scope_path: str | None = None, skip: int = 0, limit: int = 200) -> list[dict[str, Any]]:
+        return await self._backend_client.list_program_events(access_token, scope_path=scope_path, skip=skip, limit=limit)
 
     async def get_program_event(self, access_token: str, event_id: str) -> dict[str, Any]:
         return await self._backend_client.get_program_event(access_token, event_id)
@@ -308,6 +311,7 @@ class APIClient:
         access_token: str,
         *,
         scope_path: str | None = None,
+        skip: int = 0,
         program_domain: str | None = None,
         event_mode: str | None = None,
         status_value: str | None = None,
@@ -316,6 +320,7 @@ class APIClient:
         return await self._backend_client.list_program_campaigns(
             access_token,
             scope_path=scope_path,
+            skip=skip,
             program_domain=program_domain,
             event_mode=event_mode,
             status_value=status_value,
@@ -371,9 +376,10 @@ class APIClient:
         *,
         meeting: str | None = None,
         is_active: bool | None = None,
+        skip: int = 0,
         limit: int = 200,
     ) -> list[dict[str, Any]]:
-        return await self._backend_client.list_announcements(access_token, meeting=meeting, is_active=is_active, limit=limit)
+        return await self._backend_client.list_announcements(access_token, meeting=meeting, is_active=is_active, skip=skip, limit=limit)
 
     async def get_announcement(self, access_token: str, announcement_id: str) -> dict[str, Any]:
         return await self._backend_client.get_announcement(access_token, announcement_id)
@@ -418,8 +424,8 @@ class APIClient:
     async def delete_media_item(self, access_token: str, item_id: str) -> Any:
         return await self._backend_client.delete_media_item(access_token, item_id)
 
-    async def list_counts(self, access_token: str, *, scope_path: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
-        return await self._backend_client.list_counts(access_token, scope_path=scope_path, limit=limit)
+    async def list_counts(self, access_token: str, *, scope_path: str | None = None, skip: int = 0, limit: int = 200) -> list[dict[str, Any]]:
+        return await self._backend_client.list_counts(access_token, scope_path=scope_path, skip=skip, limit=limit)
 
     async def create_count(self, access_token: str, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._backend_client.create_count(access_token, payload)
@@ -590,11 +596,43 @@ class APIClient:
     async def get_report_breakdown(self, access_token: str, *, metric: str, level: str, start_date: str | None = None, end_date: str | None = None) -> dict[str, Any]:
         return await self._backend_client.get_report_breakdown(access_token, metric=metric, level=level, start_date=start_date, end_date=end_date)
 
-    async def get_report_anomalies(self, access_token: str, *, metric: str = "counts", threshold: float = 2.0, days: int = 30) -> dict[str, Any]:
-        return await self._backend_client.get_report_anomalies(access_token, metric=metric, threshold=threshold, days=days)
+    async def get_report_anomalies(
+        self,
+        access_token: str,
+        *,
+        metric: str = "counts",
+        threshold: float = 2.0,
+        days: int = 30,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> dict[str, Any]:
+        return await self._backend_client.get_report_anomalies(
+            access_token,
+            metric=metric,
+            threshold=threshold,
+            days=days,
+            start_date=start_date,
+            end_date=end_date,
+        )
 
-    async def get_report_growth(self, access_token: str, *, metric: str = "counts", period: str = "monthly", months: int = 12) -> dict[str, Any]:
-        return await self._backend_client.get_report_growth(access_token, metric=metric, period=period, months=months)
+    async def get_report_growth(
+        self,
+        access_token: str,
+        *,
+        metric: str = "counts",
+        period: str = "monthly",
+        months: int = 12,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> dict[str, Any]:
+        return await self._backend_client.get_report_growth(
+            access_token,
+            metric=metric,
+            period=period,
+            months=months,
+            start_date=start_date,
+            end_date=end_date,
+        )
 
     async def refresh_reports(self, access_token: str) -> dict[str, Any]:
         return await self._backend_client.refresh_reports(access_token)

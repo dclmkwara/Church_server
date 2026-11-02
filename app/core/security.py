@@ -19,14 +19,20 @@ from app.core.config import settings
 # producing a 128-byte hex string that bcrypt 4.x refuses). We call bcrypt directly.
 
 def hash_password(password: str) -> str:
-    """Hash a plain-text password with bcrypt (direct, no passlib wrapper)."""
-    return _bcrypt.hashpw(password[:72].encode("utf-8"), _bcrypt.gensalt(rounds=12)).decode("utf-8")
+    """Hash a UTF-8 password without silently truncating bcrypt input."""
+    password_bytes = password.encode("utf-8")
+    if len(password_bytes) > 72:
+        raise ValueError("Password must be no more than 72 UTF-8 bytes")
+    return _bcrypt.hashpw(password_bytes, _bcrypt.gensalt(rounds=12)).decode("utf-8")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a plain-text password against its bcrypt hash (direct, no passlib wrapper)."""
     try:
-        return _bcrypt.checkpw(plain_password[:72].encode("utf-8"), hashed_password.encode("utf-8"))
+        password_bytes = plain_password.encode("utf-8")
+        if len(password_bytes) > 72:
+            return False
+        return _bcrypt.checkpw(password_bytes, hashed_password.encode("utf-8"))
     except Exception:
         return False
 

@@ -229,7 +229,7 @@ All data queries then filter with `path <@ scope_path` (ltree descendant operato
 | No orphaned users | `Worker` must exist before creating `User` |
 | No orphaned workers | `Location` FK enforced with `RESTRICT` on delete |
 | Soft deletes everywhere | `is_deleted` flag on all major tables |
-| Audit trail | `created_at`, `updated_at`, `created_by` on all records |
+| Audit trail | Timestamp and actor fields vary by model; complete system-wide action history is not established |
 | Idempotent sync | `client_id` UUID + idempotency check on batch sync |
 | Optimistic locking | `version` integer on critical tables |
 | Scope isolation | ltree `<@` operator + GIST indexing |

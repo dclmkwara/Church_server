@@ -3,13 +3,14 @@ CRUD operations for Media Gallery and Items.
 """
 from typing import List, Optional, Any
 from uuid import UUID
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import HTTPException
 
 from app.crud.base import CRUDBase
 from app.models.media import MediaGallery, MediaItem
 from app.schemas.media import MediaGalleryCreate, MediaGalleryUpdate, MediaItemCreate, MediaItemUpdate
+from app.db.filters import scope_filter
 
 class CRUDMediaGallery(CRUDBase[MediaGallery, MediaGalleryCreate, MediaGalleryUpdate]):
     async def create(self, db: AsyncSession, *, obj_in: MediaGalleryCreate, user_id: UUID) -> MediaGallery:
@@ -57,7 +58,7 @@ class CRUDMediaGallery(CRUDBase[MediaGallery, MediaGalleryCreate, MediaGalleryUp
     ) -> List[MediaGallery]:
         """Get galleries within scope."""
         query = select(MediaGallery).where(
-            text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
+            scope_filter(MediaGallery.path, scope_path)
         ).offset(skip).limit(limit).order_by(MediaGallery.created_at.desc())
         
         result = await db.execute(query)

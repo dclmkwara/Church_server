@@ -263,6 +263,9 @@ class BackendClient:
     async def refresh(self, refresh_token: str) -> dict[str, Any]:
         return await self._request("POST", "/auth/refresh", access_token=refresh_token)
 
+    async def logout(self, refresh_token: str) -> None:
+        await self._request("POST", "/auth/logout", json={"refresh_token": refresh_token})
+
     async def get_current_user(self, access_token: str) -> dict[str, Any]:
         return await self._request("GET", "/auth/me", access_token=access_token)
 
@@ -523,9 +526,10 @@ class BackendClient:
         *,
         meeting: str | None = None,
         is_active: bool | None = None,
+        skip: int = 0,
         limit: int = 200,
     ) -> list[dict[str, Any]]:
-        params: dict[str, Any] = {"limit": limit}
+        params: dict[str, Any] = {"skip": skip, "limit": limit}
         if meeting:
             params["meeting"] = meeting
         if is_active is not None:
@@ -605,8 +609,8 @@ class BackendClient:
     async def create_user(self, access_token: str, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._request("POST", "/users/", access_token=access_token, json=payload)
 
-    async def list_program_events(self, access_token: str, *, scope_path: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
-        params: dict[str, Any] = {"limit": limit}
+    async def list_program_events(self, access_token: str, *, scope_path: str | None = None, skip: int = 0, limit: int = 200) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {"skip": skip, "limit": limit}
         if scope_path:
             params["scope_path"] = scope_path
         return await self._request("GET", "/programs/events", access_token=access_token, params=params)
@@ -622,12 +626,13 @@ class BackendClient:
         access_token: str,
         *,
         scope_path: str | None = None,
+        skip: int = 0,
         program_domain: str | None = None,
         event_mode: str | None = None,
         status_value: str | None = None,
         limit: int = 200,
     ) -> list[dict[str, Any]]:
-        params: dict[str, Any] = {"limit": limit}
+        params: dict[str, Any] = {"skip": skip, "limit": limit}
         if scope_path:
             params["scope_path"] = scope_path
         if program_domain:
@@ -687,8 +692,8 @@ class BackendClient:
     async def create_program_type(self, access_token: str, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._request("POST", "/programs/types", access_token=access_token, json=payload)
 
-    async def list_counts(self, access_token: str, *, scope_path: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
-        params: dict[str, Any] = {"limit": limit}
+    async def list_counts(self, access_token: str, *, scope_path: str | None = None, skip: int = 0, limit: int = 200) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {"skip": skip, "limit": limit}
         if scope_path:
             params["scope_path"] = scope_path
         return await self._request("GET", "/counts/", access_token=access_token, params=params)
@@ -696,8 +701,8 @@ class BackendClient:
     async def create_count(self, access_token: str, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._request("POST", "/counts/", access_token=access_token, json=payload)
 
-    async def list_offerings(self, access_token: str, *, scope_path: str | None = None, fund_type: str | None = None, location_id: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
-        params: dict[str, Any] = {"limit": limit}
+    async def list_offerings(self, access_token: str, *, scope_path: str | None = None, fund_type: str | None = None, location_id: str | None = None, skip: int = 0, limit: int = 200) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {"skip": skip, "limit": limit}
         if scope_path:
             params["scope_path"] = scope_path
         if fund_type:
@@ -706,8 +711,26 @@ class BackendClient:
             params["location_id"] = location_id
         return await self._request("GET", "/offerings/", access_token=access_token, params=params)
 
+    async def review_offering(self, access_token: str, offering_id: str, *, decision: str, note: str = "") -> dict[str, Any]:
+        return await self._request(
+            "POST", f"/offerings/{offering_id}/review", access_token=access_token,
+            params={"decision": decision}, json={"note": note or None},
+        )
+
+    async def correct_offering(self, access_token: str, offering_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return await self._request("POST", f"/offerings/{offering_id}/corrections", access_token=access_token, json=payload)
+
+    async def reverse_offering(self, access_token: str, offering_id: str, reason: str) -> dict[str, Any]:
+        return await self._request("POST", f"/offerings/{offering_id}/reverse", access_token=access_token, json={"reason": reason})
+
+    async def offering_audit_history(self, access_token: str, offering_id: str) -> list[dict[str, Any]]:
+        return await self._request("GET", f"/offerings/{offering_id}/audit", access_token=access_token)
+
     async def create_offering(self, access_token: str, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._request("POST", "/offerings/", access_token=access_token, json=payload)
+
+    async def get_offering(self, access_token: str, offering_id: str) -> dict[str, Any]:
+        return await self._request("GET", f"/offerings/{offering_id}", access_token=access_token)
 
     async def list_records(self, access_token: str, *, scope_path: str | None = None, skip: int = 0, limit: int = 200) -> list[dict[str, Any]]:
         params: dict[str, Any] = {"skip": skip, "limit": limit}
@@ -930,20 +953,30 @@ class BackendClient:
             params["end_date"] = end_date
         return await self._request("GET", "/reports/by-level", access_token=access_token, params=params)
 
-    async def get_report_anomalies(self, access_token: str, *, metric: str = "counts", threshold: float = 2.0, days: int = 30) -> dict[str, Any]:
+    async def get_report_anomalies(self, access_token: str, *, metric: str = "counts", threshold: float = 2.0, days: int = 30, start_date: str | None = None, end_date: str | None = None) -> dict[str, Any]:
+        params: dict[str, Any] = {"metric": metric, "threshold": threshold, "days": days}
+        if start_date:
+            params["start_date"] = start_date
+        if end_date:
+            params["end_date"] = end_date
         return await self._request(
             "GET",
             "/reports/anomalies",
             access_token=access_token,
-            params={"metric": metric, "threshold": threshold, "days": days},
+            params=params,
         )
 
-    async def get_report_growth(self, access_token: str, *, metric: str = "counts", period: str = "monthly", months: int = 12) -> dict[str, Any]:
+    async def get_report_growth(self, access_token: str, *, metric: str = "counts", period: str = "weekly", months: int = 12, start_date: str | None = None, end_date: str | None = None) -> dict[str, Any]:
+        params: dict[str, Any] = {"metric": metric, "period": period, "months": months}
+        if start_date:
+            params["start_date"] = start_date
+        if end_date:
+            params["end_date"] = end_date
         return await self._request(
             "GET",
             "/reports/growth-rate",
             access_token=access_token,
-            params={"metric": metric, "period": period, "months": months},
+            params=params,
         )
 
     async def refresh_reports(self, access_token: str) -> dict[str, Any]:

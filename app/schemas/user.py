@@ -114,20 +114,41 @@ class UserBase(BaseModel):
 
 class UserCreate(UserBase):
     worker_id: UUID
-    password: str
+    password: str = Field(..., min_length=8, max_length=72)
     roles: Optional[List[int]] = Field(default_factory=list)  # List of Role IDs
+
+    @field_validator("password")
+    @classmethod
+    def password_within_bcrypt_byte_limit(cls, value: str) -> str:
+        if len(value.encode("utf-8")) > 72:
+            raise ValueError("Password must be no more than 72 UTF-8 bytes")
+        return value
 
 
 class UserSelfRegistrationRequest(BaseModel):
     worker_id: UUID
-    password: str = Field(..., min_length=8)
+    password: str = Field(..., min_length=8, max_length=72)
+
+    @field_validator("password")
+    @classmethod
+    def password_within_bcrypt_byte_limit(cls, value: str) -> str:
+        if len(value.encode("utf-8")) > 72:
+            raise ValueError("Password must be no more than 72 UTF-8 bytes")
+        return value
 
 
 class UserUpdate(UserBase):
-    password: Optional[str] = None
+    password: Optional[str] = Field(default=None, min_length=8, max_length=72)
     email: Optional[EmailStr] = None
     is_active: Optional[bool] = None
     roles: Optional[List[int]] = None
+
+    @field_validator("password")
+    @classmethod
+    def password_within_bcrypt_byte_limit(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and len(value.encode("utf-8")) > 72:
+            raise ValueError("Password must be no more than 72 UTF-8 bytes")
+        return value
 
 
 class UserResponse(UserBase):
@@ -139,6 +160,7 @@ class UserResponse(UserBase):
     phone: str
     created_at: datetime
     roles: List[RoleResponse] = Field(default_factory=list)
+    permissions: List[str] = Field(default_factory=list)
     path: Optional[str] = None
     
     # Approval workflow fields

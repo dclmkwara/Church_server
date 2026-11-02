@@ -63,9 +63,10 @@ async def read_galleries(
     """
     search_scope = deps.resolve_scope_path(current_user, scope_path)
     
-    return await crud_media.gallery.get_multi_by_scope(
+    rows = await crud_media.gallery.get_multi_by_scope(
         db, scope_path=search_scope, skip=skip, limit=limit
     )
+    return deps.filter_rows_in_scope(rows, current_user)
 
 
 @router.get(

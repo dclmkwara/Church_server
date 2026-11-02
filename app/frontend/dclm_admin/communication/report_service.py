@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import csv
 import json
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from io import BytesIO, StringIO
 from typing import Any
 
@@ -29,6 +29,21 @@ def _scope_path(request, ctx) -> str:
     return str(getattr(ctx, "current_scope_path", "") or "")
 
 
+def _report_date_window(request) -> tuple[str, str]:
+    today = date.today()
+    query = getattr(request, "query_params", {})
+    start_raw = str(query.get("start_date") or "")
+    end_raw = str(query.get("end_date") or "")
+    try:
+        start = date.fromisoformat(start_raw) if start_raw else today - timedelta(days=90)
+        end = date.fromisoformat(end_raw) if end_raw else today
+    except ValueError:
+        start, end = today - timedelta(days=90), today
+    if start > end:
+        start, end = today - timedelta(days=90), today
+    return start.isoformat(), end.isoformat()
+
+
 def _parse_date(value: Any) -> str:
     raw = str(value or "")
     if not raw:
@@ -52,13 +67,18 @@ def _summary_sort_key(row: dict[str, Any]) -> tuple[str, str]:
     return (str(row.get("date") or ""), str(row.get("location") or ""))
 
 
+def _date_cache_key(request) -> tuple[str, str]:
+    return _report_date_window(request)
+
+
 def _normalize_summary_row(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "date": _parse_date(row.get("day")),
+        "event_id": str(row.get("event_id") or ""),
         "location": str(row.get("location_name") or row.get("location_id") or "Unknown location"),
-        "event_title": "Count summary",
+        "event_title": str(row.get("event_title") or "Unassigned event"),
         "total": int(row.get("total_attendance") or 0),
-        "submitted_by": f"{int(row.get('record_count') or 0)} record(s)",
+        "submitted_by": f"{int(row.get('record_count') or 0)} usher section(s)",
         "men": int(row.get("total_men") or 0),
         "women": int(row.get("total_women") or 0),
         "youth_male": int(row.get("total_youth_male") or 0),
@@ -72,6 +92,7 @@ def _normalize_summary_row(row: dict[str, Any]) -> dict[str, Any]:
 def _normalize_financial_row(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "date": _month_label(row.get("month")),
+        "month": str(row.get("month") or "")[:7],
         "location": str(row.get("location_name") or row.get("location_id") or "Unknown location"),
         "fund_type": "offering_and_tithe",
         "amount": float(row.get("total_amount") or 0),
@@ -295,7 +316,7 @@ class ReportService:
         }
 
     @staticmethod
-    async def export_report_excel(request, ctx) -> list[dict[str, Any]]:
+    async def summary_rows(request, ctx) -> list[dict[str, Any]]:
         if await ReportService.use_mock(request):
             return STORE.list_counts(ctx.current_scope_path)[:8]
         client = async_client(get_api_client())
@@ -303,24 +324,41 @@ class ReportService:
         try:
             payload = await ReportService._cached_payload(
                 request,
-                ("reports", "summary", _scope_path(request, ctx)),
+                ("reports", "summary", _scope_path(request, ctx), *_date_cache_key(request)),
                 lambda: ttl_cached(
-                    ("reports", "summary", _scope_path(request, ctx)),
+                    ("reports", "summary", _scope_path(request, ctx), *_date_cache_key(request)),
                     45.0,
-                    lambda: client.get_report_summary(access_token, scope_path=_scope_path(request, ctx)),
+                    lambda: client.get_report_summary(access_token, scope_path=_scope_path(request, ctx), start_date=_report_date_window(request)[0], end_date=_report_date_window(request)[1]),
                 ),
             )
-        except BackendClientError:
+        except BackendClientError as exc:
+            if exc.status_code == 403:
+                raise
             return []
         rows = [_normalize_summary_row(row) for row in payload]
-        return sorted(rows, key=_summary_sort_key, reverse=True)[:8]
+        return sorted(rows, key=_summary_sort_key, reverse=True)
 
     @staticmethod
-    async def get_report_summary(request, ctx) -> dict[str, Any]:
-        return await ChurchDataService.finance_summary(request, ctx) if await ReportService.live_enabled(request) else STORE.finance_summary(ctx.current_scope_path)
+    async def financial_summary(request, ctx) -> dict[str, Any]:
+        if not await ReportService.live_enabled(request):
+            return STORE.finance_summary(ctx.current_scope_path)
+        today = date.today()
+        rows = await ReportService.financial_rows(request, ctx)
+        month_key = today.strftime("%Y-%m")
+        year_key = today.strftime("%Y")
+        month_rows = [row for row in rows if row.get("month", "").startswith(month_key)]
+        year_rows = [row for row in rows if row.get("month", "").startswith(year_key)]
+        transaction_count = sum(int(row.get("transaction_count") or 0) for row in year_rows)
+        year_total = sum(float(row.get("amount") or 0) for row in year_rows)
+        return {
+            "month_total": sum(float(row.get("amount") or 0) for row in month_rows),
+            "year_total": year_total,
+            "average_entry": round(year_total / transaction_count, 2) if transaction_count else 0,
+            "entries": transaction_count,
+        }
 
     @staticmethod
-    async def get_financial_summary(request, ctx) -> list[dict[str, Any]]:
+    async def financial_rows(request, ctx) -> list[dict[str, Any]]:
         if await ReportService.use_mock(request):
             return STORE.list_finance(ctx.current_scope_path)[:8]
         client = async_client(get_api_client())
@@ -328,37 +366,41 @@ class ReportService:
         try:
             payload = await ReportService._cached_payload(
                 request,
-                ("reports", "financial", _scope_path(request, ctx)),
+                ("reports", "financial", _scope_path(request, ctx), *_date_cache_key(request)),
                 lambda: ttl_cached(
-                    ("reports", "financial", _scope_path(request, ctx)),
+                    ("reports", "financial", _scope_path(request, ctx), *_date_cache_key(request)),
                     45.0,
-                    lambda: client.get_report_financial(access_token, scope_path=_scope_path(request, ctx)),
+                    lambda: client.get_report_financial(access_token, scope_path=_scope_path(request, ctx), start_date=_report_date_window(request)[0], end_date=_report_date_window(request)[1]),
                 ),
             )
-        except BackendClientError:
+        except BackendClientError as exc:
+            if exc.status_code == 403:
+                raise
             return []
         rows = [_normalize_financial_row(row) for row in payload]
-        return sorted(rows, key=_summary_sort_key, reverse=True)[:8]
+        return sorted(rows, key=_summary_sort_key, reverse=True)
 
     @staticmethod
-    async def get_report_attendance(request, ctx) -> dict[str, Any]:
+    async def attendance_summary(request, ctx) -> dict[str, Any]:
         return await ChurchDataService.attendance_summary(request, ctx) if await ReportService.live_enabled(request) else STORE.attendance_summary(ctx.current_scope_path)
 
     @staticmethod
-    async def get_attendance_summary(request, ctx) -> list[dict[str, Any]]:
+    async def attendance_rows(request, ctx) -> list[dict[str, Any]]:
         if await ReportService.use_mock(request):
             return STORE.list_attendance(ctx.current_scope_path)[:8]
         client = async_client(get_api_client())
         access_token = AuthService.get_access_token(request)
         try:
-            payload = await client.get_report_attendance(access_token, scope_path=_scope_path(request, ctx))
-        except BackendClientError:
+            payload = await client.get_report_attendance(access_token, scope_path=_scope_path(request, ctx), start_date=_report_date_window(request)[0], end_date=_report_date_window(request)[1])
+        except BackendClientError as exc:
+            if exc.status_code == 403:
+                raise
             return []
         rows = [_normalize_attendance_row(row) for row in payload]
-        return sorted(rows, key=lambda row: (row["date"], row["location"], row["status"]), reverse=True)[:8]
+        return sorted(rows, key=lambda row: (row["date"], row["location"], row["status"]), reverse=True)
 
     @staticmethod
-    async def get_report_timeseries(request, ctx) -> list[tuple[str, int]]:
+    async def counts_series(request, ctx) -> list[tuple[str, int]]:
         if await ReportService.use_mock(request):
             bucket: dict[str, int] = {}
             for row in STORE.list_counts(ctx.current_scope_path):
@@ -369,19 +411,21 @@ class ReportService:
         try:
             payload = await ReportService._cached_payload(
                 request,
-                ("reports", "timeseries", "counts", _scope_path(request, ctx)),
+                ("reports", "timeseries", "counts", _scope_path(request, ctx), *_date_cache_key(request)),
                 lambda: ttl_cached(
-                    ("reports", "timeseries", "counts", _scope_path(request, ctx)),
+                    ("reports", "timeseries", "counts", _scope_path(request, ctx), *_date_cache_key(request)),
                     45.0,
-                    lambda: client.get_report_timeseries(access_token, metric="counts", scope_path=_scope_path(request, ctx)),
+                    lambda: client.get_report_timeseries(access_token, metric="counts", scope_path=_scope_path(request, ctx), start_date=_report_date_window(request)[0], end_date=_report_date_window(request)[1]),
                 ),
             )
-        except BackendClientError:
+        except BackendClientError as exc:
+            if exc.status_code == 403:
+                raise
             return []
         return _normalize_series(payload)
 
     @staticmethod
-    async def get_report_breakdown(request, ctx) -> list[tuple[str, int]]:
+    async def finance_series(request, ctx) -> list[tuple[str, int]]:
         if await ReportService.use_mock(request):
             bucket: dict[str, int] = {}
             for row in STORE.list_finance(ctx.current_scope_path):
@@ -392,19 +436,21 @@ class ReportService:
         try:
             payload = await ReportService._cached_payload(
                 request,
-                ("reports", "timeseries", "offerings", _scope_path(request, ctx)),
+                ("reports", "timeseries", "offerings", _scope_path(request, ctx), *_date_cache_key(request)),
                 lambda: ttl_cached(
-                    ("reports", "timeseries", "offerings", _scope_path(request, ctx)),
+                    ("reports", "timeseries", "offerings", _scope_path(request, ctx), *_date_cache_key(request)),
                     45.0,
-                    lambda: client.get_report_timeseries(access_token, metric="offerings", scope_path=_scope_path(request, ctx)),
+                    lambda: client.get_report_timeseries(access_token, metric="offerings", scope_path=_scope_path(request, ctx), start_date=_report_date_window(request)[0], end_date=_report_date_window(request)[1]),
                 ),
             )
-        except BackendClientError:
+        except BackendClientError as exc:
+            if exc.status_code == 403:
+                raise
             return []
         return _normalize_series(payload)
 
     @staticmethod
-    async def get_report_anomalies(request, ctx) -> list[tuple[str, int]]:
+    async def attendance_series(request, ctx) -> list[tuple[str, int]]:
         if await ReportService.use_mock(request):
             bucket: dict[str, int] = {}
             for row in STORE.list_attendance(ctx.current_scope_path):
@@ -415,19 +461,21 @@ class ReportService:
         try:
             payload = await ReportService._cached_payload(
                 request,
-                ("reports", "timeseries", "attendance", _scope_path(request, ctx)),
+                ("reports", "timeseries", "attendance", _scope_path(request, ctx), *_date_cache_key(request)),
                 lambda: ttl_cached(
-                    ("reports", "timeseries", "attendance", _scope_path(request, ctx)),
+                    ("reports", "timeseries", "attendance", _scope_path(request, ctx), *_date_cache_key(request)),
                     45.0,
-                    lambda: client.get_report_timeseries(access_token, metric="attendance", scope_path=_scope_path(request, ctx)),
+                    lambda: client.get_report_timeseries(access_token, metric="attendance", scope_path=_scope_path(request, ctx), start_date=_report_date_window(request)[0], end_date=_report_date_window(request)[1]),
                 ),
             )
-        except BackendClientError:
+        except BackendClientError as exc:
+            if exc.status_code == 403:
+                raise
             return []
         return _normalize_series(payload)
 
     @staticmethod
-    async def get_report_growth(request, ctx) -> list[dict[str, Any]]:
+    async def breakdown_rows(request, ctx) -> list[dict[str, Any]]:
         if await ReportService.use_mock(request):
             return []
         client = async_client(get_api_client())
@@ -436,37 +484,39 @@ class ReportService:
         try:
             counts = await ReportService._cached_payload(
                 request,
-                ("reports", "breakdown", "counts", level),
+                ("reports", "breakdown", "counts", _scope_path(request, ctx), level, *_date_cache_key(request)),
                 lambda: ttl_cached(
-                    ("reports", "breakdown", "counts", level),
+                    ("reports", "breakdown", "counts", _scope_path(request, ctx), level, *_date_cache_key(request)),
                     45.0,
-                    lambda: client.get_report_breakdown(access_token, metric="counts", level=level),
+                    lambda: client.get_report_breakdown(access_token, metric="counts", level=level, start_date=_report_date_window(request)[0], end_date=_report_date_window(request)[1]),
                 ),
             )
             finance = await ReportService._cached_payload(
                 request,
-                ("reports", "breakdown", "offerings", level),
+                ("reports", "breakdown", "offerings", _scope_path(request, ctx), level, *_date_cache_key(request)),
                 lambda: ttl_cached(
-                    ("reports", "breakdown", "offerings", level),
+                    ("reports", "breakdown", "offerings", _scope_path(request, ctx), level, *_date_cache_key(request)),
                     45.0,
-                    lambda: client.get_report_breakdown(access_token, metric="offerings", level=level),
+                    lambda: client.get_report_breakdown(access_token, metric="offerings", level=level, start_date=_report_date_window(request)[0], end_date=_report_date_window(request)[1]),
                 ),
             )
             attendance = await ReportService._cached_payload(
                 request,
-                ("reports", "breakdown", "attendance", level),
+                ("reports", "breakdown", "attendance", _scope_path(request, ctx), level, *_date_cache_key(request)),
                 lambda: ttl_cached(
-                    ("reports", "breakdown", "attendance", level),
+                    ("reports", "breakdown", "attendance", _scope_path(request, ctx), level, *_date_cache_key(request)),
                     45.0,
-                    lambda: client.get_report_breakdown(access_token, metric="attendance", level=level),
+                    lambda: client.get_report_breakdown(access_token, metric="attendance", level=level, start_date=_report_date_window(request)[0], end_date=_report_date_window(request)[1]),
                 ),
             )
-        except BackendClientError:
+        except BackendClientError as exc:
+            if exc.status_code == 403:
+                raise
             return []
         return _normalize_breakdown_rows(counts, finance, attendance)
 
     @staticmethod
-    async def get_population_statistics(request, ctx) -> list[dict[str, Any]]:
+    async def growth_rows(request, ctx) -> list[dict[str, Any]]:
         if await ReportService.use_mock(request):
             return []
         client = async_client(get_api_client())
@@ -474,14 +524,16 @@ class ReportService:
         try:
             payload = await ReportService._cached_payload(
                 request,
-                ("reports", "growth", "counts"),
+                ("reports", "growth", "counts", _scope_path(request, ctx), *_date_cache_key(request)),
                 lambda: ttl_cached(
-                    ("reports", "growth", "counts"),
+                    ("reports", "growth", "counts", _scope_path(request, ctx), *_date_cache_key(request)),
                     45.0,
-                    lambda: client.get_report_growth(access_token, metric="counts"),
+                    lambda: client.get_report_growth(access_token, metric="counts", period="weekly", start_date=_report_date_window(request)[0], end_date=_report_date_window(request)[1]),
                 ),
             )
-        except BackendClientError:
+        except BackendClientError as exc:
+            if exc.status_code == 403:
+                raise
             return []
         return [
             {
@@ -493,7 +545,7 @@ class ReportService:
         ]
 
     @staticmethod
-    async def export_report_csv(request, ctx) -> list[dict[str, Any]]:
+    async def anomaly_rows(request, ctx) -> list[dict[str, Any]]:
         if not await ReportService.live_enabled(request):
             return []
         client = async_client(get_api_client())
@@ -501,15 +553,15 @@ class ReportService:
         try:
             payload = await ReportService._cached_payload(
                 request,
-                ("reports", "anomalies", "counts"),
+                ("reports", "anomalies", "counts", _scope_path(request, ctx), *_date_cache_key(request)),
                 lambda: ttl_cached(
-                    ("reports", "anomalies", "counts"),
+                    ("reports", "anomalies", "counts", _scope_path(request, ctx), *_date_cache_key(request)),
                     45.0,
-                    lambda: client.get_report_anomalies(access_token, metric="counts"),
+                    lambda: client.get_report_anomalies(access_token, metric="counts", start_date=_report_date_window(request)[0], end_date=_report_date_window(request)[1]),
                 ),
             )
         except BackendClientError:
-            return []
+            raise
         return [
             {
                 "title": f"Attendance unusual at {row.get('location') or 'Unknown location'}",
@@ -520,7 +572,7 @@ class ReportService:
         ]
 
     @staticmethod
-    async def export_report_excel(request) -> dict[str, Any] | None:
+    async def refresh(request) -> dict[str, Any] | None:
         if not await ReportService.live_enabled(request):
             return None
         client = async_client(get_api_client())
@@ -528,7 +580,7 @@ class ReportService:
         return await client.refresh_reports(access_token)
 
     @staticmethod
-    async def export_report_pdf(request, ctx, *, report_type: str, export_format: str) -> tuple[bytes, dict[str, str]] | None:
+    async def export(request, ctx, *, report_type: str, export_format: str) -> tuple[bytes, dict[str, str]] | None:
         if not await ReportService.live_enabled(request):
             return None
         if report_type == "operational_scope":
@@ -541,11 +593,11 @@ class ReportService:
         access_token = AuthService.get_access_token(request)
         scope_path = _scope_path(request, ctx)
         if export_format == "csv":
-            return await client.export_report_csv(access_token, report_type=report_type, scope_path=scope_path)
+            return await client.export_report_csv(access_token, report_type=report_type, scope_path=scope_path, start_date=_report_date_window(request)[0], end_date=_report_date_window(request)[1])
         if export_format == "excel":
-            return await client.export_report_excel(access_token, report_type=report_type)
+            return await client.export_report_excel(access_token, report_type=report_type, start_date=_report_date_window(request)[0], end_date=_report_date_window(request)[1])
         if export_format == "pdf":
-            return await client.export_report_pdf(access_token, report_type=report_type)
+            return await client.export_report_pdf(access_token, report_type=report_type, start_date=_report_date_window(request)[0], end_date=_report_date_window(request)[1])
         raise ValueError("Unsupported export format")
 
 async def _report_use_mock(request) -> bool:
@@ -563,7 +615,7 @@ async def _report_live_enabled(request) -> bool:
 async def _summary_metrics_public(request, ctx) -> dict[str, Any]:
     if await _report_use_mock(request):
         summary = STORE.dashboard_summary(ctx.current_scope_path, ctx.level)
-        counts_summary = STORE.counts_summary(ctx.current_scope_path)
+        counts_summary = await ChurchDataService.count_summary(request, ctx)
         return {
             "workers_total": summary["workers_total"],
             "pending_items": summary["pending_items"],
@@ -579,44 +631,9 @@ async def _summary_metrics_public(request, ctx) -> dict[str, Any]:
     }
 
 
-async def _summary_rows_public(request, ctx) -> list[dict[str, Any]]:
-    if await _report_use_mock(request):
-        return STORE.list_counts(ctx.current_scope_path)[:8]
-    client = async_client(get_api_client())
-    access_token = AuthService.get_access_token(request)
-    rows = await client.get_report_summary(access_token, scope_path=_scope_path(request, ctx))
-    return sorted([_normalize_summary_row(row) for row in rows], key=_summary_sort_key, reverse=True)
-
-
-async def _growth_rows_public(request, ctx) -> list[dict[str, Any]]:
-    if await _report_use_mock(request):
-        return []
-    client = async_client(get_api_client())
-    access_token = AuthService.get_access_token(request)
-    payload = await client.get_report_growth(access_token, metric="counts")
-    return [
-        {"period": str(row.get("period") or ""), "value": int(row.get("value") or 0), "growth": float(row.get("growth_rate") or 0)}
-        for row in payload.get("data") or []
-    ]
-
-
 ReportService.live_enabled = staticmethod(_report_live_enabled)
 ReportService.use_mock = staticmethod(_report_use_mock)
 ReportService.summary_metrics = staticmethod(_summary_metrics_public)
-ReportService.summary_rows = staticmethod(_summary_rows_public)
-ReportService.growth_rows = staticmethod(_growth_rows_public)
-ReportService.financial_summary = staticmethod(ReportService.get_report_summary)
-ReportService.financial_rows = staticmethod(ReportService.get_financial_summary)
-ReportService.attendance_summary = staticmethod(ReportService.get_report_attendance)
-ReportService.attendance_rows = staticmethod(ReportService.get_attendance_summary)
-ReportService.counts_series = staticmethod(ReportService.get_report_timeseries)
-ReportService.finance_series = staticmethod(ReportService.get_report_breakdown)
-ReportService.attendance_series = staticmethod(ReportService.get_report_anomalies)
-ReportService.breakdown_rows = staticmethod(ReportService.get_report_growth)
-ReportService.anomaly_rows = staticmethod(ReportService.export_report_csv)
-ReportService.refresh = staticmethod(ReportService.export_report_excel)
-ReportService.export = staticmethod(ReportService.export_report_pdf)
-ReportService.get_report_growth = staticmethod(_growth_rows_public)
 
 dual_mode_class(ReportService)
 

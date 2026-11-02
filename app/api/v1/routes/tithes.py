@@ -9,8 +9,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
+from app.db.filters import scope_filter
 from app.crud.crud_offerings import offering as crud_offering
-from app.schemas.offerings import OfferingCreate, OfferingResponse, OfferingUpdate
+from app.schemas.offerings import OfferingCreate, OfferingResponse, OfferingUpdate, OfferingCorrection, OfferingReview
 from app.schemas.sync import SyncResult
 from sqlalchemy import select, func, text
 from app.models.user import User
@@ -64,7 +65,7 @@ async def read_tithes(
 ) -> Any:
     """Retrieve tithes with scope filtering."""
     search_scope = deps.resolve_scope_path(current_user, scope_path)
-    return await crud_offering.get_multi_by_scope(
+    rows = await crud_offering.get_multi_by_scope(
         db,
         scope_path=search_scope,
         fund_type="tithe",
@@ -75,6 +76,7 @@ async def read_tithes(
         skip=skip,
         limit=limit,
     )
+    return deps.filter_rows_in_scope(rows, current_user)
 
 
 @router.get(
@@ -113,10 +115,34 @@ async def update_tithe(
     if not tithe or tithe.fund_type != "tithe":
         raise HTTPException(status_code=404, detail="Tithe not found")
     deps.ensure_path_in_scope(current_user, tithe.path, detail="Tithe outside your scope")
-    if tithe_in.fund_type and tithe_in.fund_type != "tithe":
-        raise HTTPException(status_code=400, detail="fund_type must be tithe for this endpoint")
-    tithe_in = tithe_in.model_copy(update={"fund_type": "tithe"})
     return await crud_offering.update(db, db_obj=tithe, obj_in=tithe_in)
+
+
+@router.post("/{tithe_id}/corrections", response_model=OfferingResponse,
+             dependencies=[Depends(deps.PermissionChecker("offerings:update"))])
+async def correct_tithe(*, db: AsyncSession = Depends(deps.get_db), tithe_id: UUID,
+                        correction: OfferingCorrection,
+                        current_user: User = Depends(deps.get_current_active_user)) -> Any:
+    tithe = await crud_offering.get(db, id=tithe_id)
+    if not tithe or tithe.fund_type != "tithe":
+        raise HTTPException(status_code=404, detail="Tithe not found")
+    deps.ensure_path_in_scope(current_user, tithe.path, detail="Tithe outside your scope")
+    return await crud_offering.correct(db, offering_id=tithe_id, correction=correction,
+        actor_id=current_user.user_id, scope_path=deps.effective_scope_path(current_user))
+
+
+@router.post("/{tithe_id}/review", response_model=OfferingResponse,
+             dependencies=[Depends(deps.PermissionChecker("offerings:review"))])
+async def review_tithe(*, db: AsyncSession = Depends(deps.get_db), tithe_id: UUID,
+                       decision: str = Query(..., pattern="^(approved|rejected)$"),
+                       payload: OfferingReview = OfferingReview(),
+                       current_user: User = Depends(deps.get_current_active_user)) -> Any:
+    tithe = await crud_offering.get(db, id=tithe_id)
+    if not tithe or tithe.fund_type != "tithe":
+        raise HTTPException(status_code=404, detail="Tithe not found")
+    deps.ensure_path_in_scope(current_user, tithe.path, detail="Tithe outside your scope")
+    return await crud_offering.review(db, offering_id=tithe_id, actor_id=current_user.user_id,
+        scope_path=deps.effective_scope_path(current_user), decision=decision, note=payload.note)
 
 
 @router.post(
@@ -171,19 +197,22 @@ async def get_tithe_stats(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Return aggregate tithe stats within scope and date range."""
-    scope_path = str(current_user.path)
+    scope_path = deps.effective_scope_path(current_user)
     from app.models.offerings import Offering
     query = select(
         func.count(Offering.id).label("count"),
         func.coalesce(func.sum(Offering.amount), 0).label("total_amount")
     ).where(
-        text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path),
-        Offering.fund_type == "tithe"
+        scope_filter(Offering.path, scope_path),
+        Offering.fund_type == "tithe",
+        Offering.is_deleted == False,
+        Offering.status == "approved",
     )
     if start_date:
         query = query.where(Offering.date >= start_date)
     if end_date:
-        query = query.where(Offering.date <= end_date)
+        from datetime import timedelta
+        query = query.where(Offering.date < end_date + timedelta(days=1))
     result = await db.execute(query)
     row = result.first()
     return {"count": row.count if row else 0, "total_amount": str(row.total_amount if row else 0)}
@@ -198,6 +227,7 @@ async def delete_tithe(
     *,
     db: AsyncSession = Depends(deps.get_db),
     tithe_id: UUID,
+    reason: str = Query(..., min_length=20, max_length=1000),
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Soft delete a tithe record."""
@@ -205,9 +235,6 @@ async def delete_tithe(
     if not tithe or tithe.fund_type != "tithe":
         raise HTTPException(status_code=404, detail="Tithe not found")
     deps.ensure_path_in_scope(current_user, tithe.path, detail="Tithe outside your scope")
-    await crud_offering.update(
-        db,
-        db_obj=tithe,
-        obj_in={"is_deleted": True, "operation": "DELETE", "last_modify": datetime.utcnow()}
-    )
+    await crud_offering.soft_delete(db, offering_id=tithe_id, actor_id=current_user.user_id,
+        scope_path=deps.effective_scope_path(current_user), reason=reason)
     return None

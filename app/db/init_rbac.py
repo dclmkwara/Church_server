@@ -47,6 +47,7 @@ DEFAULT_PERMISSIONS = [
     _perm("offerings:create", "Create Offering", "Can record offerings and tithes"),
     _perm("offerings:read", "Read Offerings", "Can view offerings and tithes"),
     _perm("offerings:update", "Update Offering", "Can edit offerings and tithes"),
+    _perm("offerings:review", "Review Offering", "Can approve or reject offering and tithe entries within scope"),
     _perm("offerings:delete", "Delete Offering", "Can delete offerings and tithes"),
 
     # Records / follow-up
@@ -180,6 +181,7 @@ ADMIN_PERMS = USHER_PERMS + [
 ]
 
 PASTOR_PERMS = ADMIN_PERMS + DATA_DELETE_PERMS + REPORTING_READ + [
+    "offerings:review",
     "users:approve",
     "users:delete",
     "users:deactivate",

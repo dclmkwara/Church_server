@@ -13,10 +13,11 @@ from typing import Any, List
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, text
+from sqlalchemy import select
 from datetime import datetime
 
 from app.api import deps
+from app.db.filters import scope_filter
 from app.models.user import User, Worker
 from app.schemas.user import (
     UserResponse,
@@ -169,7 +170,7 @@ async def list_pending_users(
         .where(
             User.approval_status == "pending",
             User.is_deleted == False,
-            text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=str(current_user.path)),
+            scope_filter(User.path, deps.effective_scope_path(current_user)),
         )
         .offset(skip)
         .limit(limit)
@@ -414,7 +415,7 @@ async def bulk_approve_users(
                 failed.append({"user_id": user_id, "reason": "User not found"})
                 continue
             
-            if not deps.path_in_scope(current_user.path, user.path):
+            if not deps.path_in_scope(deps.effective_scope_path(current_user), user.path):
                 failed.append({"user_id": user_id, "reason": "Outside your scope"})
                 continue
             

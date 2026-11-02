@@ -67,20 +67,24 @@ Notification → Location Pastor or Admin
 
 ## 3. Data Entry Policy (Counts, Offerings, Records)
 
-Data submitted through the counting and recording modules (via mobile apps or web) is **automatically accepted** upon submission. There is **no approval gate** for count data — this was a deliberate design decision to:
+Population/count submissions are recorded without a separate approval step. This allows timely reporting while supervisors can review or correct submitted records within their scope. Financial submissions follow their separate approval/correction workflow and must not be treated as approved totals until approved.
+
+For large services, two or more ushers may submit separate counts for the same location and event when each covers a different section or row. These are **complementary partial counts**: keep each submission as its own source record and sum the sections for the location total. Do not deduplicate distinct ushers' submissions by location/event. Idempotency applies to a retry of the same client submission key, not to separate usher submissions.
+
+This workflow is intended to avoid a count approval bottleneck and to:
 
 1. Avoid bureaucratic delays (a pastor doesn't need to approve every Sunday count)
 2. Prevent data bottlenecks at the Group/Region level
 3. Keep the data flow fast for the mobile apps
 
 **Instead of approval gating, integrity is ensured by:**
-- Linking every data entry to a specific `ProgramEvent` with a verified date and type
+- Linking count entries to a specific `ProgramEvent` with a verified date and type
 - Recording the `entered_by_id` for every entry
 - Making edits traceable through `updated_at` timestamps
-- Allowing supervisors to flag or delete incorrect entries within their scope
+- Allowing supervisors to flag or correct incorrect entries within their scope
 - The anomaly detection report (`GET /reports/anomalies`) identifies unusually high or low values
 
-**The ltree path is the single source of aggregation:** when a Group Pastor views data, the system automatically aggregates all counts from every location under their group path — no manual forwarding or WhatsApp communication is needed.
+Where report routes apply the hierarchical path filter, totals roll up the submitted count records under that scope. Report-by-report filtering and aggregation still require verification; this is not a guarantee that every query or dashboard applies the same scope.
 
 ---
 
@@ -171,37 +175,36 @@ Offerings and tithes are tracked **per-event** (not per-individual). The record 
 
 | Rule | Enforcement |
 |---|---|
-| A user can only READ data within their scope | `WHERE path <@ scope_path` filter on every query |
-| A user can only CREATE data for locations in their scope | Validated in CRUD layer |
-| A user's scope is auto-derived from their role score at login | `create_admin_access_id()` in `app/core/security.py` |
-| A user can specify a narrower scope than their default | `?scope_path=` query param accepted but validated |
-| A user cannot specify a scope path that's outside their default | Server validates scope_path against user's token scope |
+| A user's maximum hierarchy scope comes from current roles and home path | Recomputed in protected request dependencies |
+| Level 8 continental data access | Broad root envelope plus resolved nation paths within the user's home continent |
+| Route query visibility | Enforced through application-level filters where implemented; verify each route before relying on this policy |
+| Database row-level security | Not installed; application scope checks are not PostgreSQL RLS |
 
 ---
 
 ## 8. Soft Delete Policy
 
-**No data is ever permanently deleted** from the system. All deletions set `is_deleted = true`. This means:
+Selected entities use soft deletion (`is_deleted = true`). The behavior is not universal across all tables or delete operations, so do not treat this as a complete retention or audit guarantee. For models that support it:
 
-- All historical records are preserved for auditing and reporting
-- A deleted record can be recovered by a system admin
-- Reporting queries always exclude `is_deleted = true` records by default
-- The soft-delete pattern is applied to: `workers`, `users`, `counts`, `offerings`, `records`, `attendance`, `fellowship_*`, `announcements`, and `program_events`
+- Records remain in the source table unless another retention process removes them
+- Recovery must be verified per model and may require database backup or operator action
+- Reporting routes exclude deleted records where the filter is implemented; verify each report before relying on it
 
 ---
 
 ## 9. Offline Sync & Idempotency Policy
 
-When mobile apps submit data after being offline, the server must handle duplicate submissions gracefully.
+When clients retry supported batch submissions, the server uses idempotency keys to avoid replaying the same submission. This does not establish that every mobile workflow works offline or that every write endpoint supports idempotency.
 
 **Idempotency mechanism:**
-1. The mobile app generates a `client_id` (UUID) for each record **before** storing it offline
-2. When syncing, the record is submitted with its `client_id`
-3. The server checks if a record with that `client_id` already exists
-4. If found → the server returns the existing record (marked as "duplicate" in sync response)
-5. If not found → the server stores the new record and returns it (marked as "synced")
+1. A client supplies an idempotency key on a supported submission route
+2. The server checks the key within that route's idempotency scope
+3. A recognized retry can return the recorded prior result
+4. A new key is processed as a new submission
 
-**Result:** Even if a sync runs multiple times (e.g., due to network drops mid-sync), no duplicate records are created.
+Client-side persistence while offline, coverage across all write routes, and all batch failure/retry outcomes have not been verified here.
+
+**Result:** A repeated request with the same key can be recognized on supported routes. Distinct submissions, including separate ushers' partial counts, remain distinct records.
 
 ---
 

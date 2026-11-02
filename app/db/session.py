@@ -6,9 +6,10 @@ import ssl
 from typing import AsyncGenerator
 from urllib.parse import quote
 
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import Session
 
 from app.core.config import settings
 
@@ -100,6 +101,51 @@ AsyncSessionLocal = async_sessionmaker(
 )
 
 
+@event.listens_for(Session, "after_begin")
+def _restore_rls_context(session: Session, transaction, connection) -> None:
+    """Reapply request RLS settings after any route-level commit starts a new transaction."""
+    context = session.info.get("_rls_context")
+    if not context:
+        return
+    connection.execute(
+        text(
+            "SELECT set_config('app.scope_path', :scope_path, true), "
+            "set_config('app.role_score', :role_score, true), "
+            "set_config('app.continent', :continent, true), "
+            "set_config('app.user_id', :user_id, true), "
+            "set_config('app.nation_paths', :nation_paths, true), "
+            "set_config('app.auth_email', :auth_email, true), "
+            "set_config('app.reset_token', :reset_token, true)"
+        ),
+        context,
+    )
+
+
+async def _set_rls_values(session: AsyncSession, **values: str) -> None:
+    context = session.sync_session.info.setdefault("_rls_context", {
+        "scope_path": "",
+        "role_score": "0",
+        "continent": "",
+        "user_id": "",
+        "nation_paths": "",
+        "auth_email": "",
+        "reset_token": "",
+    })
+    context.update(values)
+    await session.execute(
+        text(
+            "SELECT set_config('app.scope_path', :scope_path, true), "
+            "set_config('app.role_score', :role_score, true), "
+            "set_config('app.continent', :continent, true), "
+            "set_config('app.user_id', :user_id, true), "
+            "set_config('app.nation_paths', :nation_paths, true), "
+            "set_config('app.auth_email', :auth_email, true), "
+            "set_config('app.reset_token', :reset_token, true)"
+        ),
+        context,
+    )
+
+
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """
     FastAPI dependency that yields an async database session.
@@ -109,7 +155,15 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
-async def inject_scope(session: AsyncSession, scope_path: str) -> None:
+async def inject_scope(
+    session: AsyncSession,
+    scope_path: str,
+    *,
+    role_score: int,
+    continent: str | None = None,
+    user_id: str | None = None,
+    nation_paths: tuple[str, ...] = (),
+) -> None:
     """
     Inject scope path into the session for Row-Level Security.
 
@@ -117,10 +171,38 @@ async def inject_scope(session: AsyncSession, scope_path: str) -> None:
         session: Database session
         scope_path: ltree path for scope filtering (e.g., 'org.234.kw.iln.ile')
     """
-    await session.execute(
-        text("SELECT set_config('app.scope_path', :path, true)"),
-        {"path": scope_path},
+    await _set_rls_values(
+        session,
+        scope_path=scope_path,
+        role_score=str(role_score),
+        continent=(continent or "").strip(),
+        user_id=str(user_id or ""),
+        # `|` cannot occur in an ltree label; the policy migration splits
+        # this value and fails closed when it is empty for level 8.
+        nation_paths="|".join(nation_paths),
+        auth_email="",
+        reset_token="",
     )
+
+
+async def inject_auth_user(session: AsyncSession, user_id: str) -> None:
+    """Set the verified token subject before the first RLS-protected user read."""
+    await _set_rls_values(session, user_id=str(user_id))
+
+
+async def inject_auth_email(session: AsyncSession, email: str) -> None:
+    """Permit a single email row during password authentication/reset lookup."""
+    await _set_rls_values(session, auth_email=email.strip().lower())
+
+
+async def inject_continent(session: AsyncSession, continent: str) -> None:
+    """Set the continent resolved from a level-8 user's home Nation."""
+    await _set_rls_values(session, continent=continent.strip())
+
+
+async def inject_reset_token(session: AsyncSession, token: str) -> None:
+    """Limit anonymous reset-token operations to the presented token row."""
+    await _set_rls_values(session, reset_token=token)
 
 
 async def test_connection() -> bool:

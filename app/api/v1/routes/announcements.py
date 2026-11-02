@@ -8,8 +8,17 @@ from app.api import deps
 from app.crud.crud_announcement import announcement as crud_announcement
 from app.schemas.announcement import AnnouncementCreate, AnnouncementUpdate, AnnouncementResponse
 from app.models.user import User
+from app.models.location import Region
 
 router = APIRouter()
+
+
+async def _get_announcement_in_scope(db: AsyncSession, announcement_id: UUID, current_user: User):
+    announcement = await crud_announcement.get_by_id(db, announcement_id)
+    if not announcement:
+        raise HTTPException(status_code=404, detail="Announcement not found")
+    deps.ensure_path_in_scope(current_user, announcement.path, detail="Announcement outside your scope")
+    return announcement
 
 @router.post(
     "/",
@@ -24,12 +33,19 @@ async def create_announcement(
 ):
     """
     Create a new announcement.
-    Path is derived from the region_id in the request.
+    Resolve the region from the database and derive the announcement scope
+    from that region, rather than trusting a caller-supplied name or path.
     """
-    # For now, use user's path. In production, validate region_id and derive path from it.
-    path = str(current_user.path)
-    
-    announcement = await crud_announcement.create(db, announcement_in, path)
+    try:
+        region = await db.get(Region, announcement_in.region_id)
+    except (TypeError, ValueError):
+        region = None
+    if not region:
+        raise HTTPException(status_code=404, detail="Region not found")
+    deps.ensure_path_in_scope(current_user, region.path, detail="Region outside your scope")
+
+    validated_input = announcement_in.model_copy(update={"region_name": region.region_name})
+    announcement = await crud_announcement.create(db, validated_input, str(region.path))
     return announcement
 
 @router.get(
@@ -52,7 +68,7 @@ async def list_announcements(
     """
     List announcements filtered by user's scope.
     """
-    scope_path = str(current_user.path)
+    scope_path = deps.effective_scope_path(current_user)
     announcements = await crud_announcement.get_list(
         db,
         scope_path,
@@ -65,7 +81,7 @@ async def list_announcements(
         skip,
         limit,
     )
-    return announcements
+    return deps.filter_rows_in_scope(announcements, current_user)
 
 @router.get(
     "/{announcement_id}",
@@ -80,16 +96,7 @@ async def get_announcement(
     """
     Get announcement by ID.
     """
-    announcement = await crud_announcement.get_by_id(db, announcement_id)
-    if not announcement:
-        raise HTTPException(status_code=404, detail="Announcement not found")
-    
-    # Verify user has access to this announcement's scope
-    # For now, simple check - in production, use ltree operators
-    # if not str(announcement.path).startswith(str(current_user.path)):
-    #     raise HTTPException(status_code=403, detail="Access denied")
-    
-    return announcement
+    return await _get_announcement_in_scope(db, announcement_id, current_user)
 
 @router.put(
     "/{announcement_id}",
@@ -105,11 +112,8 @@ async def update_announcement(
     """
     Update an announcement.
     """
-    announcement = await crud_announcement.update(db, announcement_id, announcement_in)
-    if not announcement:
-        raise HTTPException(status_code=404, detail="Announcement not found")
-    
-    return announcement
+    await _get_announcement_in_scope(db, announcement_id, current_user)
+    return await crud_announcement.update(db, announcement_id, announcement_in)
 
 @router.post(
     "/{announcement_id}/publish",
@@ -124,11 +128,8 @@ async def publish_announcement(
     """
     Publish an announcement (sets published_at timestamp and is_active=True).
     """
-    announcement = await crud_announcement.publish(db, announcement_id)
-    if not announcement:
-        raise HTTPException(status_code=404, detail="Announcement not found")
-    
-    return announcement
+    await _get_announcement_in_scope(db, announcement_id, current_user)
+    return await crud_announcement.publish(db, announcement_id)
 
 
 @router.delete(
@@ -142,9 +143,7 @@ async def delete_announcement(
     current_user: User = Depends(deps.get_current_active_user),
 ):
     """Delete announcement."""
-    announcement = await crud_announcement.get_by_id(db, announcement_id)
-    if not announcement:
-        raise HTTPException(status_code=404, detail="Announcement not found")
+    announcement = await _get_announcement_in_scope(db, announcement_id, current_user)
     await db.delete(announcement)
     await db.commit()
     return None

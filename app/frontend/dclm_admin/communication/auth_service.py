@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import json
 from time import time
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -31,6 +32,13 @@ class AuthIdentity:
     @property
     def email(self) -> str:
         return str(self.user.get("email") or "")
+
+    @property
+    def permissions(self) -> frozenset[str]:
+        return frozenset(str(permission) for permission in (self.user.get("permissions") or []))
+
+    def has_permission(self, permission: str) -> bool:
+        return permission in self.permissions
 
 
 class AuthService:
@@ -126,6 +134,11 @@ class AuthService:
         response.set_cookie(config.home_cookie_name, identity.home_path, **cookie_args)
         response.set_cookie(config.display_name_cookie_name, identity.display_name, **cookie_args)
         response.set_cookie(config.email_cookie_name, identity.email, **cookie_args)
+        response.set_cookie(
+            "dclm_admin_permissions",
+            json.dumps(sorted(identity.permissions), separators=(",", ":")),
+            **cookie_args,
+        )
         response.set_cookie(cls._refresh_cookie_name(), str(int(time())), **cookie_args)
 
     @classmethod
@@ -142,6 +155,7 @@ class AuthService:
             config.home_cookie_name,
             config.display_name_cookie_name,
             config.email_cookie_name,
+            "dclm_admin_permissions",
             cls._refresh_cookie_name(),
         ]:
             response.delete_cookie(cookie_name, path="/")
@@ -181,7 +195,13 @@ class AuthService:
         role_name = cls._cookie_value(request, config.role_name_cookie_name, "Worker") or "Worker"
         scope_path = cls._cookie_value(request, config.scope_cookie_name, "") or ""
         home_path = cls._cookie_value(request, config.home_cookie_name, "") or ""
-        user = {"name": display_name, "email": email, "path": home_path}
+        try:
+            permissions = json.loads(cls._cookie_value(request, "dclm_admin_permissions", "[]") or "[]")
+            if not isinstance(permissions, list) or any(not isinstance(item, str) for item in permissions):
+                permissions = []
+        except (TypeError, ValueError):
+            permissions = []
+        user = {"name": display_name, "email": email, "path": home_path, "permissions": permissions}
         return AuthIdentity(
             user_id=user_id,
             access_token=access_token,

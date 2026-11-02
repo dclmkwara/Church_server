@@ -2,7 +2,7 @@
 Pydantic schemas for Worker Attendance.
 """
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -12,7 +12,7 @@ class WorkerAttendanceBase(BaseModel):
     location_id: str
     worker_id: UUID
     
-    status: str = Field(default="present", description="present, absent, late, excused")
+    status: Literal["present", "absent", "late", "excused"] = Field(default="present", description="present, absent, late, excused")
     reason: Optional[str] = None
     note: Optional[str] = None
     client_id: Optional[UUID] = None
@@ -21,7 +21,7 @@ class WorkerAttendanceCreate(WorkerAttendanceBase):
     pass
 
 class WorkerAttendanceUpdate(BaseModel):
-    status: Optional[str] = None
+    status: Optional[Literal["present", "absent", "late", "excused"]] = None
     reason: Optional[str] = None
     note: Optional[str] = None
 

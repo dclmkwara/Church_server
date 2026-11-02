@@ -1,11 +1,13 @@
 """Program and Event management routes."""
 from typing import Any, List
+from datetime import date as date_type
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text, extract
 from sqlalchemy.orm import selectinload
 from app.api import deps
+from app.db.filters import scope_filter, scope_or_ancestor_filter
 from app.crud.crud_programs import program_domain, program_type, program_campaign, program_event, event_assignment
 from app.schemas.programs import ProgramDomainCreate, ProgramDomainResponse, ProgramDomainUpdate, ProgramTypeCreate, ProgramTypeResponse, ProgramTypeUpdate, ProgramCampaignCreate, ProgramCampaignResponse, ProgramCampaignUpdate, ProgramEventCreate, ProgramEventResponse, ProgramEventUpdate, EventAssignmentCreate, EventAssignmentResponse
 from app.models.programs import ProgramCampaign, ProgramEvent, ProgramType, ProgramDomain
@@ -18,7 +20,7 @@ def _ensure_min_score(current_user: User, min_score: int, detail: str) -> None:
         raise HTTPException(status_code=403, detail=detail)
 
 @router.get('/domains', response_model=List[ProgramDomainResponse], dependencies=[Depends(deps.PermissionChecker('programs:read'))])
-async def read_program_domains(db: AsyncSession = Depends(deps.get_db), skip: int = 0, limit: int = 100, current_user: User = Depends(deps.get_current_active_user)) -> Any:
+async def read_program_domains(db: AsyncSession = Depends(deps.get_db), skip: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=500), current_user: User = Depends(deps.get_current_active_user)) -> Any:
     return await program_domain.get_multi(db, skip=skip, limit=limit)
 
 @router.post('/domains', response_model=ProgramDomainResponse, dependencies=[Depends(deps.PermissionChecker('programs:manage'))])
@@ -38,8 +40,9 @@ async def update_program_domain(*, db: AsyncSession = Depends(deps.get_db), doma
     return await program_domain.update(db, db_obj=db_domain, obj_in=domain_in)
 
 @router.get('/types', response_model=List[ProgramTypeResponse], dependencies=[Depends(deps.PermissionChecker('programs:read'))])
-async def read_program_types(db: AsyncSession = Depends(deps.get_db), domain_id: int = Query(None), skip: int = 0, limit: int = 100, current_user: User = Depends(deps.get_current_active_user)) -> Any:
-    if domain_id: return await program_type.get_by_domain(db, domain_id=domain_id)
+async def read_program_types(db: AsyncSession = Depends(deps.get_db), domain_id: int = Query(None), skip: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=500), current_user: User = Depends(deps.get_current_active_user)) -> Any:
+    if domain_id:
+        return await program_type.get_by_domain(db, domain_id=domain_id, skip=skip, limit=limit)
     return await program_type.get_multi(db, skip=skip, limit=limit)
 
 @router.get('/types/{type_id}', response_model=ProgramTypeResponse, dependencies=[Depends(deps.PermissionChecker('programs:read'))])
@@ -59,9 +62,9 @@ async def update_program_type(*, db: AsyncSession = Depends(deps.get_db), type_i
     return await program_type.update(db, db_obj=db_type, obj_in=type_in)
 
 @router.get('/campaigns', response_model=List[ProgramCampaignResponse], dependencies=[Depends(deps.PermissionChecker('programs:read'))])
-async def read_program_campaigns(db: AsyncSession = Depends(deps.get_db), skip: int = 0, limit: int = 100, current_user: User = Depends(deps.get_current_active_user), scope_path: str = Query(None), domain: str = Query(None), event_mode: str = Query(None), status_value: str = Query(None, alias='status'), campaign_code: str = Query(None)) -> Any:
+async def read_program_campaigns(db: AsyncSession = Depends(deps.get_db), skip: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=500), current_user: User = Depends(deps.get_current_active_user), scope_path: str = Query(None), domain: str = Query(None), event_mode: str = Query(None), status_value: str = Query(None, alias='status'), campaign_code: str = Query(None)) -> Any:
     search_scope = deps.resolve_scope_path(current_user, scope_path)
-    query = select(ProgramCampaign).where(text('(CAST(path AS ltree) <@ CAST(:scope_path AS ltree) OR CAST(:scope_path AS ltree) <@ CAST(path AS ltree))').bindparams(scope_path=search_scope), ProgramCampaign.is_deleted == False)
+    query = select(ProgramCampaign).where(scope_or_ancestor_filter(ProgramCampaign.path, search_scope), ProgramCampaign.is_deleted == False)
     if domain:
         query = query.join(ProgramDomain, ProgramDomain.id == ProgramCampaign.domain_id)
         query = query.where((ProgramDomain.slug == domain) | (ProgramDomain.name == domain))
@@ -97,12 +100,12 @@ async def update_program_campaign(*, db: AsyncSession = Depends(deps.get_db), ca
     return await program_campaign.update(db, db_obj=db_campaign, obj_in=campaign_in)
 
 @router.get('/events', response_model=List[ProgramEventResponse], dependencies=[Depends(deps.PermissionChecker('programs:read'))])
-async def read_program_events(db: AsyncSession = Depends(deps.get_db), skip: int = 0, limit: int = 100, current_user: User = Depends(deps.get_current_active_user), scope_path: str = Query(None), program_type: str = Query(None), program_domain: str = Query(None), title: str = Query(None), level: str = Query(None), location_id: str = Query(None), date: str = Query(None), start_month: int = Query(None, ge=1, le=12), end_month: int = Query(None, ge=1, le=12), start_year: int = Query(None, ge=1900, le=2100), end_year: int = Query(None, ge=1900, le=2100), event_mode: str = Query(None), reporting_scope: str = Query(None), audience_segment: str = Query(None), campaign_code: str = Query(None), alpha_location_id: str = Query(None), campaign_id: UUID = Query(None)) -> Any:
+async def read_program_events(db: AsyncSession = Depends(deps.get_db), skip: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=500), current_user: User = Depends(deps.get_current_active_user), scope_path: str = Query(None), program_type: str = Query(None), program_domain: str = Query(None), title: str = Query(None), level: str = Query(None), location_id: str = Query(None), date: str = Query(None), start_month: int = Query(None, ge=1, le=12), end_month: int = Query(None, ge=1, le=12), start_year: int = Query(None, ge=1900, le=2100), end_year: int = Query(None, ge=1900, le=2100), event_mode: str = Query(None), reporting_scope: str = Query(None), audience_segment: str = Query(None), campaign_code: str = Query(None), alpha_location_id: str = Query(None), campaign_id: UUID = Query(None)) -> Any:
     search_scope = deps.resolve_scope_path(current_user, scope_path)
     query = select(ProgramEvent).options(
         selectinload(ProgramEvent.program_type),
         selectinload(ProgramEvent.campaign),
-    ).where(text('(CAST(path AS ltree) <@ CAST(:scope_path AS ltree) OR CAST(:scope_path AS ltree) <@ CAST(path AS ltree))').bindparams(scope_path=search_scope))
+    ).where(scope_or_ancestor_filter(ProgramEvent.path, search_scope))
     if program_type or program_domain:
         query = query.join(ProgramType, ProgramType.id == ProgramEvent.program_type_id)
         if program_domain:
@@ -118,16 +121,19 @@ async def read_program_events(db: AsyncSession = Depends(deps.get_db), skip: int
         query = query.where(text('nlevel(CAST(path AS ltree)) = :level').bindparams(level=level_map[key]))
     if location_id:
         location = await deps.get_location_in_scope(db, current_user=current_user, location_id=location_id, detail='Location outside your scope')
-        query = query.where(text('CAST(path AS ltree) <@ CAST(:location_path AS ltree)').bindparams(location_path=str(location.path)))
+        query = query.where(scope_filter(ProgramEvent.path, str(location.path)))
     if date:
-        from datetime import date as date_type
         try: date_val = date_type.fromisoformat(date)
         except ValueError: raise HTTPException(status_code=400, detail='Invalid date format (YYYY-MM-DD)')
         query = query.where(ProgramEvent.date == date_val)
+    if start_year and end_year and start_year > end_year:
+        raise HTTPException(status_code=400, detail='start_year must be less than or equal to end_year')
+    if start_month and end_month and start_month > end_month:
+        raise HTTPException(status_code=400, detail='start_month must be less than or equal to end_month')
     if start_month: query = query.where(extract('month', ProgramEvent.date) >= start_month)
     if end_month: query = query.where(extract('month', ProgramEvent.date) <= end_month)
-    if start_year: query = query.where(extract('year', ProgramEvent.date) >= start_year)
-    if end_year: query = query.where(extract('year', ProgramEvent.date) <= end_year)
+    if start_year: query = query.where(ProgramEvent.date >= date_type(start_year, 1, 1))
+    if end_year: query = query.where(ProgramEvent.date < date_type(end_year + 1, 1, 1))
     if event_mode: query = query.where(ProgramEvent.event_mode == event_mode)
     if reporting_scope: query = query.where(ProgramEvent.reporting_scope == reporting_scope)
     if audience_segment: query = query.where(ProgramEvent.audience_segment == audience_segment)
@@ -139,7 +145,7 @@ async def read_program_events(db: AsyncSession = Depends(deps.get_db), skip: int
 
 @router.post('/events', response_model=ProgramEventResponse, dependencies=[Depends(deps.PermissionChecker('programs:manage'))])
 async def create_program_event(*, db: AsyncSession = Depends(deps.get_db), event_in: ProgramEventCreate, current_user: User = Depends(deps.get_current_active_user)) -> Any:
-    scope_check = select(text('CAST(:event_path AS ltree) <@ CAST(:scope_path AS ltree)')).params(event_path=event_in.path, scope_path=str(current_user.path))
+    scope_check = select(text('CAST(:event_path AS ltree) <@ CAST(:scope_path AS ltree)')).params(event_path=event_in.path, scope_path=deps.effective_scope_path(current_user))
     if not (await db.execute(scope_check)).scalar(): raise HTTPException(status_code=403, detail='Event path outside your scope')
     if event_in.campaign_id:
         campaign = await program_campaign.get(db, id=event_in.campaign_id)
@@ -203,7 +209,7 @@ async def list_event_assignments(event_id: UUID, db: AsyncSession = Depends(deps
     event = await program_event.get(db, id=event_id)
     if not event: raise HTTPException(status_code=404, detail='Program Event not found')
     deps.ensure_path_in_scope(current_user, event.path, detail='Event outside your scope')
-    return await event_assignment.list_for_event(db, event_id=event_id, scope_path=str(current_user.path))
+    return await event_assignment.list_for_event(db, event_id=event_id, scope_path=deps.effective_scope_path(current_user))
 
 @router.post('/events/{event_id}/assignments', response_model=EventAssignmentResponse, dependencies=[Depends(deps.PermissionChecker('programs:assign_workers'))])
 async def create_event_assignment(event_id: UUID, assignment_in: EventAssignmentCreate, db: AsyncSession = Depends(deps.get_db), current_user: User = Depends(deps.get_current_active_user)) -> Any:

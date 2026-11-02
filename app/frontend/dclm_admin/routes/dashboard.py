@@ -972,30 +972,10 @@ async def _dashboard_content(request: Request, ctx) -> Any:
             "href": ctx.url_for("/inbox"),
         },
         {
-            "label": "Register Worker",
-            "hint": "Create a worker record",
-            "icon": "person-plus",
-            "href": "#",
-            "attrs": {
-                "data_bs_toggle": "offcanvas",
-                "data_bs_target": "#form-drawer",
-                "hx_get": ctx.url_for("/people/workers/new"),
-                "hx_target": "#form-drawer-body",
-                "hx_swap": "innerHTML",
-            },
-        },
-        {
-            "label": "Submit Count",
-            "hint": "Record attendance",
-            "icon": "bar-chart",
-            "href": "#",
-            "attrs": {
-                "data_bs_toggle": "offcanvas",
-                "data_bs_target": "#form-drawer",
-                "hx_get": ctx.url_for("/church-data/counts/new"),
-                "hx_target": "#form-drawer-body",
-                "hx_swap": "innerHTML",
-            },
+            "label": "Programs",
+            "hint": "Manage services and campaigns",
+            "icon": "calendar-event",
+            "href": ctx.url_for("/church-data/programs"),
         },
     ]
 

@@ -80,6 +80,18 @@ app = FastAPI(
     openapi_url="/openapi.json" if settings.DEBUG else None,
 )
 
+
+@app.middleware("http")
+async def clear_request_scope_context(request, call_next):
+    """Keep authorization scope metadata isolated to one HTTP request."""
+    from app.db.filters import reset_scope_context
+
+    context_token = reset_scope_context()
+    try:
+        return await call_next(request)
+    finally:
+        reset_scope_context(context_token)
+
 # ── CORS ───────────────────────────────────────────────────────────────────────
 raw_origins = settings.BACKEND_CORS_ORIGINS
 if raw_origins:
@@ -91,16 +103,20 @@ if raw_origins:
         )
     except json.JSONDecodeError:
         allowed_origins = [o.strip() for o in raw_origins.split(",") if o.strip()]
+    if "*" in allowed_origins:
+        raise ValueError("BACKEND_CORS_ORIGINS must list explicit origins; wildcard is not allowed")
 else:
-    allowed_origins = ["*"]
+    # No configured browser origins means cross-origin browser requests are
+    # denied. Set BACKEND_CORS_ORIGINS explicitly for the deployed frontend.
+    allowed_origins = []
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
     # Never send credentials with a wildcard origin — browsers reject it anyway
-    allow_credentials=allowed_origins != ["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
 )
 
 # ── Routers ────────────────────────────────────────────────────────────────────
@@ -220,6 +236,27 @@ async def health_check():
         "database": "connected" if db_ok else "disconnected",
         "version": settings.VERSION,
     }
+
+
+@app.get("/live", tags=["Health"])
+async def liveness_check():
+    """Process liveness probe; independent of database availability."""
+    return {"status": "alive", "version": settings.VERSION}
+
+
+@app.get("/ready", tags=["Health"])
+async def readiness_check():
+    """Readiness probe for serving API traffic, including database access."""
+    from fastapi.responses import JSONResponse
+    from app.db.session import test_connection
+
+    db_ok = await test_connection()
+    payload = {
+        "status": "ready" if db_ok else "not_ready",
+        "database": "connected" if db_ok else "disconnected",
+        "version": settings.VERSION,
+    }
+    return JSONResponse(status_code=200 if db_ok else 503, content=payload)
 
 
 # ── Mount Faststrap Frontend for Single-Instance Deployment ────────────────────

@@ -16,8 +16,8 @@ class CountBase(BaseModel):
     girls: int = Field(0, ge=0)
     note: Optional[str] = None
     client_id: Optional[UUID] = None
-    source_role: str = Field(default="regular")
-    campaign_code: Optional[str] = None
+    source_role: str = Field(default="regular", deprecated=True)
+    campaign_code: Optional[str] = Field(None, deprecated=True)
     submission_channel: str = Field(default="admin_web")
 
 class CountCreate(CountBase):
@@ -31,11 +31,6 @@ class CountUpdate(BaseModel):
     boys: Optional[int] = Field(None, ge=0)
     girls: Optional[int] = Field(None, ge=0)
     note: Optional[str] = None
-    status: Optional[str] = None
-    assignment_id: Optional[UUID] = None
-    source_role: Optional[str] = None
-    campaign_code: Optional[str] = None
-    submission_channel: Optional[str] = None
 
 class CountResponse(CountBase):
     id: UUID

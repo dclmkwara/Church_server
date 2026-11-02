@@ -17,6 +17,7 @@ from fastapi import HTTPException
 
 from app.crud.base import CRUDBase
 from app.models.user import Worker
+from app.db.filters import scope_filter
 from app.schemas.user import WorkerCreate, WorkerUpdate
 from app.models.core import generate_public_person_code
 
@@ -159,7 +160,7 @@ class CRUDWorker(CRUDBase[Worker, WorkerCreate, WorkerUpdate]):
             ```
         """
         query = select(Worker).where(
-            text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path),
+            scope_filter(Worker.path, scope_path),
             Worker.is_deleted == False,
         ).offset(skip).limit(limit)
         

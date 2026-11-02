@@ -7,6 +7,8 @@ class DailyCountSummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     day: date
+    event_id: str
+    event_title: str
     location_id: str
     location_name: str
     path: str
@@ -27,6 +29,7 @@ class MonthlyFinancialSummary(BaseModel):
     location_name: str
     path: str
     total_amount: float
+    total_amount_exact: Optional[str] = None
     transaction_count: int
 
 class AttendanceTrend(BaseModel):

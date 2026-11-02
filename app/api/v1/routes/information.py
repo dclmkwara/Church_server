@@ -11,8 +11,19 @@ from app.api import deps
 from app.crud.crud_announcement import announcement as crud_announcement
 from app.schemas.announcement import AnnouncementCreate, AnnouncementUpdate, AnnouncementResponse
 from app.models.user import User
+from app.models.location import Region
 
 router = APIRouter()
+
+
+async def _get_information_in_scope(
+    db: AsyncSession, information_id: UUID, current_user: User
+):
+    entry = await crud_announcement.get_by_id(db, information_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Information not found")
+    deps.ensure_path_in_scope(current_user, entry.path, detail="Information outside your scope")
+    return entry
 
 
 @router.post(
@@ -27,8 +38,16 @@ async def create_information(
     current_user: User = Depends(deps.get_current_active_user),
 ):
     """Create a new weekly information entry."""
-    path = str(current_user.path)
-    return await crud_announcement.create(db, information_in, path)
+    try:
+        region_id = int(information_in.region_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="A valid region_id is required")
+    region = await db.get(Region, region_id)
+    if region is None:
+        raise HTTPException(status_code=404, detail="Region not found")
+    deps.ensure_path_in_scope(current_user, region.path, detail="Region outside your scope")
+    payload = information_in.model_copy(update={"region_name": region.region_name})
+    return await crud_announcement.create(db, payload, str(region.path))
 
 
 @router.get(
@@ -49,8 +68,8 @@ async def list_information(
     current_user: User = Depends(deps.get_current_active_user),
 ):
     """List weekly information entries within scope."""
-    scope_path = str(current_user.path)
-    return await crud_announcement.get_list(
+    scope_path = deps.effective_scope_path(current_user)
+    entries = await crud_announcement.get_list(
         db,
         scope_path,
         is_active,
@@ -62,6 +81,7 @@ async def list_information(
         skip,
         limit,
     )
+    return deps.filter_rows_in_scope(entries, current_user)
 
 
 @router.get(
@@ -75,10 +95,7 @@ async def get_information(
     current_user: User = Depends(deps.get_current_active_user),
 ):
     """Get weekly information entry by ID."""
-    entry = await crud_announcement.get_by_id(db, information_id)
-    if not entry:
-        raise HTTPException(status_code=404, detail="Information not found")
-    return entry
+    return await _get_information_in_scope(db, information_id, current_user)
 
 
 @router.put(
@@ -93,9 +110,18 @@ async def update_information(
     current_user: User = Depends(deps.get_current_active_user),
 ):
     """Update a weekly information entry."""
+    entry = await _get_information_in_scope(db, information_id, current_user)
+    if information_in.region_id is not None:
+        try:
+            region_id = int(information_in.region_id)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="A valid region_id is required")
+        region = await db.get(Region, region_id)
+        if region is None:
+            raise HTTPException(status_code=404, detail="Region not found")
+        deps.ensure_path_in_scope(current_user, region.path, detail="Region outside your scope")
+        information_in = information_in.model_copy(update={"region_name": region.region_name})
     entry = await crud_announcement.update(db, information_id, information_in)
-    if not entry:
-        raise HTTPException(status_code=404, detail="Information not found")
     return entry
 
 
@@ -110,9 +136,7 @@ async def delete_information(
     current_user: User = Depends(deps.get_current_active_user),
 ):
     """Delete weekly information entry."""
-    entry = await crud_announcement.get_by_id(db, information_id)
-    if not entry:
-        raise HTTPException(status_code=404, detail="Information not found")
+    entry = await _get_information_in_scope(db, information_id, current_user)
     await db.delete(entry)
     await db.commit()
     return None

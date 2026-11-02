@@ -79,7 +79,7 @@ def _create_reporting_views(sync_conn) -> None:
             DATE(c.date) AS day,
             c.location_id,
             l.location_name,
-            c.path AS path,
+            c.path::ltree AS path,
             SUM(c.total) AS total_attendance,
             SUM(c.adult_male) AS total_men,
             SUM(c.adult_female) AS total_women,
@@ -109,7 +109,7 @@ def _create_reporting_views(sync_conn) -> None:
             date_trunc('month', o.date) AS month,
             o.location_id,
             l.location_name,
-            o.path AS path,
+            o.path::ltree AS path,
             COALESCE(SUM(o.amount), 0)::float AS total_amount,
             COUNT(*) AS transaction_count
         FROM offerings o
@@ -133,7 +133,7 @@ def _create_reporting_views(sync_conn) -> None:
             date_trunc('week', wa.created_at) AS week,
             wa.location_id,
             l.location_name,
-            wa.path AS path,
+            wa.path::ltree AS path,
             wa.status,
             COUNT(*) AS worker_count
         FROM worker_attendance wa

@@ -45,7 +45,7 @@ async def list_transfer_requests(
     limit: int = 100,
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
-    scope_path = str(current_user.path)
+    scope_path = deps.effective_scope_path(current_user)
     return await approvals.list_transfers(db, scope_path=scope_path, status=status, skip=skip, limit=limit)
 
 
@@ -56,7 +56,7 @@ async def approve_transfer_request(
     request_id: UUID,
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
-    scope_path = str(current_user.path)
+    scope_path = deps.effective_scope_path(current_user)
     return await approvals.approve_transfer(
         db, request_id=request_id, approver_id=current_user.user_id, scope_path=scope_path
     )
@@ -70,7 +70,7 @@ async def reject_transfer_request(
     reason: Optional[str] = None,
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
-    scope_path = str(current_user.path)
+    scope_path = deps.effective_scope_path(current_user)
     return await approvals.reject_transfer(
         db, request_id=request_id, approver_id=current_user.user_id, reason=reason, scope_path=scope_path
     )
@@ -101,7 +101,7 @@ async def list_status_change_requests(
     limit: int = 100,
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
-    scope_path = str(current_user.path)
+    scope_path = deps.effective_scope_path(current_user)
     return await approvals.list_status_changes(db, scope_path=scope_path, status=status, skip=skip, limit=limit)
 
 
@@ -112,7 +112,7 @@ async def approve_status_change_request(
     request_id: UUID,
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
-    scope_path = str(current_user.path)
+    scope_path = deps.effective_scope_path(current_user)
     return await approvals.approve_status_change(
         db, request_id=request_id, approver_id=current_user.user_id, scope_path=scope_path
     )
@@ -126,7 +126,7 @@ async def reject_status_change_request(
     reason: Optional[str] = None,
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
-    scope_path = str(current_user.path)
+    scope_path = deps.effective_scope_path(current_user)
     return await approvals.reject_status_change(
         db, request_id=request_id, approver_id=current_user.user_id, reason=reason, scope_path=scope_path
     )
@@ -175,7 +175,7 @@ async def list_removal_requests(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """List removal requests in the current user's scope."""
-    scope_path = str(current_user.path)
+    scope_path = deps.effective_scope_path(current_user)
     return await removal.list_requests(
         db,
         scope_path=scope_path,
@@ -195,7 +195,7 @@ async def approve_removal_request(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Approve request and soft-delete the worker."""
-    scope_path = str(current_user.path)
+    scope_path = deps.effective_scope_path(current_user)
 
     from app.models.user import Role, RoleScore
     from sqlalchemy import select
@@ -228,7 +228,7 @@ async def reject_removal_request(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Reject the removal request."""
-    scope_path = str(current_user.path)
+    scope_path = deps.effective_scope_path(current_user)
 
     from app.models.user import Role, RoleScore
     from sqlalchemy import select
@@ -264,7 +264,7 @@ async def escalate_removal_request(
     if not payload.notes or len(payload.notes.strip()) < 10:
         raise HTTPException(status_code=400, detail="Escalation notes are required (min 10 chars)")
 
-    scope_path = str(current_user.path)
+    scope_path = deps.effective_scope_path(current_user)
 
     from app.models.user import Role, RoleScore
     from sqlalchemy import select

@@ -1,6 +1,6 @@
 """Pydantic schemas for Record models."""
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Literal, Optional, Dict, Any
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -8,7 +8,7 @@ class RecordBase(BaseModel):
     event_id: UUID
     location_id: str
     assignment_id: Optional[UUID] = None
-    record_type: str = Field(..., description="newcomer or convert")
+    record_type: Literal["newcomer", "convert"] = Field(..., description="newcomer or convert")
     name: str
     gender: str = Field(..., description="Male or Female")
     phone: str = Field(..., description="Phone number (required)")
@@ -28,11 +28,6 @@ class RecordUpdate(BaseModel):
     phone: Optional[str] = None
     details: Optional[Dict[str, Any]] = None
     note: Optional[str] = None
-    status: Optional[str] = None
-    assignment_id: Optional[UUID] = None
-    source_role: Optional[str] = None
-    campaign_code: Optional[str] = None
-    submission_channel: Optional[str] = None
 
 class RecordResponse(RecordBase):
     id: UUID

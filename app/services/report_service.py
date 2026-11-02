@@ -2,11 +2,8 @@
 Report service — materialized view queries and CSV/Excel/PDF export helpers.
 
 Production changes:
-- refresh_views() now uses engine.connect() with isolation_level="AUTOCOMMIT"
-  so REFRESH MATERIALIZED VIEW CONCURRENTLY can run outside a transaction block.
-  The original approach (refreshing inside a SQLAlchemy session with
-  autocommit=False) caused the CONCURRENT variant to silently fail and fall
-  back to a blocking refresh that locked readers.
+- Manual and scheduled view refreshes share an advisory lock and use
+  REFRESH MATERIALIZED VIEW CONCURRENTLY without a blocking fallback.
 - All print() calls replaced with logger.error()/logger.warning().
 - Per-view exception handling so a failure on one view doesn't abort the others.
 """
@@ -53,11 +50,23 @@ class ReportService:
         start_month: date,
         end_month: date,
     ) -> List[MonthlyFinancialSummary]:
-        """Monthly financial summary from the mv_monthly_financial_summary view."""
+        """Approved monthly totals restricted to the exact selected date window."""
         query = text("""
-            SELECT * FROM mv_monthly_financial_summary
-            WHERE month >= :start_month AND month <= :end_month
-              AND (path <@ CAST(:scope_path AS LTREE) OR path = CAST(:scope_path AS LTREE))
+            SELECT date_trunc('month', o.date) AS month,
+                   o.location_id,
+                   l.location_name,
+                   o.path::text AS path,
+                   COALESCE(SUM(o.amount), 0)::float AS total_amount,
+                   COALESCE(SUM(o.amount), 0)::text AS total_amount_exact,
+                   COUNT(*) AS transaction_count
+            FROM offerings o
+            JOIN locations l ON l.location_id = o.location_id
+            WHERE o.date >= :start_month
+              AND o.date < (CAST(:end_month AS date) + INTERVAL '1 day')
+              AND o.is_deleted = FALSE
+              AND o.status = 'approved'
+              AND (o.path::ltree <@ CAST(:scope_path AS LTREE) OR o.path::ltree = CAST(:scope_path AS LTREE))
+            GROUP BY date_trunc('month', o.date), o.location_id, l.location_name, o.path
             ORDER BY month DESC, path ASC
         """)
         result = await db.execute(
@@ -87,51 +96,16 @@ class ReportService:
     # ── Materialized view refresh ──────────────────────────────────────────────
 
     @staticmethod
-    async def refresh_views(db: AsyncSession) -> None:
+    async def refresh_views() -> dict[str, str]:
         """
         Refresh all three analytics materialized views.
 
-        This method is kept for compatibility with the /reports/refresh route.
-        The scheduled nightly refresh (scheduler.py) uses its own AUTOCOMMIT
-        connection with an advisory lock.
-
-        For manual refreshes triggered through the API we also use AUTOCOMMIT
-        so CONCURRENT refresh can execute outside a transaction.  Each view is
-        handled independently so a failure on one doesn't abort the others.
+        Manual and scheduled refreshes share the same PostgreSQL advisory lock
+        and AUTOCOMMIT connection. Failed concurrent refreshes are reported;
+        the code never falls back to a blocking refresh.
         """
-        from app.db.session import engine
-
-        views = [
-            "mv_daily_counts_by_location",
-            "mv_monthly_financial_summary",
-            "mv_attendance_trends",
-        ]
-
-        async with engine.connect() as conn:
-            await conn.execution_options(isolation_level="AUTOCOMMIT")
-            for view in views:
-                try:
-                    await conn.execute(
-                        text(f"REFRESH MATERIALIZED VIEW CONCURRENTLY {view}")
-                    )
-                    logger.info("Refreshed materialized view: %s", view)
-                except Exception as exc:
-                    # CONCURRENT requires a unique index on the view.
-                    # If the index doesn't exist yet, fall back to blocking refresh
-                    # and log clearly so the developer knows what needs fixing.
-                    logger.warning(
-                        "CONCURRENT refresh failed for %s — ensure a unique index exists. "
-                        "Falling back to blocking refresh. Error: %s",
-                        view, exc,
-                    )
-                    try:
-                        await conn.execute(text(f"REFRESH MATERIALIZED VIEW {view}"))
-                        logger.info("Blocking refresh completed for %s", view)
-                    except Exception as fallback_exc:
-                        logger.error(
-                            "Both CONCURRENT and blocking refresh failed for %s: %s",
-                            view, fallback_exc, exc_info=True,
-                        )
+        from app.core.scheduler import refresh_materialized_views
+        return await refresh_materialized_views(raise_on_error=True)
 
     # ── CSV helpers ────────────────────────────────────────────────────────────
 

@@ -215,9 +215,9 @@ PROFILE_CONFIGS = {
 VISIBLE_MODULES = {
     1: ["dashboard", "inbox", "church-data"],
     2: ["dashboard", "inbox", "church-data", "fellowship"],
-    3: ["dashboard", "inbox", "people", "workflows", "church-data", "fellowship", "organization"],
-    4: ["dashboard", "inbox", "people", "workflows", "church-data", "fellowship", "organization"],
-    5: ["dashboard", "inbox", "people", "workflows", "church-data", "fellowship", "organization", "communication"],
+    3: ["dashboard", "inbox", "people", "workflows", "church-data", "fellowship", "organization", "reports"],
+    4: ["dashboard", "inbox", "people", "workflows", "church-data", "fellowship", "organization", "reports"],
+    5: ["dashboard", "inbox", "people", "workflows", "church-data", "fellowship", "organization", "communication", "reports"],
     6: [
         "dashboard",
         "inbox",
@@ -264,6 +264,17 @@ VISIBLE_MODULES = {
     ],
 }
 
+DEMO_ROLE_PERMISSIONS = {
+    "location_pastor": frozenset({"reports:read", "reports:refresh"}),
+    "group_pastor": frozenset({"reports:read", "reports:refresh"}),
+    "region_pastor": frozenset({"reports:read", "reports:refresh"}),
+    "state_admin": frozenset({"reports:read"}),
+    "state_overseer": frozenset({"reports:read", "reports:refresh"}),
+    "national_admin": frozenset({"reports:read", "reports:refresh"}),
+    "continental_admin": frozenset({"reports:read", "reports:refresh"}),
+    "global_admin": frozenset({"reports:read", "reports:refresh"}),
+}
+
 
 def _mode_label_for_level(level: int) -> str:
     if level <= 3:
@@ -298,6 +309,10 @@ class AdminContext:
     current_scope_label: str
     current_scope_path: str
     query_extras: dict[str, str] = field(default_factory=dict)
+    permissions: frozenset[str] = frozenset()
+
+    def has_permission(self, permission: str) -> bool:
+        return permission in self.permissions
 
     @property
     def level(self) -> int:
@@ -306,10 +321,16 @@ class AdminContext:
     @property
     def visible_modules(self) -> list[str]:
         if self.level in VISIBLE_MODULES:
-            return VISIBLE_MODULES[self.level]
-        if self.level >= 6:
-            return VISIBLE_MODULES[6]
-        return VISIBLE_MODULES.get(self.level, VISIBLE_MODULES[3])
+            modules = list(VISIBLE_MODULES[self.level])
+        elif self.level >= 6:
+            modules = list(VISIBLE_MODULES[6])
+        else:
+            modules = list(VISIBLE_MODULES.get(self.level, VISIBLE_MODULES[3]))
+        if self.has_permission("reports:read") and self.level >= 3 and "reports" not in modules:
+            modules.append("reports")
+        if not self.has_permission("reports:read"):
+            modules = [module for module in modules if module != "reports"]
+        return modules
 
     @property
     def page_scope_title(self) -> str:
@@ -368,8 +389,10 @@ def _backend_context(source: Request | Mapping[str, Any]) -> AdminContext | None
         profile_key = profile_key_for_score(role_score)
     role_label = str((identity.role_name if identity else "") or mapping.get("role_label") or "Worker")
     user_name = str((identity.display_name if identity else "") or mapping.get("user_name") or "Authenticated User")
-    current_scope_kind = str(mapping.get("scope_kind") or _scope_kind_from_backend_path(scope_path, role_score)).strip()
-    current_scope_label = str(mapping.get("scope_label") or format_scope_display_id(scope_path) or role_label).strip()
+    # Scope metadata shown in the UI must be derived from the authenticated
+    # identity path; query parameters may carry report filters only.
+    current_scope_kind = _scope_kind_from_backend_path(scope_path, role_score)
+    current_scope_label = format_scope_display_id(scope_path) or role_label
     profile = ProfileConfig(
         key=profile_key,
         level=max(3, min(role_score or 3, 9)),
@@ -388,6 +411,7 @@ def _backend_context(source: Request | Mapping[str, Any]) -> AdminContext | None
         current_scope_kind=current_scope_kind,
         current_scope_label=current_scope_label,
         current_scope_path=scope_path,
+        permissions=identity.permissions if identity else frozenset(),
         query_extras={
             "scope_path": scope_path,
             "scope_kind": current_scope_kind,
@@ -439,6 +463,7 @@ def _demo_context(source: Request | Mapping[str, Any]) -> AdminContext:
         current_scope_kind=current_scope_kind,
         current_scope_label=current_scope_label,
         current_scope_path=current_scope_path,
+        permissions=DEMO_ROLE_PERMISSIONS.get(profile.key, frozenset()),
     )
 
 

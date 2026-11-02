@@ -156,6 +156,7 @@ async def _get_timeseries(db: AsyncSession, scope_path: str, *, metric: str) -> 
             Offering.date >= start_date,
             _scope_filter(Offering.path, scope_path),
             Offering.is_deleted == False,
+            Offering.status == "approved",
         ).group_by(period).order_by(period)
         rows = await db.execute(stmt)
         return [{'date': str(row.period.date()), 'value': float(row.total or 0)} for row in rows]

@@ -19,6 +19,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
+from app.db.filters import scope_filter
 from sqlalchemy import select, text
 from app.core import security
 from app.crud.crud_user import user as crud_user
@@ -82,7 +83,7 @@ async def read_users(
     from app.models.user import Role
     
     query = select(User).where(
-        text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=search_scope),
+        scope_filter(User.path, search_scope),
         User.is_deleted == False,
     ).options(
         selectinload(User.roles).selectinload(Role.score)
@@ -90,7 +91,7 @@ async def read_users(
     
     result = await db.execute(query)
     users = result.scalars().all()
-    return users
+    return deps.filter_rows_in_scope(users, current_user)
 
 
 @router.post(
@@ -197,8 +198,11 @@ async def auto_create_user(
     if user_by_worker.scalars().first():
         raise HTTPException(status_code=400, detail="User already exists for this worker")
 
-    first_name = worker.name.split(" ")[0].lower() if worker.name else "tempuser"
-    temp_password = first_name
+    import secrets
+
+    # Accounts are created inactive; provide a one-time random credential for
+    # the authorized administrator to deliver through the approved channel.
+    temp_password = secrets.token_urlsafe(18)
 
     user_in = UserCreate(
         worker_id=worker.worker_id,
@@ -458,7 +462,7 @@ async def search_users(
     from app.models.user import Role
     search_scope = deps.resolve_scope_path(current_user, scope_path)
     query = select(User).where(
-        text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=search_scope),
+        scope_filter(User.path, search_scope),
         User.is_deleted == False,
     ).options(selectinload(User.roles).selectinload(Role.score)).offset(skip).limit(limit)
     if name:
@@ -472,7 +476,7 @@ async def search_users(
     if is_active is not None:
         query = query.where(User.is_active == is_active)
     result = await db.execute(query)
-    return result.scalars().all()
+    return deps.filter_rows_in_scope(result.scalars().all(), current_user)
 
 
 @router.get(
@@ -491,11 +495,11 @@ async def list_users_with_roles(
     from sqlalchemy.orm import selectinload
     from app.models.user import Role
     query = select(User).where(
-        text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=str(current_user.path)),
+        scope_filter(User.path, deps.effective_scope_path(current_user)),
         User.is_deleted == False,
     ).options(selectinload(User.roles).selectinload(Role.score)).offset(skip).limit(limit)
     result = await db.execute(query)
-    return result.scalars().all()
+    return deps.filter_rows_in_scope(result.scalars().all(), current_user)
 
 
 @router.delete(

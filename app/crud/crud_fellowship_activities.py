@@ -1,7 +1,7 @@
 """
 CRUD operations for Fellowship Activities.
 """
-from typing import List, Optional
+from typing import Any, List, Optional
 from uuid import UUID
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,12 +22,25 @@ from app.schemas.fellowship_activities import (
     TestimonyCreate, PrayerRequestCreate, AttendanceSummaryCreate,
     TestimonyUpdate, PrayerRequestUpdate, AttendanceSummaryUpdate
 )
+from app.crud.idempotency import commit_idempotent, mark_existing_submission
+
+
+async def _get_by_client_id(db: AsyncSession, model: Any, client_id: UUID):
+    return (await db.execute(select(model).where(model.client_id == client_id))).scalars().first()
 
 
 class CRUDFellowshipMember(CRUDBase[FellowshipMember, FellowshipMemberCreate, FellowshipMemberUpdate]):
     """CRUD for Fellowship Members."""
     
-    async def create(self, db: AsyncSession, *, obj_in: FellowshipMemberCreate) -> FellowshipMember:
+    async def create(
+        self,
+        db: AsyncSession,
+        *,
+        obj_in: FellowshipMemberCreate,
+        user_id: UUID | None = None,
+    ) -> FellowshipMember:
+        # Kept in the common sync CRUD signature. FellowshipMember currently
+        # has no entered_by_id column; actor provenance needs a schema migration.
         # Verify fellowship exists
         from app.crud.crud_location import fellowship
         fel = await fellowship.get(db, id=obj_in.fellowship_id)
@@ -38,10 +51,9 @@ class CRUDFellowshipMember(CRUDBase[FellowshipMember, FellowshipMemberCreate, Fe
         
         # Check idempotency
         if obj_in.client_id:
-            query = select(FellowshipMember).where(FellowshipMember.client_id == obj_in.client_id)
-            existing = (await db.execute(query)).scalars().first()
+            existing = await _get_by_client_id(db, FellowshipMember, obj_in.client_id)
             if existing:
-                return existing
+                return mark_existing_submission(existing)
 
         db_obj = FellowshipMember(
             fellowship_id=obj_in.fellowship_id,
@@ -54,9 +66,10 @@ class CRUDFellowshipMember(CRUDBase[FellowshipMember, FellowshipMemberCreate, Fe
             role=obj_in.role
         )
         db.add(db_obj)
-        await db.commit()
-        await db.refresh(db_obj)
-        return db_obj
+        return await commit_idempotent(
+            db, db_obj, client_id=obj_in.client_id,
+            lookup=lambda session, client_id: _get_by_client_id(session, FellowshipMember, client_id),
+        )
         
     async def get_by_fellowship(self, db: AsyncSession, fellowship_id: str, skip=0, limit=100) -> List[FellowshipMember]:
         query = select(FellowshipMember).where(
@@ -77,10 +90,9 @@ class CRUDFellowshipAttendance(CRUDBase[FellowshipAttendance, FellowshipAttendan
         path_str = str(fel.path)
         
         if obj_in.client_id:
-            query = select(FellowshipAttendance).where(FellowshipAttendance.client_id == obj_in.client_id)
-            existing = (await db.execute(query)).scalars().first()
+            existing = await _get_by_client_id(db, FellowshipAttendance, obj_in.client_id)
             if existing:
-                return existing
+                return mark_existing_submission(existing)
 
         total = obj_in.men + obj_in.women + obj_in.youths + obj_in.children
         
@@ -99,9 +111,10 @@ class CRUDFellowshipAttendance(CRUDBase[FellowshipAttendance, FellowshipAttendan
             entered_by_id=user_id
         )
         db.add(db_obj)
-        await db.commit()
-        await db.refresh(db_obj)
-        return db_obj
+        return await commit_idempotent(
+            db, db_obj, client_id=obj_in.client_id,
+            lookup=lambda session, client_id: _get_by_client_id(session, FellowshipAttendance, client_id),
+        )
 
 
 class CRUDFellowshipOffering(CRUDBase[FellowshipOffering, FellowshipOfferingCreate, FellowshipOfferingUpdate]):
@@ -116,10 +129,9 @@ class CRUDFellowshipOffering(CRUDBase[FellowshipOffering, FellowshipOfferingCrea
         path_str = str(fel.path)
         
         if obj_in.client_id:
-            query = select(FellowshipOffering).where(FellowshipOffering.client_id == obj_in.client_id)
-            existing = (await db.execute(query)).scalars().first()
+            existing = await _get_by_client_id(db, FellowshipOffering, obj_in.client_id)
             if existing:
-                return existing
+                return mark_existing_submission(existing)
 
         db_obj = FellowshipOffering(
             fellowship_id=obj_in.fellowship_id,
@@ -131,9 +143,10 @@ class CRUDFellowshipOffering(CRUDBase[FellowshipOffering, FellowshipOfferingCrea
             entered_by_id=user_id
         )
         db.add(db_obj)
-        await db.commit()
-        await db.refresh(db_obj)
-        return db_obj
+        return await commit_idempotent(
+            db, db_obj, client_id=obj_in.client_id,
+            lookup=lambda session, client_id: _get_by_client_id(session, FellowshipOffering, client_id),
+        )
 
 
 class CRUDTestimony(CRUDBase[Testimony, TestimonyCreate, TestimonyUpdate]):
@@ -148,10 +161,9 @@ class CRUDTestimony(CRUDBase[Testimony, TestimonyCreate, TestimonyUpdate]):
         path_str = str(fel.path)
         
         if obj_in.client_id:
-            query = select(Testimony).where(Testimony.client_id == obj_in.client_id)
-            existing = (await db.execute(query)).scalars().first()
+            existing = await _get_by_client_id(db, Testimony, obj_in.client_id)
             if existing:
-                return existing
+                return mark_existing_submission(existing)
 
         db_obj = Testimony(
             fellowship_id=obj_in.fellowship_id,
@@ -164,9 +176,10 @@ class CRUDTestimony(CRUDBase[Testimony, TestimonyCreate, TestimonyUpdate]):
             entered_by_id=user_id
         )
         db.add(db_obj)
-        await db.commit()
-        await db.refresh(db_obj)
-        return db_obj
+        return await commit_idempotent(
+            db, db_obj, client_id=obj_in.client_id,
+            lookup=lambda session, client_id: _get_by_client_id(session, Testimony, client_id),
+        )
 
 
 class CRUDPrayerRequest(CRUDBase[PrayerRequest, PrayerRequestCreate, PrayerRequestUpdate]):
@@ -181,10 +194,9 @@ class CRUDPrayerRequest(CRUDBase[PrayerRequest, PrayerRequestCreate, PrayerReque
         path_str = str(fel.path)
         
         if obj_in.client_id:
-            query = select(PrayerRequest).where(PrayerRequest.client_id == obj_in.client_id)
-            existing = (await db.execute(query)).scalars().first()
+            existing = await _get_by_client_id(db, PrayerRequest, obj_in.client_id)
             if existing:
-                return existing
+                return mark_existing_submission(existing)
 
         db_obj = PrayerRequest(
             fellowship_id=obj_in.fellowship_id,
@@ -197,9 +209,10 @@ class CRUDPrayerRequest(CRUDBase[PrayerRequest, PrayerRequestCreate, PrayerReque
             entered_by_id=user_id
         )
         db.add(db_obj)
-        await db.commit()
-        await db.refresh(db_obj)
-        return db_obj
+        return await commit_idempotent(
+            db, db_obj, client_id=obj_in.client_id,
+            lookup=lambda session, client_id: _get_by_client_id(session, PrayerRequest, client_id),
+        )
 
 
 class CRUDAttendanceSummary(CRUDBase[AttendanceSummary, AttendanceSummaryCreate, AttendanceSummaryUpdate]):
@@ -214,10 +227,9 @@ class CRUDAttendanceSummary(CRUDBase[AttendanceSummary, AttendanceSummaryCreate,
         path_str = str(fel.path)
         
         if obj_in.client_id:
-            query = select(AttendanceSummary).where(AttendanceSummary.client_id == obj_in.client_id)
-            existing = (await db.execute(query)).scalars().first()
+            existing = await _get_by_client_id(db, AttendanceSummary, obj_in.client_id)
             if existing:
-                return existing
+                return mark_existing_submission(existing)
 
         db_obj = AttendanceSummary(
             fellowship_id=obj_in.fellowship_id,
@@ -231,9 +243,10 @@ class CRUDAttendanceSummary(CRUDBase[AttendanceSummary, AttendanceSummaryCreate,
             entered_by_id=user_id
         )
         db.add(db_obj)
-        await db.commit()
-        await db.refresh(db_obj)
-        return db_obj
+        return await commit_idempotent(
+            db, db_obj, client_id=obj_in.client_id,
+            lookup=lambda session, client_id: _get_by_client_id(session, AttendanceSummary, client_id),
+        )
 
 
 member = CRUDFellowshipMember(FellowshipMember)

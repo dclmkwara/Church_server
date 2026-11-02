@@ -2,10 +2,7 @@ from __future__ import annotations
 
 from fasthtml.common import A, Div, Form, H3, Input, Option, P, Select, Span, Textarea
 from starlette.requests import Request
-
-import base64
-from faststrap import Alert, Badge, Button, Icon, PlaceholderCard, Spinner
-from ..components.bulk_import_ui import workers_import_drawer, workers_import_preview
+from faststrap import Badge, Button, Icon, PlaceholderCard, Spinner
 
 from ..backend import BackendClientError
 from ..auth_context import build_context
@@ -14,6 +11,7 @@ from ..components.feedback import simple_toast_response
 from ..components.shell import hidden_context_inputs, primary_button, shell_layout
 from ..components.ui import empty_state, filter_field as _filter_field, page_intro, page_stack, responsive_table, section_card, stat_card, status_badge
 from ..mock_data import STORE, TODAY, UNITS
+from ..source_intake import reject_source_submission, source_intake_notice
 
 
 ROLE_OPTIONS = [
@@ -587,6 +585,7 @@ def register_people_routes(app) -> None:
             cls="admin-filter-grid",
         )
         body = page_stack(
+            source_intake_notice("Worker registrations and routine updates"),
             section_card(
                 "Workers directory",
                 "Filter by name, unit, worker code, approval, or status.",
@@ -600,41 +599,7 @@ def register_people_routes(app) -> None:
             active_key="workers",
             title="Workers",
             subtitle="Worker records and review actions.",
-            primary_action=Div(
-                A(
-                    Icon("download", cls="me-1"),
-                    "Template",
-                    href="/bulk/templates/workers",
-                    download="DCL_Workers_Import_Template.xlsx",
-                    cls="btn btn-outline-primary btn-sm admin-inline-btn d-inline-flex align-items-center justify-content-center px-3",
-                ),
-                A(
-                    Icon("cloud-arrow-up", cls="me-1"),
-                    Span("Import"),
-                    Span(" Workers", cls="d-none d-md-inline"),
-                    href="#",
-                    data_bs_toggle="offcanvas",
-                    data_bs_target="#form-drawer",
-                    hx_get=ctx.url_for("/people/workers/import"),
-                    hx_target="#form-drawer-body",
-                    hx_swap="innerHTML",
-                    cls="btn btn-outline-primary btn-sm admin-inline-btn d-inline-flex align-items-center px-3",
-                ),
-                Button(
-                    Icon("plus-lg"),
-                    type="button",
-                    data_bs_toggle="offcanvas",
-                    data_bs_target="#form-drawer",
-                    hx_get=ctx.url_for("/people/workers/new"),
-                    hx_target="#form-drawer-body",
-                    hx_swap="innerHTML",
-                    cls="btn btn-primary rounded-circle admin-inline-btn d-inline-flex align-items-center justify-content-center",
-                    style="width:2.25rem; height:2.25rem; padding:0; flex-shrink:0;",
-                    title="Register Worker",
-                    aria_label="Register Worker",
-                ),
-                cls="d-flex align-items-center gap-2 flex-wrap",
-            ),
+            primary_action=None,
             content=body,
             show_shell_intro=False,
         )
@@ -657,156 +622,11 @@ def register_people_routes(app) -> None:
 
     @app.get("/people/workers/new")
     async def new_worker_drawer(request: Request):
-        ctx = build_context(request)
-        if await PeopleService.live_enabled(request):
-            try:
-                live_locations = await PeopleService.list_locations(request, ctx)
-            except BackendClientError as exc:
-                return P(f"Could not load worker form right now: {exc}", cls="text-muted")
-            return Form(
-                *hidden_context_inputs(ctx),
-                H3("Register worker", cls="h5 fw-semibold"),
-                P("Create a real worker record in the backend using the branch details already stored for the selected location.", cls="text-muted"),
-                Input(type="text", name="name", placeholder="Full name", cls="form-control mb-3", required=True),
-                Div(
-                    Select(
-                        Option("Select gender", value=""),
-                        Option("Male", value="Male"),
-                        Option("Female", value="Female"),
-                        name="gender",
-                        cls="form-select",
-                        required=True,
-                    ),
-                    Select(
-                        Option("Select location", value=""),
-                        *[Option(row["location_name"], value=row["location_id"]) for row in live_locations],
-                        name="location_id",
-                        cls="form-select",
-                        required=True,
-                    ),
-                    cls="drawer-two-up mb-3",
-                ),
-                Div(
-                    Select(
-                        *([Option("Select unit", value="")] + [Option(unit, value=unit) for unit in UNITS]),
-                        name="unit",
-                        cls="form-select",
-                        required=True,
-                    ),
-                    Input(type="text", name="phone", placeholder="Phone number", cls="form-control", required=True),
-                    cls="drawer-two-up mb-3",
-                ),
-                Div(
-                    Input(type="email", name="email", placeholder="Email address", cls="form-control", required=True),
-                    Select(
-                        Option("Select marital status", value=""),
-                        *[Option(label, value=label) for label in MARITAL_STATUS_OPTIONS],
-                        name="marital_status",
-                        cls="form-select",
-                    ),
-                    cls="drawer-two-up mb-3",
-                ),
-                Input(type="text", name="occupation", placeholder="Occupation", cls="form-control mb-3"),
-                Textarea(name="address", placeholder="Home address", cls="form-control mb-3", rows="3"),
-                Button("Save worker", variant="success", type="submit", cls="w-100"),
-                hx_post=ctx.url_for("/people/workers/create"),
-                hx_target="#form-drawer-body",
-                hx_swap="innerHTML",
-            )
-        visible_locations = [row["location"] for row in STORE.visible_locations(ctx.current_scope_path)]
-        return Form(
-            *hidden_context_inputs(ctx),
-            H3("Register worker", cls="h5 fw-semibold"),
-            P("Use plain details that a pastor can confirm quickly on phone.", cls="text-muted"),
-            Input(type="text", name="name", placeholder="Full name", cls="form-control mb-3", required=True),
-            Div(
-                Select(
-                    Option("Select gender", value=""),
-                    Option("Male", value="Male"),
-                    Option("Female", value="Female"),
-                    name="gender",
-                    cls="form-select",
-                    required=True,
-                ),
-                Select(
-                    *([Option("Select location", value="")] + [Option(name, value=name) for name in visible_locations]),
-                    name="location",
-                    cls="form-select",
-                    required=True,
-                ),
-                cls="drawer-two-up mb-3",
-            ),
-            Div(
-                Select(
-                    *([Option("Select unit", value="")] + [Option(unit, value=unit) for unit in UNITS]),
-                    name="unit",
-                    cls="form-select",
-                    required=True,
-                ),
-                Input(type="text", name="phone", placeholder="Phone number", cls="form-control", required=True),
-                cls="drawer-two-up mb-3",
-            ),
-            Textarea(name="notes", placeholder="Optional pastoral note", cls="form-control mb-3", rows="3"),
-            Button("Save worker", variant="success", type="submit", cls="w-100"),
-            hx_post=ctx.url_for("/people/workers/create"),
-            hx_target="#form-drawer-body",
-            hx_swap="innerHTML",
-        )
+        return source_intake_notice("Worker registrations")
 
     @app.post("/people/workers/create")
     async def create_worker(request: Request):
-        form = await request.form()
-        data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
-        try:
-            if await PeopleService.live_enabled(request):
-                location_id = data.get("location_id", "").strip()
-                if not location_id:
-                    return P("Choose the worker's location before saving.", cls="text-muted")
-                location_details = await PeopleService.get_location_details(request, location_id)
-                if location_details is None:
-                    return P("That location could not be verified right now.", cls="text-muted")
-                worker = await PeopleService.create_worker(
-                    request,
-                    {
-                        "location_id": location_details["location_id"],
-                        "location_name": location_details["location_name"],
-                        "church_type": location_details["church_type"],
-                        "state": location_details["state_name"],
-                        "region": location_details["region_name"],
-                        "group": location_details["group_name"],
-                        "name": data.get("name", "").strip(),
-                        "gender": data.get("gender", "").strip(),
-                        "phone": data.get("phone", "").strip(),
-                        "email": data.get("email", "").strip(),
-                        "address": data.get("address", "").strip() or None,
-                        "occupation": data.get("occupation", "").strip() or None,
-                        "marital_status": data.get("marital_status", "").strip() or None,
-                        "unit": data.get("unit", "").strip(),
-                        "status": "Active",
-                    },
-                )
-            else:
-                worker = STORE.add_worker(data)
-        except BackendClientError as exc:
-            return P(f"Could not save this worker right now: {exc}", cls="text-muted")
-        if worker is None:
-            return P("Worker could not be created.", cls="text-muted")
-        refreshed = await _workers_table(request, ctx, oob=True)
-        return simple_toast_response(
-            content=(
-                Div(
-                    H3("Worker saved", cls="h5 fw-semibold"),
-                    P(
-                        f"{worker['name']} is now {'approved and available' if worker.get('approval_status') == 'approved' else 'waiting for approval'} in {worker['location']}.",
-                        cls="mb-0",
-                    ),
-                ),
-                refreshed,
-            ),
-            message="Worker registration saved.",
-            variant="success",
-        )
+        return reject_source_submission()
 
     @app.get("/people/workers/{worker_id}/drawer")
     async def worker_drawer(request: Request, worker_id: str):
@@ -976,6 +796,8 @@ def register_people_routes(app) -> None:
             )
         except BackendClientError as exc:
             return P(f"Could not save this worker review right now: {exc}", cls="text-muted")
+        except Exception as exc:
+            return P("Could not save this worker review right now.", cls="text-muted")
         if worker is None:
             return P("Worker not found.", cls="text-muted")
         refreshed = await _workers_table(request, ctx, oob=True)
@@ -1335,6 +1157,7 @@ def register_people_routes(app) -> None:
             cls="admin-filter-grid",
         )
         body = page_stack(
+            source_intake_notice("Church member registrations"),
             section_card(
                 "Member registry",
                 f"{summary['total']} members, {summary['active']} active and {summary['fellowships']} fellowships represented.",
@@ -1348,15 +1171,7 @@ def register_people_routes(app) -> None:
             active_key="members",
             title="Members",
             subtitle="Church member records.",
-            primary_action=primary_button(
-                "Add Member",
-                href="#",
-                data_bs_toggle="offcanvas",
-                data_bs_target="#form-drawer",
-                hx_get=ctx.url_for("/people/members/new"),
-                hx_target="#form-drawer-body",
-                hx_swap="innerHTML",
-            ),
+            primary_action=None,
             content=body,
             show_shell_intro=False,
         )
@@ -1368,106 +1183,11 @@ def register_people_routes(app) -> None:
 
     @app.get("/people/members/new")
     async def new_member_drawer(request: Request):
-        ctx = build_context(request)
-        live_mode = await PeopleService.live_enabled(request)
-        visible_locations = await PeopleService.list_locations(request, ctx) if live_mode else [row["location"] for row in STORE.visible_locations(ctx.current_scope_path)]
-        fellowships = await PeopleService.list_fellowships(request) if live_mode else STORE.list_fellowships(ctx.current_scope_path)
-        return Form(
-            *hidden_context_inputs(ctx),
-            H3("Add member", cls="h5 fw-semibold"),
-            P("Capture the member first, then connect the record to the right fellowship if needed.", cls="text-muted"),
-            Input(type="text", name="name", placeholder="Full name", cls="form-control mb-3", required=True),
-            Div(
-                Input(type="text", name="phone", placeholder="Phone number", cls="form-control", required=True),
-                Input(type="date", name="date_joined", value=TODAY.isoformat(), cls="form-control"),
-                cls="drawer-two-up mb-3",
-            ),
-            Div(
-                Select(
-                    Option("Select gender", value=""),
-                    Option("Male", value="Male"),
-                    Option("Female", value="Female"),
-                    name="gender",
-                    cls="form-select",
-                    required=True,
-                ),
-                Select(
-                    Option("Select marital status", value=""),
-                    *[Option(label, value=label) for label in MARITAL_STATUS_OPTIONS],
-                    name="marital_status",
-                    cls="form-select",
-                    required=True,
-                ),
-                cls="drawer-two-up mb-3",
-            ),
-            Div(
-                Select(
-                    *(
-                        [Option("Select location", value="")]
-                        + (
-                            [Option(row["location_name"], value=row["location_id"]) for row in visible_locations]
-                            if live_mode
-                            else [Option(name, value=name) for name in visible_locations]
-                        )
-                    ),
-                    name="location_id" if live_mode else "location",
-                    cls="form-select",
-                    required=True,
-                ),
-                Select(
-                    *([Option("Assign fellowship later", value="")] + [Option(row["name"], value=row["fellowship_id"]) for row in fellowships]),
-                    name="fellowship_id",
-                    cls="form-select",
-                ),
-                cls="drawer-two-up mb-3",
-            ),
-            Select(
-                *[Option(value.replace("_", " ").title(), value=value, selected=value == "active") for value in MEMBER_STATUS_OPTIONS],
-                name="status",
-                cls="form-select mb-3",
-            ),
-            Button("Save member", variant="success", type="submit", cls="w-100"),
-            hx_post=ctx.url_for("/people/members/create"),
-            hx_target="#form-drawer-body",
-            hx_swap="innerHTML",
-        )
+        return source_intake_notice("Church member registrations")
 
     @app.post("/people/members/create")
     async def create_member(request: Request):
-        form = await request.form()
-        data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
-        member = (
-            await PeopleService.create_member(
-                request,
-                {
-                    "location_id": data.get("location_id") or "",
-                    "name": data.get("name") or "",
-                    "gender": data.get("gender") or "",
-                    "phone": data.get("phone") or None,
-                    "marital_status": data.get("marital_status") or None,
-                    "member_since": data.get("date_joined") or None,
-                    "fellowship_id": data.get("fellowship_id") or None,
-                    "status": data.get("status") or "active",
-                },
-            )
-            if await PeopleService.live_enabled(request)
-            else STORE.add_church_member(data)
-        )
-        if member is None:
-            return P("Could not save this member right now.", cls="text-muted")
-        refreshed = await _members_table(request, ctx, oob=True)
-        return simple_toast_response(
-            content=(
-                Div(
-                    H3("Member saved", cls="h5 fw-semibold"),
-                    P(f"{member['name']} is now in the member registry.", cls="mb-0"),
-                ),
-                refreshed,
-            ),
-            message="Member record saved.",
-            variant="success",
-        )
+        return reject_source_submission()
 
     @app.get("/people/members/{member_id}/drawer")
     async def member_drawer(request: Request, member_id: str):
@@ -2032,7 +1752,7 @@ def register_people_routes(app) -> None:
                     cleaned = raw_value.strip()
                     if cleaned and cleaned.isdigit() and int(cleaned) not in role_ids:
                         role_ids.append(int(cleaned))
-                user = await PeopleService.create_user(
+                user = await PeopleService.create_user_account(
                     request,
                     {
                         "worker_id": worker_id,
@@ -2056,6 +1776,8 @@ def register_people_routes(app) -> None:
                 user = STORE.add_user(data)
         except BackendClientError as exc:
             return P(f"Could not save this user account right now: {exc}", cls="text-muted")
+        except ValueError as exc:
+            return P(f"Check the account details and try again: {exc}", cls="text-muted")
         if user is None:
             return P("User could not be created.", cls="text-muted")
         refreshed = await _users_table(request, ctx, oob=True)
@@ -2355,6 +2077,8 @@ def register_people_routes(app) -> None:
             )
         except BackendClientError as exc:
             return P(f"Could not save this access review right now: {exc}", cls="text-muted")
+        except Exception:
+            return P("Could not save this access review right now.", cls="text-muted")
         if user is None:
             return P("User not found.", cls="text-muted")
         refreshed = await _users_table(request, ctx, oob=True)
@@ -2464,64 +2188,12 @@ def register_people_routes(app) -> None:
 
     @app.get("/people/workers/import")
     async def workers_import_form(request: Request):
-        ctx = build_context(request)
-        object.__setattr__(ctx, "_request", request)
-        return workers_import_drawer(ctx)
+        return source_intake_notice("Bulk worker registrations")
 
     @app.post("/people/workers/import/preview")
     async def workers_import_preview_route(request: Request):
-        form = await request.form()
-        ctx = build_context(dict(form))
-        object.__setattr__(ctx, "_request", request)
-        upload = form.get("file")
-        state_code = str(form.get("state_code") or "KW").strip().upper()
-        if not upload or not hasattr(upload, "read"):
-            return Alert("Please select an Excel or CSV file to import.", variant="danger")
-        file_bytes = await upload.read()
-        filename = getattr(upload, "filename", "workers.xlsx") or "workers.xlsx"
-        try:
-            val_result = await PeopleService.validate_workers_import(request, file_bytes, filename)
-        except BackendClientError as exc:
-            return Alert(f"Validation failed: {exc}", variant="danger")
-        file_b64 = base64.b64encode(file_bytes).decode("ascii")
-        return workers_import_preview(
-            ctx,
-            valid=val_result.get("valid", False),
-            summary=val_result.get("summary", {}),
-            errors=val_result.get("errors", []),
-            preview=val_result.get("preview", []),
-            file_bytes_b64=file_b64,
-            filename=filename,
-            state_code=state_code,
-        )
+        return reject_source_submission()
 
     @app.post("/people/workers/import/commit")
     async def workers_import_commit_route(request: Request):
-        form = await request.form()
-        ctx = build_context(dict(form))
-        object.__setattr__(ctx, "_request", request)
-        file_b64 = str(form.get("file_b64") or "")
-        filename = str(form.get("filename") or "workers.xlsx")
-        state_code = str(form.get("state_code") or "KW").strip().upper()
-        if not file_b64:
-            return Alert("File payload missing, please re-upload.", variant="danger")
-        file_bytes = base64.b64decode(file_b64)
-        try:
-            commit_res = await PeopleService.commit_workers_import(request, file_bytes, filename, state_code)
-        except BackendClientError as exc:
-            return Alert(f"Commit failed: {exc}", variant="danger")
-
-        created = commit_res.get("created", {})
-        count = created.get("workers", 0)
-        msg = f"Successfully registered and imported {count} worker(s)."
-        return simple_toast_response(
-            content=(
-                Div(
-                    H3("Import Complete", cls="h5 fw-bold text-success mb-2"),
-                    P(msg, cls="mb-3"),
-                    A("Refresh Workers Directory", href=ctx.url_for("/people/workers"), cls="btn btn-primary btn-sm"),
-                ),
-            ),
-            message=msg,
-            variant="success",
-        )
+        return reject_source_submission()

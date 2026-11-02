@@ -11,6 +11,7 @@ from app.schemas.report import DailyCountSummary, MonthlyFinancialSummary, Atten
 from app.models.user import User
 from typing import List, Optional
 from datetime import date, timedelta
+from statistics import pstdev
 
 router = APIRouter()
 _REPORT_CACHE_TTL = 20.0
@@ -161,16 +162,19 @@ async def get_attendance_report(
 
 @router.post("/refresh", dependencies=[Depends(deps.PermissionChecker("reports:refresh"))])
 async def refresh_reports(
-    db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ):
     """
     Manually refresh report views (Admin only ideally).
     """
     # Permission enforced via PermissionChecker ("reports:refresh")
-    await ReportService.refresh_views(db)
-    analytics_cache.clear()
-    return {"status": "success", "message": "Materialized views refreshed"}
+    try:
+        result = await ReportService.refresh_views()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="One or more report views could not be refreshed") from exc
+    if result.get("status") == "refreshed":
+        analytics_cache.clear()
+    return result
 
 
 # Advanced Analytics Routes
@@ -233,11 +237,12 @@ async def get_timeseries_analysis(
             period = func.date_trunc(interval_map[interval_key], Count.date).label("period")
             query = select(
                 period,
-                func.sum(Count.adult_male + Count.adult_female + Count.youth_male +
-                        Count.youth_female + Count.boys + Count.girls).label('total')
+                func.sum(Count.total).label('total')
             ).where(
-                Count.date.between(start_date, end_date),
+                Count.date >= start_date,
+                Count.date < end_date + timedelta(days=1),
                 _scope_filter(Count.path, effective_scope),
+                Count.is_deleted == False,
             ).group_by(period).order_by(period)
 
             result = await db.execute(query)
@@ -255,8 +260,11 @@ async def get_timeseries_analysis(
                 period,
                 func.coalesce(func.sum(Offering.amount), 0).label("total")
             ).where(
-                Offering.date.between(start_date, end_date),
+                Offering.date >= start_date,
+                Offering.date < end_date + timedelta(days=1),
                 _scope_filter(Offering.path, effective_scope),
+                Offering.is_deleted == False,
+                Offering.status == "approved",
             ).group_by(period).order_by(period)
             result = await db.execute(query)
             data = [{"date": str(row.period.date()), "value": float(row.total)} for row in result]
@@ -272,6 +280,8 @@ async def get_timeseries_analysis(
             ).join(ProgramEvent, ProgramEvent.id == WorkerAttendance.event_id).where(
                 ProgramEvent.date.between(start_date, end_date),
                 _scope_filter(WorkerAttendance.path, effective_scope),
+                WorkerAttendance.is_deleted == False,
+                ProgramEvent.is_deleted == False,
             ).group_by(period).order_by(period)
             result = await db.execute(query)
             data = [{"date": str(row.period.date()), "value": row.total} for row in result]
@@ -307,7 +317,7 @@ async def get_hierarchical_breakdown(
     if not end_date:
         end_date = date.today()
 
-    effective_scope = str(current_user.path)
+    effective_scope = deps.effective_scope_path(current_user)
 
     from sqlalchemy import select, func
     from app.models.counts import Count
@@ -334,11 +344,12 @@ async def get_hierarchical_breakdown(
             group_path = group_expr(Count)
             query = select(
                 group_path,
-                func.sum(Count.adult_male + Count.adult_female + Count.youth_male +
-                        Count.youth_female + Count.boys + Count.girls).label("total")
+                func.sum(Count.total).label("total")
             ).where(
-                Count.date.between(start_date, end_date),
+                Count.date >= start_date,
+                Count.date < end_date + timedelta(days=1),
                 _scope_filter(Count.path, effective_scope),
+                Count.is_deleted == False,
             ).group_by(group_path).order_by(group_path)
             result = await db.execute(query)
             return {"metric": metric, "level": level, "breakdown": [{"path": str(row.group_path), "total": row.total} for row in result]}
@@ -349,8 +360,11 @@ async def get_hierarchical_breakdown(
                 group_path,
                 func.coalesce(func.sum(Offering.amount), 0).label("total")
             ).where(
-                Offering.date.between(start_date, end_date),
+                Offering.date >= start_date,
+                Offering.date < end_date + timedelta(days=1),
                 _scope_filter(Offering.path, effective_scope),
+                Offering.is_deleted == False,
+                Offering.status == "approved",
             ).group_by(group_path).order_by(group_path)
             result = await db.execute(query)
             return {"metric": metric, "level": level, "breakdown": [{"path": str(row.group_path), "total": str(row.total)} for row in result]}
@@ -363,6 +377,8 @@ async def get_hierarchical_breakdown(
             ).join(ProgramEvent, ProgramEvent.id == WorkerAttendance.event_id).where(
                 ProgramEvent.date.between(start_date, end_date),
                 _scope_filter(WorkerAttendance.path, effective_scope),
+                WorkerAttendance.is_deleted == False,
+                ProgramEvent.is_deleted == False,
             ).group_by(group_path).order_by(group_path)
             result = await db.execute(query)
             return {"metric": metric, "level": level, "breakdown": [{"path": str(row.group_path), "total": row.total} for row in result]}
@@ -384,6 +400,8 @@ async def detect_anomalies(
     metric: str = Query("counts", description="Metric to analyze"),
     threshold: float = Query(2.0, description="Standard deviations for anomaly detection"),
     days: int = Query(30, description="Days to analyze"),
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ):
@@ -392,8 +410,11 @@ async def detect_anomalies(
 
     Identifies unusual patterns or outliers that may need attention.
     """
-    effective_scope = str(current_user.path)
-    start_date = date.today() - timedelta(days=days)
+    effective_scope = deps.effective_scope_path(current_user)
+    start_date = start_date or date.today() - timedelta(days=days)
+    end_date = end_date or date.today()
+    if start_date > end_date:
+        raise HTTPException(status_code=422, detail="start_date must not be after end_date")
 
     # Simplified anomaly detection
     from app.models.counts import Count
@@ -401,27 +422,33 @@ async def detect_anomalies(
 
     # Get daily totals
     query = select(
-        Count.date,
+        func.date(Count.date).label("day"),
         Count.location_id,
-        func.sum(Count.adult_male + Count.adult_female + Count.youth_male +
-                Count.youth_female + Count.boys + Count.girls).label('total')
+        func.sum(Count.total).label('total')
     ).where(
         Count.date >= start_date,
+        Count.date < end_date + timedelta(days=1),
         _scope_filter(Count.path, effective_scope),
-    ).group_by(Count.date, Count.location_id)
+        Count.is_deleted == False,
+    ).group_by(func.date(Count.date), Count.location_id)
 
     result = await db.execute(query)
-    data = [{"date": str(row.date), "location": row.location_id, "value": row.total} for row in result]
+    data = [{"date": str(row.day), "location": row.location_id, "value": row.total} for row in result]
 
-    # Simple threshold-based detection (can be enhanced with statistical methods)
+    # Flag daily location totals beyond the selected window's standard deviation threshold.
     if data:
         values = [d['value'] for d in data]
         avg = sum(values) / len(values)
-        anomalies = [d for d in data if abs(d['value'] - avg) > (avg * 0.5)]  # 50% deviation
+        deviation = pstdev(values)
+        anomalies = [
+            d for d in data
+            if deviation > 0 and abs(d['value'] - avg) > threshold * deviation
+        ]
 
         return {
             "metric": metric,
-            "period_days": days,
+            "period_start": start_date.isoformat(),
+            "period_end": end_date.isoformat(),
             "average": avg,
             "anomalies_detected": len(anomalies),
             "anomalies": anomalies[:10]  # Top 10
@@ -435,9 +462,11 @@ async def detect_anomalies(
     dependencies=[Depends(deps.PermissionChecker("reports:read"))],
 )
 async def get_growth_rate(
-    metric: str = Query("counts", description="Metric to analyze"),
-    period: str = Query("monthly", description="daily, weekly, or monthly"),
-    months: int = Query(12, description="Number of months to analyze"),
+    metric: str = Query("counts", pattern="^(counts|offerings|attendance)$", description="Metric to analyze"),
+    period: str = Query("monthly", pattern="^(daily|weekly|monthly)$", description="daily, weekly, or monthly"),
+    months: int = Query(12, ge=1, le=60, description="Number of months to analyze"),
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ):
@@ -446,25 +475,42 @@ async def get_growth_rate(
 
     Shows percentage change in metrics period-over-period.
     """
-    effective_scope = str(current_user.path)
-    start_date = date.today() - timedelta(days=months * 30)
+    effective_scope = deps.effective_scope_path(current_user)
+    start_date = start_date or date.today() - timedelta(days=months * 30)
+    end_date = end_date or date.today()
+    if start_date > end_date:
+        raise HTTPException(status_code=422, detail="start_date must not be after end_date")
 
     from app.models.counts import Count
-    from sqlalchemy import select, func, extract
+    from app.models.offerings import Offering
+    from app.models.attendance import WorkerAttendance
+    from app.models.programs import ProgramEvent
+    from sqlalchemy import select, func, cast, DateTime
 
-    # Monthly aggregation
-    query = select(
-        extract('year', Count.date).label('year'),
-        extract('month', Count.date).label('month'),
-        func.sum(Count.adult_male + Count.adult_female + Count.youth_male +
-                Count.youth_female + Count.boys + Count.girls).label('total')
-    ).where(
-        Count.date >= start_date,
-        _scope_filter(Count.path, effective_scope),
-    ).group_by('year', 'month').order_by('year', 'month')
+    if metric == "counts":
+        bucket = func.date_trunc(period, Count.date).label("period")
+        query = select(bucket, func.sum(Count.total).label("total")).where(
+            Count.date >= start_date, Count.date < end_date + timedelta(days=1), _scope_filter(Count.path, effective_scope),
+            Count.is_deleted == False,
+        ).group_by(bucket).order_by(bucket)
+    elif metric == "offerings":
+        bucket = func.date_trunc(period, Offering.date).label("period")
+        query = select(bucket, func.coalesce(func.sum(Offering.amount), 0).label("total")).where(
+            Offering.date >= start_date, Offering.date < end_date + timedelta(days=1), _scope_filter(Offering.path, effective_scope),
+            Offering.is_deleted == False, Offering.status == "approved",
+        ).group_by(bucket).order_by(bucket)
+    else:
+        bucket = func.date_trunc(period, cast(ProgramEvent.date, DateTime)).label("period")
+        query = select(bucket, func.count(WorkerAttendance.id).label("total")).select_from(
+            WorkerAttendance
+        ).join(ProgramEvent, ProgramEvent.id == WorkerAttendance.event_id).where(
+            ProgramEvent.date >= start_date, ProgramEvent.date < end_date + timedelta(days=1), ProgramEvent.is_deleted == False,
+            WorkerAttendance.is_deleted == False,
+            _scope_filter(WorkerAttendance.path, effective_scope),
+        ).group_by(bucket).order_by(bucket)
 
     result = await db.execute(query)
-    data = [{"year": int(row.year), "month": int(row.month), "total": row.total} for row in result]
+    data = [{"period": str(row.period.date()), "total": row.total} for row in result]
 
     # Calculate growth rates
     growth_rates = []
@@ -474,9 +520,9 @@ async def get_growth_rate(
         if prev > 0:
             growth = ((curr - prev) / prev) * 100
             growth_rates.append({
-                "period": f"{data[i]['year']}-{data[i]['month']:02d}",
-                "value": curr,
-                "growth_rate": round(growth, 2)
+                "period": data[i]["period"],
+                "value": str(curr) if metric == "offerings" else curr,
+                "growth_rate": round(float(growth), 2)
             })
 
     return {
@@ -514,7 +560,7 @@ async def export_excel(
     if not end_date:
         end_date = date.today()
 
-    effective_scope = str(current_user.path)
+    effective_scope = deps.effective_scope_path(current_user)
 
     # Get data (reuse existing service)
     if report_type == "counts":
@@ -632,7 +678,7 @@ async def export_pdf(
     if not end_date:
         end_date = date.today()
 
-    effective_scope = str(current_user.path)
+    effective_scope = deps.effective_scope_path(current_user)
 
     # Get data
     if report_type == "counts":

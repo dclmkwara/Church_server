@@ -5,7 +5,7 @@ Defines the structure for batch uploads from offline clients.
 """
 from typing import List, Optional, Dict, Any
 from uuid import UUID
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.schemas.counts import CountCreate, CountResponse
 from app.schemas.offerings import OfferingCreate, OfferingResponse
@@ -31,6 +31,18 @@ class SyncBatchRequest(BaseModel):
     fellowship_members: List[FellowshipMemberCreate] = Field(default_factory=list)
     fellowship_attendance: List[FellowshipAttendanceCreate] = Field(default_factory=list)
     fellowship_offerings: List[FellowshipOfferingCreate] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def require_stable_client_ids(self):
+        """Offline retries must carry stable IDs to be safely idempotent."""
+        for resource_name in (
+            "counts", "offerings", "records", "worker_attendance",
+            "fellowship_members", "fellowship_attendance", "fellowship_offerings",
+        ):
+            missing = [index for index, item in enumerate(getattr(self, resource_name)) if item.client_id is None]
+            if missing:
+                raise ValueError(f"{resource_name} items require client_id; missing at indexes {missing}")
+        return self
 
 
 class SyncResult(BaseModel):

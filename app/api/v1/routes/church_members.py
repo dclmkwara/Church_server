@@ -46,9 +46,11 @@ async def register_church_member(
         location_id=member_in.location_id,
         detail="Member location outside your scope",
     )
-    return await crud_church_member.create(
+    created = await crud_church_member.create(
         db, obj_in=member_in, user_id=current_user.user_id, path=str(location.path)
     )
+    deps.ensure_path_in_scope(current_user, created.path, detail="Existing member is outside your scope")
+    return created
 
 
 @router.get(
@@ -80,9 +82,10 @@ async def list_church_members(
             db, location_id=location_id, skip=skip, limit=limit, status=status
         )
     scope_path = deps.resolve_scope_path(current_user)
-    return await crud_church_member.get_multi_by_scope(
+    rows = await crud_church_member.get_multi_by_scope(
         db, scope_path=scope_path, skip=skip, limit=limit
     )
+    return deps.filter_rows_in_scope(rows, current_user)
 
 
 @router.get(

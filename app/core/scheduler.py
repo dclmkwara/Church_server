@@ -56,7 +56,7 @@ async def _try_advisory_xact_lock(db: AsyncSession, lock_id: int) -> bool:
     return bool(result.scalar())
 
 
-async def refresh_materialized_views() -> None:
+async def refresh_materialized_views(*, raise_on_error: bool = False) -> dict[str, str]:
     """
     Refresh all analytics materialized views.
 
@@ -73,36 +73,35 @@ async def refresh_materialized_views() -> None:
 
         if not await _try_advisory_lock(conn, _LOCK_REFRESH_MV):
             logger.info("refresh_materialized_views: skipped — another worker holds the lock")
-            return
+            return {"status": "skipped", "reason": "refresh already running"}
 
+        results: dict[str, str] = {}
         try:
             logger.info("Starting materialized view refresh...")
-            for view in (
-                "mv_daily_counts_by_location",
-                "mv_monthly_financial_summary",
-                "mv_attendance_trends",
-            ):
-                try:
-                    await conn.execute(
-                        text(f"REFRESH MATERIALIZED VIEW CONCURRENTLY {view}")
-                    )
-                    logger.info("Refreshed %s", view)
-                except Exception as exc:
-                    # CONCURRENT requires a unique index — fall back to blocking refresh
-                    logger.warning(
-                        "CONCURRENT refresh failed for %s (%s). "
-                        "Ensure a unique index exists on the view. "
-                        "Falling back to blocking refresh.",
-                        view, exc,
-                    )
-                    await conn.execute(
-                        text(f"REFRESH MATERIALIZED VIEW {view}")
-                    )
-                    logger.info("Blocking refresh completed for %s", view)
-
+            try:
+                await conn.execute(text("SELECT public.refresh_church_analytics_views()"))
+                results = {
+                    "mv_daily_counts_by_location": "refreshed",
+                    "mv_monthly_financial_summary": "refreshed",
+                    "mv_attendance_trends": "refreshed",
+                }
+            except Exception as exc:
+                logger.error("Analytics materialized view refresh failed: %s", exc, exc_info=True)
+                results = {
+                    "mv_daily_counts_by_location": "failed",
+                    "mv_monthly_financial_summary": "failed",
+                    "mv_attendance_trends": "failed",
+                }
+                if raise_on_error:
+                    raise RuntimeError("One or more report views could not be refreshed") from exc
+                return {"status": "failed", **results}
             logger.info("All materialized views refreshed successfully")
+            return {"status": "refreshed", **results}
         except Exception as exc:
             logger.error("Materialized view refresh failed: %s", exc, exc_info=True)
+            if raise_on_error:
+                raise
+            return {"status": "failed", **results}
         finally:
             await _release_advisory_lock(conn, _LOCK_REFRESH_MV)
 

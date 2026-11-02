@@ -12,6 +12,7 @@ from .api_client import get_api_client
 from .async_compat import async_client, dual_mode_class, maybe_await
 from .auth_service import AuthService
 from .people_service import PeopleService
+from .pagination import fetch_all_pages
 
 
 def _safe_date(value: Any) -> str:
@@ -159,10 +160,10 @@ class FellowshipService:
                 rows = await maybe_await(ttl_cached(
                     ("fellowship", "rows", location or ""),
                     60.0,
-                    lambda: client.list_fellowships(access_token, location_id=location or None, limit=500),
+                    lambda: fetch_all_pages(lambda skip, limit: client.list_fellowships(access_token, location_id=location or None, skip=skip, limit=limit)),
                 ))
             except BackendClientError:
-                return []
+                raise
             normalized = []
             for row in rows:
                 fellowship_id = str(row.get("fellowship_id") or "")
@@ -227,7 +228,7 @@ class FellowshipService:
                     lambda: client.get_fellowship(access_token, fellowship_id),
                 ))
             except BackendClientError:
-                return None
+                raise
             location_id = str(row.get("location_id") or "")
             details = await request_cached(
                 request,
@@ -252,10 +253,10 @@ class FellowshipService:
                 rows = await maybe_await(ttl_cached(
                     ("fellowship", "members", fellowship_id),
                     60.0,
-                    lambda: client.list_fellowship_members(access_token, fellowship_id=fellowship_id, limit=200),
+                    lambda: fetch_all_pages(lambda skip, limit: client.list_fellowship_members(access_token, fellowship_id=fellowship_id, skip=skip, limit=limit), page_size=200),
                 ))
             except BackendClientError:
-                return []
+                raise
             return sorted((_normalize_member(row) for row in rows), key=lambda row: row["name"].lower())
 
         return await request_cached(request, ("fellowship", "members", fellowship_id), load_rows)
@@ -270,10 +271,10 @@ class FellowshipService:
                 rows = await maybe_await(ttl_cached(
                     ("fellowship", "attendance", fellowship_id),
                     60.0,
-                    lambda: client.list_fellowship_attendance(access_token, fellowship_id=fellowship_id, limit=200),
+                    lambda: fetch_all_pages(lambda skip, limit: client.list_fellowship_attendance(access_token, fellowship_id=fellowship_id, skip=skip, limit=limit), page_size=200),
                 ))
             except BackendClientError:
-                return []
+                raise
             return sorted((_normalize_attendance(row) for row in rows), key=lambda row: row["date"], reverse=True)
 
         return await request_cached(request, ("fellowship", "attendance", fellowship_id), load_rows)
@@ -288,10 +289,10 @@ class FellowshipService:
                 rows = await maybe_await(ttl_cached(
                     ("fellowship", "offerings", fellowship_id),
                     60.0,
-                    lambda: client.list_fellowship_offerings(access_token, fellowship_id=fellowship_id, limit=200),
+                    lambda: fetch_all_pages(lambda skip, limit: client.list_fellowship_offerings(access_token, fellowship_id=fellowship_id, skip=skip, limit=limit), page_size=200),
                 ))
             except BackendClientError:
-                return []
+                raise
             return sorted((_normalize_offering(row) for row in rows), key=lambda row: row["date"], reverse=True)
 
         return await request_cached(request, ("fellowship", "offerings", fellowship_id), load_rows)
@@ -306,10 +307,10 @@ class FellowshipService:
                 rows = await maybe_await(ttl_cached(
                     ("fellowship", "testimonies", fellowship_id),
                     60.0,
-                    lambda: client.list_fellowship_testimonies(access_token, fellowship_id=fellowship_id, limit=200),
+                    lambda: fetch_all_pages(lambda skip, limit: client.list_fellowship_testimonies(access_token, fellowship_id=fellowship_id, skip=skip, limit=limit), page_size=200),
                 ))
             except BackendClientError:
-                return []
+                raise
             return sorted((_normalize_testimony(row) for row in rows), key=lambda row: row["date"], reverse=True)
 
         return await request_cached(request, ("fellowship", "testimonies", fellowship_id), load_rows)
@@ -324,10 +325,10 @@ class FellowshipService:
                 rows = await maybe_await(ttl_cached(
                     ("fellowship", "prayers", fellowship_id),
                     60.0,
-                    lambda: client.list_fellowship_prayers(access_token, fellowship_id=fellowship_id, limit=200),
+                    lambda: fetch_all_pages(lambda skip, limit: client.list_fellowship_prayers(access_token, fellowship_id=fellowship_id, skip=skip, limit=limit), page_size=200),
                 ))
             except BackendClientError:
-                return []
+                raise
             return sorted((_normalize_prayer(row) for row in rows), key=lambda row: row["date"], reverse=True)
 
         return await request_cached(request, ("fellowship", "prayers", fellowship_id), load_rows)
@@ -342,10 +343,10 @@ class FellowshipService:
                 rows = await maybe_await(ttl_cached(
                     ("fellowship", "summaries", fellowship_id),
                     60.0,
-                    lambda: client.list_fellowship_summaries(access_token, fellowship_id=fellowship_id, limit=200),
+                    lambda: fetch_all_pages(lambda skip, limit: client.list_fellowship_summaries(access_token, fellowship_id=fellowship_id, skip=skip, limit=limit), page_size=200),
                 ))
             except BackendClientError:
-                return []
+                raise
             return sorted((_normalize_summary(row) for row in rows), key=lambda row: row["week_of"], reverse=True)
 
         return await request_cached(request, ("fellowship", "summaries", fellowship_id), load_rows)

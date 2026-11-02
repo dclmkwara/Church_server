@@ -75,7 +75,7 @@ async def request_transfer(
     Request a formal worker transfer from one location to another.
     Creates a pending transfer with a unique reference number (TRF-YYYY-NNNN).
     """
-    deps.ensure_path_in_scope(current_user, current_user.path, detail="Current user has no scope")
+    deps.effective_scope_path(current_user)
     await deps.get_location_in_scope(
         db,
         current_user=current_user,

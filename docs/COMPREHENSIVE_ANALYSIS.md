@@ -4,6 +4,8 @@
 **Prepared For:** Project Lead  
 **Purpose:** Complete system verification, gap analysis, and documentation planning
 
+> **Historical report — superseded.** This 2026-01-24 report was not verified against the current source. Its “complete”, database RLS, partitioning, full audit, offline support, and production readiness claims are not evidence of current behavior and must not be used for deployment approval. See `BACKEND_REMEDIATION_PHASE_PLAN.md` and `docs/SECURITY.md` for the current verified status and open gates.
+
 ---
 
 ## Executive Summary

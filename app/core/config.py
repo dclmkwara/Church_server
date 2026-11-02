@@ -53,8 +53,8 @@ class Settings(BaseSettings):
     IDEMPOTENCY_KEY_TTL_DAYS: int = 7
 
     # Pagination
-    DEFAULT_PAGE_SIZE: int = 50
-    MAX_PAGE_SIZE: int = 100
+    DEFAULT_PAGE_SIZE: int = 100
+    MAX_PAGE_SIZE: int = 500
 
     # File Upload
     MAX_UPLOAD_SIZE_MB: int = 10

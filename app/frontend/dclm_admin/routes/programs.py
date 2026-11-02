@@ -10,6 +10,7 @@ from starlette.requests import Request
 from faststrap import Button, Icon, PlaceholderCard, Spinner, TabPane, Tabs, ToggleGroup
 
 from ..auth_context import build_context
+from ..backend import BackendClientError
 from ..communication import PeopleService, ProgramService
 from ..components.chartjs import bar_chart as _bar_chart
 from ..components.chartjs import donut_chart as _donut_chart
@@ -1600,7 +1601,10 @@ def register_program_routes(app) -> None:
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
         ctx = build_context(data)
-        row = await ProgramService.create_assignment(request, ctx, event_id, data) if await ProgramService.live_enabled(request) else None
+        try:
+            row = await ProgramService.create_assignment(request, ctx, event_id, data) if await ProgramService.live_enabled(request) else None
+        except BackendClientError as exc:
+            return P(f"Could not save this assignment: {exc}", cls="text-muted")
         if row is None:
             return P("Could not save this assignment right now.", cls="text-muted")
         refreshed = Div(
@@ -1620,7 +1624,10 @@ def register_program_routes(app) -> None:
     @app.post("/church-data/programs/assignments/{assignment_id}/approve")
     async def approve_assignment(request: Request, assignment_id: str):
         ctx = build_context(request)
-        updated = await ProgramService.approve_assignment(request, ctx, assignment_id) if await ProgramService.live_enabled(request) else None
+        try:
+            updated = await ProgramService.approve_assignment(request, ctx, assignment_id) if await ProgramService.live_enabled(request) else None
+        except BackendClientError as exc:
+            return P(f"Could not approve this assignment: {exc}", cls="text-muted")
         if updated is None:
             return P("Could not approve this assignment right now.", cls="text-muted")
         refreshed = Div(
@@ -1639,7 +1646,10 @@ def register_program_routes(app) -> None:
         form = await request.form()
         ctx = build_context(request)
         note = str(form.get("note") or "")
-        updated = await ProgramService.reject_assignment(request, ctx, assignment_id, note=note) if await ProgramService.live_enabled(request) else None
+        try:
+            updated = await ProgramService.reject_assignment(request, ctx, assignment_id, note=note) if await ProgramService.live_enabled(request) else None
+        except BackendClientError as exc:
+            return P(f"Could not reject this assignment: {exc}", cls="text-muted")
         if updated is None:
             return P("Could not reject this assignment right now.", cls="text-muted")
         refreshed = Div(

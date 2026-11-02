@@ -7,6 +7,7 @@ from uuid import UUID
 
 from app.models.announcement import Announcement, AnnouncementItem
 from app.schemas.announcement import AnnouncementCreate, AnnouncementUpdate
+from app.db.filters import scope_filter
 
 class CRUDAnnouncement:
     @staticmethod
@@ -75,12 +76,7 @@ class CRUDAnnouncement:
         # Scope filtering using ltree — explicit casts required because the
         # ORM maps 'path' as String (VARCHAR), so we must cast both sides to
         # ltree ourselves to satisfy the <@ operator's type requirements.
-        stmt = stmt.where(
-            text(
-                "CAST(announcements.path AS LTREE) <@ CAST(:scope_path AS LTREE)"
-                " OR CAST(announcements.path AS LTREE) = CAST(:scope_path AS LTREE)"
-            ).bindparams(scope_path=scope_path)
-        )
+        stmt = stmt.where(scope_filter(Announcement.path, scope_path))
 
         if is_active is not None:
             stmt = stmt.where(Announcement.is_active == is_active)

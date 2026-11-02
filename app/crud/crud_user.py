@@ -12,7 +12,7 @@ Production changes:
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -20,6 +20,7 @@ from app.crud.base import CRUDBase
 from app.models.user import Role, User, Worker
 from app.schemas.user import UserCreate, UserUpdate
 from app.core.security import hash_password, verify_password
+from app.models.refresh_token import RefreshToken
 
 
 class CRUDUser(CRUDBase[User, UserCreate, UserUpdate]):
@@ -98,8 +99,17 @@ class CRUDUser(CRUDBase[User, UserCreate, UserUpdate]):
             else obj_in.model_dump(exclude_unset=True)
         )
 
-        # Hash password if present
-        if update_data.get("password"):
+        # Changing a password ends all persisted refresh sessions.
+        password_changed = bool(update_data.get("password"))
+        if password_changed:
+            await db.execute(
+                update(RefreshToken)
+                .where(
+                    RefreshToken.user_id == db_obj.user_id,
+                    RefreshToken.revoked.is_(False),
+                )
+                .values(revoked=True, revoked_at=datetime.now(timezone.utc))
+            )
             update_data["password"] = hash_password(update_data["password"])
 
         # Role updates handled separately
@@ -110,6 +120,9 @@ class CRUDUser(CRUDBase[User, UserCreate, UserUpdate]):
 
         if role_ids is not None:
             await self.assign_roles(db, user=db_obj, role_ids=role_ids)
+
+        if password_changed:
+            invalidate_user_cache(str(db_obj.user_id))
 
         # Refresh only the roles relationship — no second full SELECT needed
         await db.refresh(db_obj, attribute_names=["roles"])

@@ -13,10 +13,11 @@ Design notes
 """
 import asyncio
 import time
-from collections import defaultdict
+from collections import OrderedDict
 
 # Store: key → list of monotonic timestamps of recent requests
-_store: dict[str, list[float]] = defaultdict(list)
+_store: OrderedDict[str, list[float]] = OrderedDict()
+_MAX_BUCKETS = 10_000
 _lock = asyncio.Lock()
 
 
@@ -38,12 +39,18 @@ async def is_allowed(key: str, *, max_requests: int, window_seconds: float) -> b
     cutoff = now - window_seconds
 
     async with _lock:
-        timestamps = _store[key]
+        timestamps = _store.get(key, [])
         # Prune entries that have fallen outside the window
-        _store[key] = [t for t in timestamps if t > cutoff]
-        if len(_store[key]) >= max_requests:
+        timestamps = [t for t in timestamps if t > cutoff]
+        if len(timestamps) >= max_requests:
+            _store[key] = timestamps
+            _store.move_to_end(key)
             return False
-        _store[key].append(now)
+        timestamps.append(now)
+        _store[key] = timestamps
+        _store.move_to_end(key)
+        while len(_store) > _MAX_BUCKETS:
+            _store.popitem(last=False)
         return True
 
 

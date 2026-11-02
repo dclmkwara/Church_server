@@ -49,6 +49,7 @@ async def create_count(
         detail="Count location outside your scope",
     )
     created = await crud_count.create(db, obj_in=count_in, user_id=current_user.user_id)
+    deps.ensure_path_in_scope(current_user, created.path, detail="Existing count is outside your scope")
     await _broadcast_event("count_created", {"id": str(created.id), "location_id": created.location_id})
     return created
 
@@ -70,8 +71,8 @@ async def _broadcast_event(event_type: str, payload: dict) -> None:
 )
 async def read_counts(
     db: AsyncSession = Depends(deps.get_db),
-    skip: int = 0,
-    limit: int = 100,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
     current_user: User = Depends(deps.get_current_active_user),
     scope_path: str = Query(None, description="Filter by scope path"),
 ) -> Any:
@@ -80,9 +81,10 @@ async def read_counts(
     """
     search_scope = deps.resolve_scope_path(current_user, scope_path)
     
-    return await crud_count.get_multi_by_scope(
+    rows = await crud_count.get_multi_by_scope(
         db, scope_path=search_scope, skip=skip, limit=limit
     )
+    return deps.filter_rows_in_scope(rows, current_user)
 
 @router.get(
     "/aggregate",
@@ -100,7 +102,7 @@ async def aggregate_counts(
     """
     Aggregate counts within scope, grouped by location_id.
     """
-    scope_path = str(current_user.path)
+    scope_path = deps.effective_scope_path(current_user)
     query = select(
         Count.location_id.label("location_id"),
         func.sum(Count.adult_male).label("adult_male"),
@@ -111,7 +113,7 @@ async def aggregate_counts(
         func.sum(Count.girls).label("girls"),
         func.sum(Count.total).label("total"),
     ).where(
-        text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path),
+        deps.scope_condition(Count.path, current_user),
         Count.is_deleted == False
     )
 
@@ -162,7 +164,7 @@ async def aggregate_counts_flexible(
     if level_key not in level_map:
         raise HTTPException(status_code=400, detail="Invalid view_level")
 
-    scope_path = str(current_user.path)
+    scope_path = deps.effective_scope_path(current_user)
     segment_count = level_map[level_key]
 
     group_path = _ltree_subpath(Count.path, segment_count).label("group_path")
@@ -177,7 +179,7 @@ async def aggregate_counts_flexible(
         func.sum(Count.girls).label("girls"),
         func.sum(Count.total).label("total"),
     ).where(
-        _scope_filter(Count.path, scope_path),
+        deps.scope_condition(Count.path, current_user),
         Count.is_deleted == False
     )
 
@@ -239,18 +241,7 @@ async def update_count(
     
     updated_count = await crud_count.update(db, db_obj=count, obj_in=count_in)
     
-    # Recalculate total if demographics changed
-    if any([
-        count_in.adult_male is not None,
-        count_in.adult_female is not None,
-        count_in.youth_male is not None,
-        count_in.youth_female is not None,
-        count_in.boys is not None,
-        count_in.girls is not None,
-    ]):
-        updated_count.calculate_total()
-        await db.commit()
-        await db.refresh(updated_count)
+    # CRUD recalculates and commits the derived total in the same transaction.
     
     return updated_count
 
@@ -286,6 +277,8 @@ async def batch_create_counts(
 
     if not items:
         return sync_result
+    if any(item.client_id is None for item in items):
+        raise HTTPException(status_code=422, detail="Every count batch item requires a stable client_id")
 
     # ── 1. Pre-fetch existing client_ids in ONE query ─────────────────────
     client_ids_in = [i.client_id for i in items if i.client_id]
@@ -319,17 +312,8 @@ async def batch_create_counts(
     for item in items:
         client_id_str = str(item.client_id) if item.client_id else None
         try:
-            # Duplicate check (O(1) dict lookup, not a DB call)
-            if client_id_str and client_id_str in existing_by_client_id:
-                sync_result.duplicates += 1
-                details.append({
-                    "client_id": client_id_str,
-                    "id": existing_by_client_id[client_id_str],
-                    "status": "duplicate",
-                })
-                continue
-
-            # Scope check (O(1) set lookup, not a DB call)
+            # Validate the submitted location before any idempotency lookup so
+            # guessed client IDs cannot reveal records from another scope.
             if str(item.location_id) not in valid_location_ids:
                 sync_result.errors += 1
                 details.append({
@@ -339,13 +323,39 @@ async def batch_create_counts(
                 })
                 continue
 
+            # Duplicate check (O(1) dict lookup, not a DB call)
+            if client_id_str and client_id_str in existing_by_client_id:
+                existing = await crud_count.get_by_client_id(db, client_id=item.client_id)
+                if existing is None:
+                    existing_by_client_id.pop(client_id_str, None)
+                else:
+                    try:
+                        deps.ensure_path_in_scope(current_user, existing.path, detail="Existing count is outside your scope")
+                    except HTTPException:
+                        sync_result.errors += 1
+                        details.append({"client_id": client_id_str, "error": "Existing count is outside your scope", "status": "error"})
+                        continue
+                    sync_result.duplicates += 1
+                    details.append({
+                        "client_id": client_id_str,
+                        "id": str(existing.id),
+                        "status": "duplicate",
+                    })
+                    continue
+
             # The only remaining DB call per item is the actual insert
             created = await crud_count.create(db, obj_in=item, user_id=current_user.user_id)
-            sync_result.synced += 1
+            if getattr(created, "_was_duplicate_submission", False):
+                deps.ensure_path_in_scope(current_user, created.path, detail="Existing count is outside your scope")
+                sync_result.duplicates += 1
+                status_value = "duplicate"
+            else:
+                sync_result.synced += 1
+                status_value = "synced"
             details.append({
                 "client_id": client_id_str,
                 "id": str(created.id),
-                "status": "synced",
+                "status": status_value,
             })
         except HTTPException as exc:
             await db.rollback()
@@ -384,7 +394,7 @@ async def get_count_stats(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Return aggregated population stats (wrapper around statistics service)."""
-    scope_path = str(current_user.path)
+    scope_path = deps.effective_scope_path(current_user)
     stats = await StatisticsService.get_population_statistics(
         db,
         scope_path,

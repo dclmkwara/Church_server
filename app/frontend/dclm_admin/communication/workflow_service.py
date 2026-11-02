@@ -199,7 +199,7 @@ class WorkflowService:
         return True
 
     @staticmethod
-    async def list_transfer_requests(request, ctx, *, request_type: str = "all", status: str = "all", mine_only: bool = False, review_only: bool = False) -> list[dict[str, Any]]:
+    async def list_requests(request, ctx, *, request_type: str = "all", status: str = "all", mine_only: bool = False, review_only: bool = False) -> list[dict[str, Any]]:
         if await WorkflowService.use_mock(request):
             return STORE.list_requests(
                 ctx.current_scope_path,
@@ -257,14 +257,14 @@ class WorkflowService:
         return sorted(rows, key=_request_sort_key, reverse=True)
 
     @staticmethod
-    async def list_status_change_requests(request, ctx, request_token: str) -> dict[str, Any] | None:
+    async def get_request(request, ctx, request_token: str) -> dict[str, Any] | None:
         if await WorkflowService.use_mock(request):
             return STORE.get_request(request_token)
         rows = await WorkflowService.list_requests(request, ctx, request_type="all", status="all")
         return next((row for row in rows if row["request_id"] == request_token), None)
 
     @staticmethod
-    async def list_removal_requests(request, ctx, request_token: str, action: str, notes: str) -> dict[str, Any] | None:
+    async def act_request(request, ctx, request_token: str, action: str, notes: str) -> dict[str, Any] | None:
         if await WorkflowService.use_mock(request):
             return STORE.act_request(request_token, action, notes, ctx.profile.user_name)
         kind, backend_id = _parse_request_token(request_token)
@@ -298,7 +298,7 @@ class WorkflowService:
         return await WorkflowService.get_request(request, ctx, request_token)
 
     @staticmethod
-    async def approve_transfer_request(request, ctx, *, kind: str = "all") -> list[dict[str, Any]]:
+    async def list_inbox(request, ctx, *, kind: str = "all") -> list[dict[str, Any]]:
         if await WorkflowService.use_mock(request):
             return STORE.list_inbox(ctx.current_scope_path, kind=kind)
         scope_path = await PeopleService.effective_scope_path(request, ctx)
@@ -394,7 +394,7 @@ class WorkflowService:
         return await request_cached(request, ("workflow", "inbox", scope_path, kind), load_items)
 
     @staticmethod
-    async def reject_transfer_request(request, ctx) -> int:
+    async def pending_item_count(request, ctx) -> int:
         if await WorkflowService.use_mock(request):
             return len(STORE.list_inbox(ctx.current_scope_path, kind="all"))
 
@@ -416,7 +416,7 @@ class WorkflowService:
         return await request_cached(request, ("workflow", "pending-item-count", scope_path), load_count)
 
     @staticmethod
-    async def approve_status_change_request(request, ctx, item_id: str) -> dict[str, Any] | None:
+    async def resolve_inbox_item(request, ctx, item_id: str) -> dict[str, Any] | None:
         if await WorkflowService.use_mock(request):
             return STORE.resolve_inbox_item(item_id)
         kind, record_id = _parse_request_token(item_id)
@@ -444,36 +444,7 @@ class WorkflowService:
         return None
 
     @staticmethod
-    async def reject_status_change_request(request, ctx, *, request_type: str, worker_id: str, reason: str, destination_location_id: str = "", new_status: str = "") -> dict[str, Any] | None:
-        if await WorkflowService.use_mock(request):
-            raise BackendClientError("Live request creation is only available in backend mode.")
-        client = async_client(get_api_client())
-        access_token = AuthService.get_access_token(request)
-        if request_type == "transfer_request":
-            created = await client.create_transfer_request(
-                access_token,
-                {"worker_id": worker_id, "to_location_id": destination_location_id, "reason": reason or None},
-            )
-            worker_map, _user_by_worker = await maybe_await(_worker_maps(request, ctx))
-            return _normalize_transfer(created, worker_map.get(worker_id), AuthService.get_identity(request))
-        if request_type == "status_change":
-            created = await client.create_status_change_request(
-                access_token,
-                {"worker_id": worker_id, "new_status": new_status, "reason": reason or None},
-            )
-            worker_map, _user_by_worker = await maybe_await(_worker_maps(request, ctx))
-            return _normalize_status_change(created, worker_map.get(worker_id), AuthService.get_identity(request))
-        if request_type == "removal_request":
-            created = await client.create_removal_request(
-                access_token,
-                {"worker_id": worker_id, "reason": reason},
-            )
-            worker_map, _user_by_worker = await maybe_await(_worker_maps(request, ctx))
-            return _normalize_removal(created, worker_map.get(worker_id), AuthService.get_identity(request))
-        raise BackendClientError("Unknown workflow request type.")
-
-    @staticmethod
-    async def approve_removal_request(request, ctx, item_id: str, action: str, notes: str) -> dict[str, Any] | None:
+    async def act_inbox_item(request, ctx, item_id: str, action: str, notes: str) -> dict[str, Any] | None:
         if not await WorkflowService.live_enabled(request):
             return STORE.act_inbox_item(item_id, action, notes, actor_name=ctx.profile.user_name)
         kind, record_id = _parse_request_token(item_id)
@@ -536,13 +507,6 @@ async def _create_workflow_request_public(
 
 
 WorkflowService.create_request = staticmethod(_create_workflow_request_public)
-WorkflowService.list_requests = staticmethod(WorkflowService.list_transfer_requests)
-WorkflowService.get_request = staticmethod(WorkflowService.list_status_change_requests)
-WorkflowService.act_request = staticmethod(WorkflowService.list_removal_requests)
-WorkflowService.list_inbox = staticmethod(WorkflowService.approve_transfer_request)
-WorkflowService.pending_item_count = staticmethod(WorkflowService.reject_transfer_request)
-WorkflowService.resolve_inbox_item = staticmethod(WorkflowService.approve_status_change_request)
-WorkflowService.act_inbox_item = staticmethod(WorkflowService.approve_removal_request)
 
 dual_mode_class(WorkflowService)
 

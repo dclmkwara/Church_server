@@ -74,7 +74,7 @@ async def get_population_statistics(
     Get aggregated population statistics with demographics.
     Returns totals, averages, and percentages by gender and age groups.
     """
-    scope_path = str(current_user.path)
+    scope_path = deps.effective_scope_path(current_user)
     
     stats = await StatisticsService.get_population_statistics(
         db, scope_path, program_domain, program_type, location_id,
@@ -98,7 +98,7 @@ async def get_church_statistics(
     """
     Get church overview statistics including locations, groups, regions, and last program data.
     """
-    scope_path = str(current_user.path)
+    scope_path = deps.effective_scope_path(current_user)
     stats = await StatisticsService.get_church_statistics(db, scope_path)
     return stats
 
@@ -114,6 +114,6 @@ async def get_user_statistics(
     """
     Get user activity statistics (active, inactive, registered counts).
     """
-    scope_path = str(current_user.path)
+    scope_path = deps.effective_scope_path(current_user)
     stats = await StatisticsService.get_user_statistics(db, scope_path)
     return stats

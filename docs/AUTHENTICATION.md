@@ -17,7 +17,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 | **Access Token** | Short-lived (configured by `ACCESS_TOKEN_EXPIRE_MINUTES`) | Sent with every API request |
 | **Refresh Token** | Long-lived | Used only to obtain a new access token when the old one expires |
 
-Access tokens contain all the claims the server needs to authorize requests. Refresh tokens contain only the user ID.
+Access tokens contain the user's ID and informational role/path claims, but protected routes reload current user roles and scope from the database. Access tokens currently have no explicit `type` claim. Refresh tokens include `sub`, `type="refresh"`, `jti`, `iat`, and `exp`; they are stored by JTI and rotated on use. Protected routes reject refresh-type tokens.
 
 ---
 
@@ -51,8 +51,8 @@ username=pastor@example.com&password=SecurePass123!
 **Error Responses:**
 | Status | Condition | Message |
 |---|---|---|
-| `400` | Email or password is wrong | `"Incorrect email or password"` |
-| `400` | Account is deactivated | `"Your account has been deactivated..."` |
+| `401` | Email or password is wrong | `"Incorrect email or password"` |
+| `401` | Account is deactivated | `"Your account has been deactivated..."` |
 | `401` | Account is pending approval | `"Your account is awaiting admin approval..."` |
 | `401` | Account was rejected | `"Your account was rejected. Reason: ..."` |
 
@@ -71,8 +71,7 @@ When decoded, a valid access token contains:
     "home_path": "org.234.KW.ILN.ILE.001",
     "scope_path": "org.234.KW.ILN.ILE",
     "exp": 1777777777,
-    "iat": 1777777000,
-    "type": "access"
+    "iat": 1777777000
 }
 ```
 
@@ -81,12 +80,12 @@ When decoded, a valid access token contains:
 | `sub` | UUID string | The user's unique ID in the system |
 | `email` | string | User's email address |
 | `role` | string | Name of the user's highest-score role (e.g., `"GroupPastor"`) |
-| `score` | integer | Numeric level 1–9 — drives all permission checks |
+| `score` | integer | Informational score at issuance; protected routes recompute current roles from the database |
 | `home_path` | ltree string | The user's physical church location path |
 | `scope_path` | ltree string | The widest path this user is allowed to access |
 | `exp` | unix timestamp | Token expiry |
 | `iat` | unix timestamp | Token issued at |
-| `type` | string | `"access"` or `"refresh"` |
+| `type` | string | Present on refresh tokens as `"refresh"`; current access tokens omit it |
 
 **Important:** The `scope_path` is not the same as `home_path`. A Group Pastor at branch `org.234.KW.ILN.ILE.001` gets `scope_path = org.234.KW.ILN.ILE` — which covers ALL branches in his group.
 
@@ -103,10 +102,11 @@ score = 4 (Group Pastor)    → scope = org.234.KW.ILN.ILE       (one level up =
 score = 5 (Regional Pastor) → scope = org.234.KW.ILN            (two levels up = region)
 score = 6 (State Overseer)  → scope = org.234.KW               (state level)
 score = 7 (National Admin)  → scope = org.234                  (national level)
-score = 8–9                 → scope = org                      (everything)
+score = 8                   → broad `org` envelope plus nation paths in the user's home continent
+score = 9                   → scope = org (entire organization)
 ```
 
-When this user makes a request, all database queries filter with: `WHERE path <@ 'org.234.KW.ILN.ILE'` — using PostgreSQL's ltree descendant-path operator.
+Routes apply hierarchy filters in application queries. Do not assume every query is scoped until route-specific coverage is verified. PostgreSQL RLS policies are not installed. Level 8 continent filtering uses the resolved nation paths in addition to the broad `org` scope envelope.
 
 ---
 
@@ -216,7 +216,7 @@ The full permission seeding is in `app/db/init_rbac.py`.
 1. **bcrypt password hashing** — passwords are never stored in plain text
 2. **JWT HS256 signing** — tokens are signed with a secret key from `.env`
 3. **Scope isolation** — all queries are scoped to the user's ltree path
-4. **Soft deletes** — nothing is permanently removed, full audit trail maintained
+4. **Soft deletes** — selected entities use soft-delete flags; retention and audit coverage vary by model
 5. **Approval gate** — accounts cannot login until explicitly approved by a pastor
 6. **Role score enforcement** — a user can only assign roles with a score lower than their own
 

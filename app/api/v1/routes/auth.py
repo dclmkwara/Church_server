@@ -16,10 +16,11 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
 from jose import JWTError
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
@@ -27,13 +28,17 @@ from app.core import security
 from app.core.config import settings
 from app.core.rate_limiter import check_rate_limit
 from app.crud.crud_user import user as crud_user
-from app.db.session import get_db
+from app.db.session import get_db, inject_auth_email, inject_auth_user, inject_scope
 from app.models.refresh_token import RefreshToken
 from app.models.user import User
 from app.schemas.user import Token, UserResponse
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+class LogoutRequest(BaseModel):
+    refresh_token: str
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -80,7 +85,6 @@ async def _store_refresh_token(db: AsyncSession, user_id: str, jti: str) -> None
 async def _rotate_refresh_token(
     db: AsyncSession,
     old_jti: str,
-    old_record: RefreshToken,
     user_id: str,
 ) -> tuple[str, str]:
     """
@@ -88,10 +92,26 @@ async def _rotate_refresh_token(
 
     Returns (new_token_string, new_jti).
     """
-    # Revoke old token
-    old_record.revoked = True
-    old_record.revoked_at = datetime.now(timezone.utc)
-    db.add(old_record)
+    # Claim this token atomically so only one concurrent refresh can rotate it.
+    now = datetime.now(timezone.utc)
+    claim = await db.execute(
+        update(RefreshToken)
+        .where(
+            RefreshToken.jti == uuid.UUID(old_jti),
+            RefreshToken.user_id == uuid.UUID(user_id),
+            RefreshToken.revoked.is_(False),
+            RefreshToken.expires_at > now,
+        )
+        .values(revoked=True, revoked_at=now)
+        .returning(RefreshToken.jti)
+    )
+    if claim.scalar_one_or_none() is None:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token has already been used or expired",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     # Issue and persist new token
     new_token, new_jti = security.create_refresh_token(user_id=user_id)
@@ -135,6 +155,7 @@ async def login_access_token(
     )
 
     # ── Authenticate ──────────────────────────────────────────────────────────
+    await inject_auth_email(db, form_data.username)
     user = await crud_user.authenticate(
         db, email=form_data.username, password=form_data.password
     )
@@ -168,6 +189,16 @@ async def login_access_token(
     # ── Build tokens ──────────────────────────────────────────────────────────
     score, role_name = _best_role(user)
     scope_path = security.create_admin_access_id(user_path=str(user.path), score=score)
+    await inject_auth_user(db, str(user.user_id))
+    nation_paths = await deps.resolve_continental_scope(db, user)
+    await inject_scope(
+        db,
+        scope_path,
+        role_score=score,
+        continent=getattr(user, "_authorized_continent", None),
+        user_id=str(user.user_id),
+        nation_paths=nation_paths,
+    )
 
     access_token = _build_access_token(user, score, role_name, scope_path)
     refresh_token_str, jti = security.create_refresh_token(user_id=str(user.user_id))
@@ -243,7 +274,11 @@ async def refresh_token_endpoint(
         )
 
     token_record: RefreshToken | None = await db.get(RefreshToken, jti_uuid)
-    if token_record is None or not token_record.is_valid:
+    if (
+        token_record is None
+        or token_record.user_id != uuid.UUID(user_id)
+        or not token_record.is_valid
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Refresh token has been revoked or expired",
@@ -251,6 +286,7 @@ async def refresh_token_endpoint(
         )
 
     # ── Load user (always fresh — no cache on refresh) ────────────────────────
+    await inject_auth_user(db, user_id)
     user = await crud_user.get(db, id=user_id)
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
@@ -263,8 +299,17 @@ async def refresh_token_endpoint(
     # ── Rotate token ──────────────────────────────────────────────────────────
     score, role_name = _best_role(user)
     scope_path = security.create_admin_access_id(user_path=str(user.path), score=score)
+    nation_paths = await deps.resolve_continental_scope(db, user)
+    await inject_scope(
+        db,
+        scope_path,
+        role_score=score,
+        continent=getattr(user, "_authorized_continent", None),
+        user_id=str(user.user_id),
+        nation_paths=nation_paths,
+    )
 
-    new_refresh_token, _ = await _rotate_refresh_token(db, jti_str, token_record, user_id)
+    new_refresh_token, _ = await _rotate_refresh_token(db, jti_str, user_id)
     new_access_token = _build_access_token(user, score, role_name, scope_path)
 
     # Evict cached user so fresh role data is picked up immediately
@@ -279,9 +324,49 @@ async def refresh_token_endpoint(
     }
 
 
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+async def logout(
+    body: LogoutRequest,
+    db: AsyncSession = Depends(deps.get_db),
+) -> Response:
+    """Revoke the presented refresh token without requiring a live access token."""
+    try:
+        payload = security.verify_token(body.refresh_token)
+        if payload.get("type") != "refresh" or not payload.get("sub") or not payload.get("jti"):
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
+        user_id = uuid.UUID(str(payload["sub"]))
+        jti = uuid.UUID(str(payload["jti"]))
+    except (JWTError, ValidationError, TypeError, ValueError):
+        # Logout is idempotent: malformed, expired, or already-cleared tokens
+        # should not prevent the browser from ending its local session.
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    await inject_auth_user(db, str(user_id))
+    now = datetime.now(timezone.utc)
+    await db.execute(
+        update(RefreshToken)
+        .where(
+            RefreshToken.jti == jti,
+            RefreshToken.user_id == user_id,
+            RefreshToken.revoked.is_(False),
+        )
+        .values(revoked=True, revoked_at=now)
+    )
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.get("/me", response_model=UserResponse)
 async def read_users_me(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Return the authenticated user's profile (roles and location included)."""
-    return current_user
+    from app.schemas.user import UserResponse
+
+    response = UserResponse.model_validate(current_user)
+    effective_permissions = sorted({
+        permission.permission
+        for assigned_role in (current_user.roles or [])
+        for permission in (assigned_role.permissions or [])
+    })
+    return response.model_copy(update={"permissions": effective_permissions})

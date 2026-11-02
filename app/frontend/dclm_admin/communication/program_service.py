@@ -9,6 +9,7 @@ from ..mock_data import STORE
 from .api_client import get_api_client
 from .async_compat import async_client, dual_mode_class, maybe_await
 from .auth_service import AuthService
+from .pagination import fetch_all_pages
 from .church_data_service import ChurchDataService
 from .people_service import PeopleService
 from .request_cache import request_cached
@@ -230,13 +231,11 @@ class ProgramService:
             client = async_client(get_api_client())
             access_token = AuthService.get_access_token(request)
             try:
-                events_raw = await client.list_program_events(
-                    access_token,
-                    scope_path=scope_path,
-                    limit=300,
-                )
+                events_raw = await fetch_all_pages(lambda skip, limit: client.list_program_events(
+                    access_token, scope_path=scope_path, skip=skip, limit=limit,
+                ), page_size=200)
             except BackendClientError:
-                events_raw = []
+                raise
             try:
                 domains_raw = await maybe_await(ttl_cached(
                     ("programs", "domains"),
@@ -244,7 +243,7 @@ class ProgramService:
                     lambda: client.list_program_domains(access_token, limit=200),
                 ))
             except BackendClientError:
-                domains_raw = _fallback_domain_rows()
+                raise
             domain_lookup = {int(row.get("id") or 0): str(row.get("name") or "") for row in domains_raw}
             events = [_normalize_event(row, domain_lookup) for row in events_raw]
             try:
@@ -254,7 +253,7 @@ class ProgramService:
                     lambda: client.list_program_types(access_token, limit=200),
                 ))
             except BackendClientError:
-                _ = _fallback_type_rows(events)
+                raise
             return domains_raw, domain_lookup, events
 
         return await request_cached(request, ("programs", "live_maps", scope_path), load_maps)
@@ -318,14 +317,15 @@ class ProgramService:
         _ = domains_raw
 
         async def load_rows() -> list[dict[str, Any]]:
-            campaigns_raw = await client.list_program_campaigns(
+            campaigns_raw = await fetch_all_pages(lambda skip, limit: client.list_program_campaigns(
                 access_token,
                 scope_path=scope_path,
+                skip=skip,
                 program_domain=domain_slug or None,
                 event_mode=event_mode or None,
                 status_value=status_value or None,
-                limit=200,
-            )
+                limit=limit,
+            ), page_size=200)
             return [_normalize_campaign(row, domain_lookup) for row in campaigns_raw]
 
         return await request_cached(
@@ -471,6 +471,7 @@ class ProgramService:
             },
         )
         worker_lookup = {row["worker_id"]: row for row in await PeopleService.list_workers(request, ctx)}
+        invalidate_ttl_prefix(("programs", "assignments", str(event_id)))
         return _normalize_assignment(created, worker_lookup)
 
     @staticmethod
@@ -481,6 +482,7 @@ class ProgramService:
         access_token = AuthService.get_access_token(request)
         updated = await client.approve_event_assignment(access_token, assignment_id)
         worker_lookup = {row["worker_id"]: row for row in await PeopleService.list_workers(request, ctx)}
+        invalidate_ttl_prefix(("programs", "assignments"))
         return _normalize_assignment(updated, worker_lookup)
 
     @staticmethod
@@ -491,6 +493,7 @@ class ProgramService:
         access_token = AuthService.get_access_token(request)
         updated = await client.reject_event_assignment(access_token, assignment_id, note=note or None)
         worker_lookup = {row["worker_id"]: row for row in await PeopleService.list_workers(request, ctx)}
+        invalidate_ttl_prefix(("programs", "assignments"))
         return _normalize_assignment(updated, worker_lookup)
 
     @staticmethod
@@ -863,6 +866,9 @@ async def _campaign_activity_public(request, ctx, campaign_id: str) -> dict[str,
 ProgramService.list_events = staticmethod(_list_program_events_public)
 ProgramService.list_campaigns = staticmethod(_list_program_campaigns_public)
 ProgramService.list_assignments = staticmethod(ProgramService.list_event_assignments)
+ProgramService.create_assignment = staticmethod(ProgramService.create_event_assignment)
+ProgramService.approve_assignment = staticmethod(ProgramService.approve_event_assignment)
+ProgramService.reject_assignment = staticmethod(ProgramService.reject_event_assignment)
 ProgramService.campaign_activity = staticmethod(_campaign_activity_public)
 ProgramService._mock_campaigns = staticmethod(ProgramService._mock_events)
 

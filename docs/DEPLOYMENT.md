@@ -35,6 +35,11 @@ Set these in FastAPI Cloud before the first production deploy:
 | `DB_POOL_RECYCLE_SECONDS` | `3600` |
 | `BACKEND_CORS_ORIGINS` | JSON array of allowed frontend origins |
 
+`BACKEND_CORS_ORIGINS` must be set to the exact browser origins used by each
+deployed frontend (scheme and host, plus non-default port if applicable). When
+it is unset, cross-origin browser requests are denied. Do not use `*` for a
+credentialed deployment.
+
 If the password contains `#`, encode it as `%23` when possible. The app also normalizes raw passwords before parsing, but encoded URLs are safer in dashboards and shells.
 
 ## Supabase Setup
@@ -82,9 +87,16 @@ python scripts/seed_admin_bootstrap.py --password "use-a-strong-unique-password"
 ## Verify
 
 ```text
+https://your-fastapi-cloud-domain/live
+https://your-fastapi-cloud-domain/ready
 https://your-fastapi-cloud-domain/health
-https://your-fastapi-cloud-domain/docs
 ```
+
+`/live` confirms the process can answer requests. `/ready` checks the database
+and returns HTTP 503 while it is unavailable. `/health` remains as the existing
+detailed health response for compatibility.
+Interactive API docs are available only when `DEBUG=true`; do not enable that
+setting on a public production deployment.
 
 ## Troubleshooting
 

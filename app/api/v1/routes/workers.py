@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
 
 from app.api import deps
+from app.db.filters import scope_filter
 from app.crud.crud_worker import worker as crud_worker
 from app.schemas.user import WorkerCreate, WorkerResponse, WorkerUpdate
 from app.models.user import Worker, User
@@ -89,7 +90,7 @@ async def read_workers(
     workers = await crud_worker.get_multi_by_scope(
         db, scope_path=search_scope, skip=skip, limit=limit
     )
-    return workers
+    return deps.filter_rows_in_scope(workers, current_user)
 
 
 @router.get(
@@ -115,7 +116,7 @@ async def search_workers(
     """Search workers with optional filters."""
     search_scope = deps.resolve_scope_path(current_user, scope_path)
     query = select(Worker).where(
-        text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=search_scope),
+        scope_filter(Worker.path, search_scope),
         Worker.is_deleted == False,
     )
     if user_id:
@@ -137,7 +138,7 @@ async def search_workers(
 
     query = query.offset(skip).limit(limit)
     result = await db.execute(query)
-    return result.scalars().all()
+    return deps.filter_rows_in_scope(result.scalars().all(), current_user)
 
 
 @router.get(
@@ -156,11 +157,11 @@ async def list_pending_workers(
     search_scope = deps.resolve_scope_path(current_user, scope_path)
     query = select(Worker).where(
         Worker.approval_status == "pending_verification",
-        text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=search_scope),
+        scope_filter(Worker.path, search_scope),
         Worker.is_deleted == False,
     ).offset(skip).limit(limit)
     result = await db.execute(query)
-    return result.scalars().all()
+    return deps.filter_rows_in_scope(result.scalars().all(), current_user)
 
 
 @router.post(

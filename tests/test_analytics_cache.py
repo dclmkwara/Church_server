@@ -1,55 +1,46 @@
 import asyncio
-import os
-from pathlib import Path
-import sys
-
-os.environ.setdefault("SECRET_KEY", "test-secret-key-must-be-at-least-32-characters-long")
-os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost/test_db")
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core import analytics_cache
 
 
-def test_cached_result_is_copied_before_returning():
-    async def run():
+def test_cache_coalesces_concurrent_calls_and_releases_key_lock():
+    async def scenario():
         analytics_cache.clear()
         calls = 0
 
-        async def factory():
-            nonlocal calls
-            calls += 1
-            return {"items": [1, 2, 3]}
-
-        first = await analytics_cache.get_or_set(("demo", "copy"), factory, ttl=30.0)
-        first["items"].append(4)
-
-        second = await analytics_cache.get_or_set(("demo", "copy"), factory, ttl=30.0)
-
-        assert calls == 1
-        assert second == {"items": [1, 2, 3]}
-
-    asyncio.run(run())
-
-
-def test_concurrent_requests_share_one_factory_run():
-    async def run():
-        analytics_cache.clear()
-        calls = 0
-
-        async def factory():
+        async def build():
             nonlocal calls
             calls += 1
             await asyncio.sleep(0.01)
-            return {"value": calls}
+            return {"value": 42}
 
-        first, second = await asyncio.gather(
-            analytics_cache.get_or_set(("demo", "lock"), factory, ttl=30.0),
-            analytics_cache.get_or_set(("demo", "lock"), factory, ttl=30.0),
-        )
-
+        values = await asyncio.gather(*(
+            analytics_cache.get_or_set("same-key", build) for _ in range(20)
+        ))
+        assert values == [{"value": 42}] * 20
         assert calls == 1
-        assert first == {"value": 1}
-        assert second == {"value": 1}
+        assert "same-key" not in analytics_cache._analytics_cache_locks
 
-    asyncio.run(run())
+    asyncio.run(scenario())
+
+
+def test_cache_evicts_old_entries_at_configured_capacity(monkeypatch):
+    monkeypatch.setattr(analytics_cache, "_MAX_ANALYTICS_CACHE_ENTRIES", 2)
+
+    async def scenario():
+        analytics_cache.clear()
+
+        async def build(value):
+            async def factory():
+                return value
+            return await analytics_cache.get_or_set(value, factory)
+
+        await build("a")
+        await build("b")
+        await build("c")
+        assert len(analytics_cache._analytics_cache) == 2
+        assert "a" not in analytics_cache._analytics_cache
+        assert not analytics_cache._analytics_cache_locks
+
+    asyncio.run(scenario())
+    analytics_cache.clear()

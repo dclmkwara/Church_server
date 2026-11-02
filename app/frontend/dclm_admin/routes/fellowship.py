@@ -2,16 +2,17 @@ from __future__ import annotations
 
 import asyncio
 
-from fasthtml.common import A, Div, Form, H3, H4, Input, Option, P, Select, Textarea
+from fasthtml.common import A, Div, Form, H3, H4, Input, Option, P, Select
 from starlette.requests import Request
 from faststrap import Button, PlaceholderCard, Spinner
 
 from ..auth_context import build_context
 from ..communication import FellowshipService
 from ..components.feedback import simple_toast_response
-from ..components.shell import hidden_context_inputs, primary_button, shell_layout
+from ..components.shell import hidden_context_inputs, shell_layout
 from ..components.ui import empty_state, filter_field, format_naira, page_intro, page_stack, responsive_table, section_card, stat_card, status_badge
-from ..mock_data import STORE, TODAY, in_scope
+from ..mock_data import STORE, in_scope
+from ..source_intake import reject_source_submission, source_intake_notice
 
 
 WORKSPACE_TABS = [
@@ -350,24 +351,8 @@ async def _workspace_panel(request: Request, ctx, fellowship_id: str, tab: str, 
 
 
 def _workspace_primary_action(ctx, fellowship_id: str, tab: str):
-    actions = {
-        "members": ("Add Member", f"/fellowship/{fellowship_id}/members/new"),
-        "offerings": ("Record Offering", f"/fellowship/{fellowship_id}/offerings/new"),
-        "testimonies": ("Add Testimony", f"/fellowship/{fellowship_id}/testimonies/new"),
-        "prayers": ("Add Prayer Request", f"/fellowship/{fellowship_id}/prayers/new"),
-    }
-    if tab not in actions:
-        return None
-    label, path = actions[tab]
-    return primary_button(
-        label,
-        href="#",
-        data_bs_toggle="offcanvas",
-        data_bs_target="#form-drawer",
-        hx_get=ctx.url_for(path, tab=tab),
-        hx_target="#form-drawer-body",
-        hx_swap="innerHTML",
-    )
+    # Activity records and membership intake are submitted through the Level 1-2 app.
+    return None
 
 
 async def _fellowship_loading_shell(ctx, *, heading: str, message: str, target_path: str, **params: str) -> Div:
@@ -459,6 +444,13 @@ async def _fellowship_workspace_content(request: Request, ctx, fellowship_id: st
             empty_state("house-heart", "Fellowship not found", "This fellowship is not available."),
         )
     current_tab = next((key for key, _ in WORKSPACE_TABS if key == tab), "overview")
+    source_record_labels = {
+        "members": "Fellowship member registrations",
+        "attendance": "Fellowship attendance and activity records",
+        "offerings": "Fellowship offering submissions",
+        "testimonies": "Fellowship testimony submissions",
+        "prayers": "Fellowship prayer requests",
+    }
     return page_stack(
         A("Back to fellowships", href=ctx.url_for("/fellowship"), cls="btn btn-outline-primary admin-inline-btn mb-3"),
         page_intro(
@@ -468,6 +460,7 @@ async def _fellowship_workspace_content(request: Request, ctx, fellowship_id: st
             scope_kind=ctx.current_scope_kind,
         ),
         _workspace_tabs(ctx, fellowship_id, current_tab),
+        source_intake_notice(source_record_labels[current_tab]) if current_tab in source_record_labels else None,
         await _workspace_panel(request, ctx, fellowship_id, current_tab),
     )
 
@@ -544,177 +537,32 @@ def register_fellowship_routes(app) -> None:
 
     @app.get("/fellowship/{fellowship_id}/members/new")
     async def new_fellowship_member_form(request: Request, fellowship_id: str, tab: str = "members"):
-        ctx = build_context(request)
-        fellowship = await FellowshipService.get_fellowship(request, fellowship_id) if await FellowshipService.live_enabled(request) else STORE.get_fellowship(fellowship_id)
-        if fellowship is None:
-            return P("Fellowship not found.", cls="text-muted")
-        return Form(
-            *hidden_context_inputs(ctx),
-            Input(type="hidden", name="fellowship_id", value=fellowship_id),
-            Input(type="hidden", name="location", value=fellowship["location"]),
-            H3("Add fellowship member", cls="h5 fw-semibold"),
-            P(f"Add a member directly into {fellowship['name']}.", cls="text-muted"),
-            Input(type="text", name="name", placeholder="Full name", cls="form-control mb-3", required=True),
-            Div(
-                Input(type="text", name="phone", placeholder="Phone number", cls="form-control", required=True),
-                Input(type="date", name="date_joined", value=TODAY.isoformat(), cls="form-control"),
-                cls="drawer-two-up mb-3",
-            ),
-            Div(
-                Select(
-                    Option("Select gender", value=""),
-                    Option("Male", value="Male"),
-                    Option("Female", value="Female"),
-                    name="gender",
-                    cls="form-select",
-                    required=True,
-                ),
-                Select(
-                    Option("Select marital status", value=""),
-                    Option("Single", value="Single"),
-                    Option("Married", value="Married"),
-                    Option("Widowed", value="Widowed"),
-                    name="marital_status",
-                    cls="form-select",
-                    required=True,
-                ),
-                cls="drawer-two-up mb-3",
-            ),
-            Button("Save member", variant="success", type="submit", cls="w-100"),
-            hx_post=f"/fellowship/{fellowship_id}/members/create",
-            hx_target="#form-drawer-body",
-            hx_swap="innerHTML",
-        )
+        return source_intake_notice("Fellowship member registrations")
 
     @app.post("/fellowship/{fellowship_id}/members/create")
     async def create_fellowship_member(request: Request, fellowship_id: str):
-        form = await request.form()
-        data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
-        member = await FellowshipService.create_member(request, fellowship_id, data) if await FellowshipService.live_enabled(request) else STORE.add_church_member(data)
-        return simple_toast_response(
-            content=(
-                Div(H3("Member saved", cls="h5 fw-semibold"), P(f"{member['name']} has been added to the fellowship.", cls="mb-0")),
-                _workspace_panel(request, ctx, fellowship_id, "members", oob=True),
-            ),
-            message="Fellowship member saved.",
-            variant="success",
-        )
+        return reject_source_submission()
 
     @app.get("/fellowship/{fellowship_id}/offerings/new")
     async def new_fellowship_offering_form(request: Request, fellowship_id: str, tab: str = "offerings"):
-        ctx = build_context(request)
-        fellowship = await FellowshipService.get_fellowship(request, fellowship_id) if await FellowshipService.live_enabled(request) else STORE.get_fellowship(fellowship_id)
-        if fellowship is None:
-            return P("Fellowship not found.", cls="text-muted")
-        return Form(
-            *hidden_context_inputs(ctx),
-            Input(type="hidden", name="fellowship_id", value=fellowship_id),
-            H3("Record fellowship offering", cls="h5 fw-semibold"),
-            P(f"Save the latest offering for {fellowship['name']}.", cls="text-muted"),
-            Div(
-                Input(type="date", name="date", value=TODAY.isoformat(), cls="form-control"),
-                Input(type="number", name="amount", placeholder="Amount", cls="form-control", required=True),
-                cls="drawer-two-up mb-3",
-            ),
-            Div(
-                Select(
-                    Option("Cash", value="Cash"),
-                    Option("Transfer", value="Transfer"),
-                    name="method",
-                    cls="form-select",
-                ),
-                Input(type="text", name="submitted_by", placeholder="Submitted by", cls="form-control", required=True),
-                cls="drawer-two-up mb-3",
-            ),
-            Textarea(name="notes", placeholder="Short note", cls="form-control mb-3", rows="3"),
-            Button("Save offering", variant="success", type="submit", cls="w-100"),
-            hx_post=f"/fellowship/{fellowship_id}/offerings/create",
-            hx_target="#form-drawer-body",
-            hx_swap="innerHTML",
-        )
+        return source_intake_notice("Fellowship offering submissions")
 
     @app.post("/fellowship/{fellowship_id}/offerings/create")
     async def create_fellowship_offering(request: Request, fellowship_id: str):
-        form = await request.form()
-        data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
-        row = await FellowshipService.create_offering(request, fellowship_id, data) if await FellowshipService.live_enabled(request) else STORE.add_fellowship_offering(data)
-        return simple_toast_response(
-            content=(
-                Div(H3("Offering saved", cls="h5 fw-semibold"), P(f"{format_naira(row['amount'])} has been recorded.", cls="mb-0")),
-                _workspace_panel(request, ctx, fellowship_id, "offerings", oob=True),
-            ),
-            message="Fellowship offering saved.",
-            variant="success",
-        )
+        return reject_source_submission()
 
     @app.get("/fellowship/{fellowship_id}/testimonies/new")
     async def new_fellowship_testimony_form(request: Request, fellowship_id: str, tab: str = "testimonies"):
-        ctx = build_context(request)
-        fellowship = await FellowshipService.get_fellowship(request, fellowship_id) if await FellowshipService.live_enabled(request) else STORE.get_fellowship(fellowship_id)
-        if fellowship is None:
-            return P("Fellowship not found.", cls="text-muted")
-        return Form(
-            *hidden_context_inputs(ctx),
-            Input(type="hidden", name="fellowship_id", value=fellowship_id),
-            H3("Add testimony", cls="h5 fw-semibold"),
-            P(f"Record a testimony shared in {fellowship['name']}.", cls="text-muted"),
-            Input(type="text", name="member_name", placeholder="Member name", cls="form-control mb-3", required=True),
-            Input(type="date", name="date", value=TODAY.isoformat(), cls="form-control mb-3"),
-            Textarea(name="summary", placeholder="Short testimony summary", cls="form-control mb-3", rows="4", required=True),
-            Button("Save testimony", variant="success", type="submit", cls="w-100"),
-            hx_post=f"/fellowship/{fellowship_id}/testimonies/create",
-            hx_target="#form-drawer-body",
-            hx_swap="innerHTML",
-        )
+        return source_intake_notice("Fellowship testimony submissions")
 
     @app.post("/fellowship/{fellowship_id}/testimonies/create")
     async def create_fellowship_testimony(request: Request, fellowship_id: str):
-        form = await request.form()
-        data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
-        row = await FellowshipService.create_testimony(request, fellowship_id, data) if await FellowshipService.live_enabled(request) else STORE.add_fellowship_testimony(data)
-        return simple_toast_response(
-            content=(
-                Div(H3("Testimony saved", cls="h5 fw-semibold"), P(f"Testimony from {row['member_name']} has been added.", cls="mb-0")),
-                _workspace_panel(request, ctx, fellowship_id, "testimonies", oob=True),
-            ),
-            message="Fellowship testimony saved.",
-            variant="success",
-        )
+        return reject_source_submission()
 
     @app.get("/fellowship/{fellowship_id}/prayers/new")
     async def new_fellowship_prayer_form(request: Request, fellowship_id: str, tab: str = "prayers"):
-        ctx = build_context(request)
-        fellowship = await FellowshipService.get_fellowship(request, fellowship_id) if await FellowshipService.live_enabled(request) else STORE.get_fellowship(fellowship_id)
-        if fellowship is None:
-            return P("Fellowship not found.", cls="text-muted")
-        return Form(
-            *hidden_context_inputs(ctx),
-            Input(type="hidden", name="fellowship_id", value=fellowship_id),
-            H3("Add prayer request", cls="h5 fw-semibold"),
-            P(f"Record a prayer burden from {fellowship['name']}.", cls="text-muted"),
-            Input(type="text", name="requester_name", placeholder="Requester name", cls="form-control mb-3", required=True),
-            Input(type="date", name="date", value=TODAY.isoformat(), cls="form-control mb-3"),
-            Textarea(name="summary", placeholder="Prayer request summary", cls="form-control mb-3", rows="4", required=True),
-            Button("Save prayer request", variant="success", type="submit", cls="w-100"),
-            hx_post=f"/fellowship/{fellowship_id}/prayers/create",
-            hx_target="#form-drawer-body",
-            hx_swap="innerHTML",
-        )
+        return source_intake_notice("Fellowship prayer requests")
 
     @app.post("/fellowship/{fellowship_id}/prayers/create")
     async def create_fellowship_prayer(request: Request, fellowship_id: str):
-        form = await request.form()
-        data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
-        row = await FellowshipService.create_prayer(request, fellowship_id, data) if await FellowshipService.live_enabled(request) else STORE.add_fellowship_prayer(data)
-        return simple_toast_response(
-            content=(
-                Div(H3("Prayer request saved", cls="h5 fw-semibold"), P(f"Prayer request from {row['requester_name']} has been added.", cls="mb-0")),
-                _workspace_panel(request, ctx, fellowship_id, "prayers", oob=True),
-            ),
-            message="Fellowship prayer request saved.",
-            variant="success",
-        )
+        return reject_source_submission()

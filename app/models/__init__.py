@@ -13,7 +13,7 @@ from app.models.user import (  # noqa
 from app.models.location import Nation, State, Region, Group, Location, Fellowship
 from app.models.programs import ProgramDomain, ProgramType, ProgramCampaign, ProgramEvent, EventAssignment
 from app.models.counts import Count
-from app.models.offerings import Offering
+from app.models.offerings import Offering, OfferingAudit
 from app.models.records import Record
 from app.models.attendance import WorkerAttendance
 from app.models.fellowship_activities import FellowshipMember, FellowshipAttendance, FellowshipOffering

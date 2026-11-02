@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 from typing import Any
 
@@ -9,8 +10,11 @@ from ..mock_data import STORE
 from .api_client import get_api_client
 from .async_compat import async_client, dual_mode_class, maybe_await
 from .auth_service import AuthService
+from .count_aggregation import summarize_count_submissions
 from .people_service import PeopleService
+from .pagination import fetch_all_pages
 from .request_cache import request_cached
+from .ttl_cache import invalidate_ttl_prefix
 
 
 PAYMENT_METHOD_LABELS = {
@@ -33,6 +37,11 @@ def _event_sort_key(row: dict[str, Any]) -> tuple[str, str]:
     return (str(row.get("date") or ""), str(row.get("title") or ""))
 
 
+def _invalidate_finance_views() -> None:
+    invalidate_ttl_prefix(("reports",))
+    invalidate_ttl_prefix(("dashboard", "bootstrap"))
+
+
 def _normalize_event(row: dict[str, Any]) -> dict[str, Any]:
     program_type = row.get("program_type") or {}
     return {
@@ -51,6 +60,7 @@ def _normalize_count(row: dict[str, Any], *, event_map: dict[str, dict[str, Any]
     location = location_map.get(str(row.get("location_id") or ""))
     return {
         "count_id": str(row.get("id") or ""),
+        "submitted_at": str(row.get("created_at") or ""),
         "event_id": str(row.get("event_id") or ""),
         "event_title": event["title"] if event else str(row.get("event_id") or "Unknown event"),
         "date": str((event or {}).get("date") or str(row.get("created_at") or "")[:10]),
@@ -65,11 +75,20 @@ def _normalize_count(row: dict[str, Any], *, event_map: dict[str, dict[str, Any]
         "total": int(row.get("total") or 0),
         "submitted_by": str(row.get("entered_by_id") or "Recorded in backend"),
         "note": str(row.get("note") or ""),
+        "usher_section": str(row.get("usher_section") or _section_from_note(row.get("note"))),
         "assignment_id": str(row.get("assignment_id") or ""),
+        "client_id": str(row.get("client_id") or ""),
         "source_role": str(row.get("source_role") or "regular"),
         "campaign_code": str(row.get("campaign_code") or ""),
         "submission_channel": str(row.get("submission_channel") or ""),
     }
+
+
+def _section_from_note(value: Any) -> str:
+    note = str(value or "")
+    if not note.startswith("Section: "):
+        return ""
+    return note.removeprefix("Section: ").split(" | ", 1)[0]
 
 
 def _normalize_offering(row: dict[str, Any], *, event_map: dict[str, dict[str, Any]], location_map: dict[str, dict[str, Any]]) -> dict[str, Any]:
@@ -89,6 +108,13 @@ def _normalize_offering(row: dict[str, Any], *, event_map: dict[str, dict[str, A
         "submitted_by": str(row.get("entered_by_id") or "Recorded in backend"),
         "notes": str(row.get("note") or ""),
         "status": str(row.get("status") or ""),
+        "entry_date": str(row.get("date") or "")[:10],
+        "created_at": str(row.get("created_at") or ""),
+        "updated_at": str(row.get("updated_at") or ""),
+        "entered_by_id": str(row.get("entered_by_id") or ""),
+        "reviewed_by_id": str(row.get("reviewed_by_id") or ""),
+        "reviewed_at": str(row.get("reviewed_at") or ""),
+        "review_note": str(row.get("review_note") or ""),
     }
 
 
@@ -156,7 +182,7 @@ class ChurchDataService:
         return await PeopleService.effective_scope_path(request, ctx)
 
     @staticmethod
-    async def list_counts(request, ctx) -> list[dict[str, Any]]:
+    async def list_events(request, ctx) -> list[dict[str, Any]]:
         if await ChurchDataService.use_mock(request):
             return [
                 {"event_id": row["event_id"], "title": row["title"], "date": row.get("date", ""), "path": row.get("path", "")}
@@ -168,112 +194,85 @@ class ChurchDataService:
             client = async_client(get_api_client())
             access_token = AuthService.get_access_token(request)
             try:
-                return [_normalize_event(row) for row in await client.list_program_events(access_token, scope_path=scope_path)]
+                source = await fetch_all_pages(lambda skip, limit: client.list_program_events(access_token, scope_path=scope_path, skip=skip, limit=limit), page_size=200)
+                return [_normalize_event(row) for row in source]
             except BackendClientError:
-                return []
+                raise
 
         rows = await request_cached(request, ("church-data", "events", scope_path), load_rows)
         return sorted(rows, key=_event_sort_key, reverse=True)
 
     @staticmethod
-    async def list_offerings(request, ctx, *, location: str = "", event_id: str = "") -> list[dict[str, Any]]:
-        if await ChurchDataService.use_mock(request):
-            return STORE.list_counts(ctx.current_scope_path, location=location, event_title=event_id)
-        scope_path = await ChurchDataService._scope_path(request, ctx)
-        events = await ChurchDataService.list_events(request, ctx)
-        event_map = {row["event_id"]: row for row in events}
-        locations = await PeopleService.list_locations(request, ctx)
-        location_map = {row["location_id"]: row for row in locations}
-
-        async def load_rows() -> list[dict[str, Any]]:
-            client = async_client(get_api_client())
-            access_token = AuthService.get_access_token(request)
-            return [
-                _normalize_count(row, event_map=event_map, location_map=location_map)
-                for row in await client.list_counts(access_token, scope_path=scope_path)
-            ]
-
-        rows = await request_cached(request, ("church-data", "counts", scope_path), load_rows)
-        if location:
-            rows = [row for row in rows if row["location_id"] == location]
-        if event_id:
-            rows = [row for row in rows if row["event_id"] == event_id]
-        return sorted(rows, key=lambda row: (row["date"], row["event_title"]), reverse=True)
+    async def list_counts(request, ctx, *, location: str = "", event_id: str = "") -> list[dict[str, Any]]:
+        return await ChurchDataService.list_count_submissions(request, ctx, location=location, event_id=event_id)
 
     @staticmethod
-    async def list_attendance(request, ctx) -> dict[str, Any]:
-        if await ChurchDataService.use_mock(request):
-            return STORE.counts_summary(ctx.current_scope_path)
-        rows = await ChurchDataService.list_counts(request, ctx)
-        totals = [row["total"] for row in rows]
-        latest_total = totals[0] if totals else 0
-        monthly_total = sum(totals)
-        locations_reporting = len({row["location_id"] for row in rows})
-        average_total = round(monthly_total / len(rows)) if rows else 0
-        return {
-            "latest_total": latest_total,
-            "monthly_total": monthly_total,
-            "locations_reporting": locations_reporting,
-            "average_total": average_total,
-        }
+    async def count_summary(request, ctx) -> dict[str, Any]:
+        return await _count_summary_public(request, ctx)
 
     @staticmethod
-    async def list_records(request, payload: dict[str, Any]) -> dict[str, Any] | None:
+    async def list_finance(request, ctx, *, fund_type: str = "", location: str = "", method: str = "") -> list[dict[str, Any]]:
+        return await _list_finance_public(request, ctx, fund_type=fund_type, location=location, method=method)
+
+    @staticmethod
+    async def finance_summary(request, ctx) -> dict[str, Any]:
+        return await _finance_summary_public(request, ctx)
+
+    @staticmethod
+    async def review_finance(request, entry_id: str, *, decision: str, note: str = "") -> dict[str, Any]:
         if await ChurchDataService.use_mock(request):
-            return None
+            raise BackendClientError("Finance review is unavailable in demo mode.")
         client = async_client(get_api_client())
         access_token = AuthService.get_access_token(request)
-        created = await client.create_count(access_token, payload)
-        ctx = type("Ctx", (), {"current_scope_path": "", "profile": None})()
-        events = await ChurchDataService.list_events(request, ctx)
-        event_map = {row["event_id"]: row for row in events}
-        locations = await PeopleService.list_locations(request, ctx)
-        location_map = {row["location_id"]: row for row in locations}
-        return _normalize_count(created, event_map=event_map, location_map=location_map)
+        reviewed = await client.review_offering(access_token, entry_id, decision=decision, note=note)
+        _invalidate_finance_views()
+        return _normalize_offering(reviewed, event_map={}, location_map={})
 
     @staticmethod
-    async def list_announcements(request, ctx, *, fund_type: str = "", location: str = "", method: str = "") -> list[dict[str, Any]]:
+    async def correct_finance(request, entry_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         if await ChurchDataService.use_mock(request):
-            return STORE.list_finance(ctx.current_scope_path, fund_type=fund_type, location=location, method=method)
+            raise BackendClientError("Finance correction is unavailable in demo mode.")
         client = async_client(get_api_client())
         access_token = AuthService.get_access_token(request)
-        scope_path = await ChurchDataService._scope_path(request, ctx)
-        events = await ChurchDataService.list_events(request, ctx)
-        event_map = {row["event_id"]: row for row in events}
-        locations = await PeopleService.list_locations(request, ctx)
-        location_map = {row["location_id"]: row for row in locations}
-        async def load_finance() -> list[dict[str, Any]]:
-            source = await client.list_offerings(access_token, scope_path=scope_path)
-            return [
-                _normalize_offering(row, event_map=event_map, location_map=location_map)
-                for row in source
-            ]
-
-        rows = await request_cached(request, ("church-data", "finance", scope_path), load_finance)
-        if fund_type:
-            rows = [row for row in rows if row["fund_type"] == fund_type]
-        if location:
-            rows = [row for row in rows if row["location_id"] == location]
-        if method:
-            rows = [row for row in rows if row["method"] == method]
-        return sorted(rows, key=lambda row: (row["date"], row["event_title"]), reverse=True)
+        corrected = await client.correct_offering(access_token, entry_id, payload)
+        _invalidate_finance_views()
+        return _normalize_offering(corrected, event_map={}, location_map={})
 
     @staticmethod
-    async def list_newcomers(request, ctx) -> dict[str, Any]:
+    async def reverse_finance(request, entry_id: str, reason: str) -> dict[str, Any]:
         if await ChurchDataService.use_mock(request):
-            return STORE.finance_summary(ctx.current_scope_path)
-        rows = await ChurchDataService.list_finance(request, ctx)
-        total = sum(float(row["amount"]) for row in rows)
-        average = round(total / len(rows), 2) if rows else 0
-        return {
-            "month_total": total,
-            "year_total": total,
-            "average_entry": average,
-            "entries": len(rows),
-        }
+            raise BackendClientError("Finance reversal is unavailable in demo mode.")
+        client = async_client(get_api_client())
+        access_token = AuthService.get_access_token(request)
+        reversed_entry = await client.reverse_offering(access_token, entry_id, reason)
+        _invalidate_finance_views()
+        return _normalize_offering(reversed_entry, event_map={}, location_map={})
 
     @staticmethod
-    async def update_announcement(request, payload: dict[str, Any]) -> dict[str, Any] | None:
+    async def finance_audit_history(request, entry_id: str) -> list[dict[str, Any]]:
+        if await ChurchDataService.use_mock(request):
+            return []
+        client = async_client(get_api_client())
+        access_token = AuthService.get_access_token(request)
+        return await client.offering_audit_history(access_token, entry_id)
+
+    @staticmethod
+    async def get_finance_entry(request, ctx, entry_id: str) -> dict[str, Any] | None:
+        if await ChurchDataService.use_mock(request):
+            return STORE.get_finance_entry(entry_id)
+        client = async_client(get_api_client())
+        access_token = AuthService.get_access_token(request)
+        try:
+            source = await client.get_offering(access_token, entry_id)
+        except BackendClientError as exc:
+            if exc.status_code == 404:
+                return None
+            raise
+        event_map, location_map = await _event_and_location_maps(request, ctx)
+        return _normalize_offering(source, event_map=event_map, location_map=location_map)
+
+    @staticmethod
+    async def create_finance(request, payload: dict[str, Any]) -> dict[str, Any] | None:
         if await ChurchDataService.use_mock(request):
             return None
         client = async_client(get_api_client())
@@ -287,7 +286,7 @@ class ChurchDataService:
         return _normalize_offering(created, event_map=event_map, location_map=location_map)
 
     @staticmethod
-    async def create_count(
+    async def list_records(
         request,
         ctx,
         *,
@@ -342,7 +341,7 @@ class ChurchDataService:
         return sorted(rows, key=lambda row: (row["date"], row["name"]), reverse=True)
 
     @staticmethod
-    async def create_offering(request, ctx, record_id: str) -> dict[str, Any] | None:
+    async def get_record(request, ctx, record_id: str) -> dict[str, Any] | None:
         if await ChurchDataService.use_mock(request):
             return STORE.get_record(record_id)
         client = async_client(get_api_client())
@@ -355,7 +354,7 @@ class ChurchDataService:
         return _normalize_record(row, event_map=event_map, location_map=location_map)
 
     @staticmethod
-    async def create_attendance(request, payload: dict[str, Any]) -> dict[str, Any] | None:
+    async def create_record(request, payload: dict[str, Any]) -> dict[str, Any] | None:
         if await ChurchDataService.use_mock(request):
             return None
         client = async_client(get_api_client())
@@ -369,7 +368,7 @@ class ChurchDataService:
         return _normalize_record(created, event_map=event_map, location_map=location_map)
 
     @staticmethod
-    async def create_announcement(
+    async def list_attendance(
         request,
         ctx,
         *,
@@ -412,7 +411,7 @@ class ChurchDataService:
         return sorted(rows, key=lambda row: (row["date"], row["worker_name"]), reverse=True)
 
     @staticmethod
-    async def create_record(request, ctx, attendance_id: str) -> dict[str, Any] | None:
+    async def get_attendance(request, ctx, attendance_id: str) -> dict[str, Any] | None:
         if not await ChurchDataService.live_enabled(request):
             return STORE.get_attendance_entry(attendance_id)
         client = async_client(get_api_client())
@@ -425,7 +424,7 @@ class ChurchDataService:
         return _normalize_attendance(row, event_map=event_map, location_map=location_map)
 
     @staticmethod
-    async def update_announcement(request, ctx) -> dict[str, Any]:
+    async def attendance_summary(request, ctx) -> dict[str, Any]:
         if not await ChurchDataService.live_enabled(request):
             return STORE.attendance_summary(ctx.current_scope_path)
         expected = len(await PeopleService.list_workers(request, ctx))
@@ -445,18 +444,12 @@ class ChurchDataService:
         }
 
     @staticmethod
-    async def publish_announcement(request, payload: dict[str, Any]) -> dict[str, Any] | None:
-        if not await ChurchDataService.live_enabled(request):
-            return None
-        client = async_client(get_api_client())
-        access_token = AuthService.get_access_token(request)
-        created = await client.create_attendance(access_token, payload)
-        ctx = type("Ctx", (), {"current_scope_path": "", "profile": None})()
-        events = await ChurchDataService.list_events(request, ctx)
-        event_map = {row["event_id"]: row for row in events}
-        locations = await PeopleService.list_locations(request, ctx)
-        location_map = {row["location_id"]: row for row in locations}
-        return _normalize_attendance(created, event_map=event_map, location_map=location_map)
+    async def _get_attendance_entry_legacy(request, ctx, attendance_id: str) -> dict[str, Any] | None:
+        return await ChurchDataService._get_attendance_detail(request, ctx, attendance_id)
+
+    @staticmethod
+    async def _create_attendance_legacy(request, payload: dict[str, Any]) -> dict[str, Any] | None:
+        return await _create_attendance_public(request, payload)
 
 async def _church_data_scope_path(request, ctx) -> str:
     return await maybe_await(PeopleService.effective_scope_path(request, ctx))
@@ -486,7 +479,7 @@ async def _event_and_location_maps(request, ctx) -> tuple[dict[str, dict[str, An
     return await request_cached(request, ("church_data", "event_location_maps"), load)
 
 
-async def _list_counts_public(request, ctx, *, location: str = "", event_id: str = "") -> list[dict[str, Any]]:
+async def _list_count_submissions_public(request, ctx, *, location: str = "", event_id: str = "") -> list[dict[str, Any]]:
     if await ChurchDataService.use_mock(request):
         return STORE.list_counts(ctx.current_scope_path, location=location, event_title=event_id)
     scope_path = await _church_data_scope_path(request, ctx)
@@ -497,7 +490,7 @@ async def _list_counts_public(request, ctx, *, location: str = "", event_id: str
         event_map, location_map = await _event_and_location_maps(request, ctx)
         return [
             _normalize_count(row, event_map=event_map, location_map=location_map)
-            for row in await client.list_counts(access_token, scope_path=scope_path)
+            for row in await fetch_all_pages(lambda skip, limit: client.list_counts(access_token, scope_path=scope_path, skip=skip, limit=limit), page_size=200)
         ]
 
     rows = await request_cached(request, ("church_data", "raw_counts", scope_path), load_counts)
@@ -510,15 +503,10 @@ async def _list_counts_public(request, ctx, *, location: str = "", event_id: str
 
 async def _count_summary_public(request, ctx) -> dict[str, Any]:
     if await ChurchDataService.use_mock(request):
-        return STORE.counts_summary(ctx.current_scope_path)
-    rows = await _list_counts_public(request, ctx)
-    totals = [row["total"] for row in rows]
-    return {
-        "latest_total": totals[0] if totals else 0,
-        "monthly_total": sum(totals),
-        "locations_reporting": len({row["location_id"] for row in rows}),
-        "average_total": round(sum(totals) / len(rows)) if rows else 0,
-    }
+        rows = STORE.list_counts(ctx.current_scope_path)
+        return summarize_count_submissions(rows)
+    rows = await _list_count_submissions_public(request, ctx)
+    return summarize_count_submissions(rows)
 
 
 async def _list_finance_public(request, ctx, *, fund_type: str = "", location: str = "", method: str = "") -> list[dict[str, Any]]:
@@ -530,10 +518,16 @@ async def _list_finance_public(request, ctx, *, fund_type: str = "", location: s
         client = async_client(get_api_client())
         access_token = AuthService.get_access_token(request)
         event_map, location_map = await _event_and_location_maps(request, ctx)
-        return [
-            _normalize_offering(row, event_map=event_map, location_map=location_map)
-            for row in await client.list_offerings(access_token, scope_path=scope_path)
-        ]
+        source_rows = []
+        page_size = 500
+        skip = 0
+        while True:
+            page = await client.list_offerings(access_token, scope_path=scope_path, skip=skip, limit=page_size)
+            source_rows.extend(page)
+            if len(page) < page_size:
+                break
+            skip += len(page)
+        return [_normalize_offering(row, event_map=event_map, location_map=location_map) for row in source_rows]
 
     rows = await request_cached(request, ("church_data", "raw_offerings", scope_path), load_offerings)
     if fund_type:
@@ -549,8 +543,30 @@ async def _finance_summary_public(request, ctx) -> dict[str, Any]:
     if await ChurchDataService.use_mock(request):
         return STORE.finance_summary(ctx.current_scope_path)
     rows = await _list_finance_public(request, ctx)
-    total = sum(float(row["amount"]) for row in rows)
-    return {"month_total": total, "year_total": total, "average_entry": round(total / len(rows), 2) if rows else 0, "entries": len(rows)}
+    today = date.today()
+    month_prefix = today.strftime("%Y-%m")
+    year_prefix = str(today.year)
+    approved = [row for row in rows if row.get("status") == "approved"]
+    pending = [row for row in rows if row.get("status") in {"pending", "corrected"}]
+    month_approved = [row for row in approved if row.get("entry_date", row.get("date", "")).startswith(month_prefix)]
+    year_approved = [row for row in approved if row.get("entry_date", row.get("date", "")).startswith(year_prefix)]
+    month_pending = [row for row in pending if row.get("entry_date", row.get("date", "")).startswith(month_prefix)]
+    year_pending = [row for row in pending if row.get("entry_date", row.get("date", "")).startswith(year_prefix)]
+    return {
+        "month_total": sum(float(row["amount"]) for row in month_approved),
+        "year_total": sum(float(row["amount"]) for row in year_approved),
+        "month_pending_total": sum(float(row["amount"]) for row in month_pending),
+        "year_pending_total": sum(float(row["amount"]) for row in year_pending),
+        "pending_total": sum(float(row["amount"]) for row in pending),
+        "average_entry": round(sum(float(row["amount"]) for row in approved) / len(approved), 2) if approved else 0,
+        "entries": len(approved),
+        "approved_count": len(approved),
+        "pending_count": sum(row.get("status") == "pending" for row in rows),
+        "corrected_count": sum(row.get("status") == "corrected" for row in rows),
+        "rejected_count": sum(row.get("status") == "rejected" for row in rows),
+        "other_count": sum(row.get("status") not in {"approved", "pending", "rejected"} for row in rows),
+        "month_approved_count": len(month_approved),
+    }
 
 
 
@@ -583,7 +599,7 @@ async def _list_records_public(
     event_map, location_map = await _event_and_location_maps(request, ctx)
     rows = [
         _normalize_record(row, event_map=event_map, location_map=location_map)
-        for row in await client.list_records(access_token, scope_path=scope_path)
+        for row in await fetch_all_pages(lambda skip, limit: client.list_records(access_token, scope_path=scope_path, skip=skip, limit=limit), page_size=200)
     ]
     if record_type:
         rows = [row for row in rows if row["record_type"] == record_type]
@@ -610,6 +626,17 @@ async def _create_record_public(request, payload: dict[str, Any]) -> dict[str, A
     return _normalize_record(created, event_map=event_map, location_map=location_map)
 
 
+async def _create_count_public(request, payload: dict[str, Any]) -> dict[str, Any] | None:
+    if await ChurchDataService.use_mock(request):
+        return None
+    client = async_client(get_api_client())
+    access_token = AuthService.get_access_token(request)
+    created = await client.create_count(access_token, payload)
+    ctx = type("Ctx", (), {"current_scope_path": "", "profile": None})()
+    event_map, location_map = await _event_and_location_maps(request, ctx)
+    return _normalize_count(created, event_map=event_map, location_map=location_map)
+
+
 async def _list_attendance_public(request, ctx, *, status: str = "", location: str = "", unit: str = "", event_id: str = "") -> list[dict[str, Any]]:
     if await ChurchDataService.use_mock(request):
         return STORE.list_attendance(ctx.current_scope_path, status=status, location=location, unit=unit, event_title=event_id)
@@ -619,7 +646,7 @@ async def _list_attendance_public(request, ctx, *, status: str = "", location: s
     event_map, location_map = await _event_and_location_maps(request, ctx)
     rows = [
         _normalize_attendance(row, event_map=event_map, location_map=location_map)
-        for row in await client.list_attendance(access_token, scope_path=scope_path)
+        for row in await fetch_all_pages(lambda skip, limit: client.list_attendance(access_token, scope_path=scope_path, skip=skip, limit=limit), page_size=200)
     ]
     if status:
         rows = [row for row in rows if row["status"] == status]
@@ -655,18 +682,32 @@ async def _create_attendance_public(request, payload: dict[str, Any]) -> dict[st
     return _normalize_attendance(created, event_map=event_map, location_map=location_map)
 
 
+async def _get_attendance_detail(request, ctx, attendance_id: str) -> dict[str, Any] | None:
+    if not await ChurchDataService.live_enabled(request):
+        return STORE.get_attendance_entry(attendance_id)
+    client = async_client(get_api_client())
+    access_token = AuthService.get_access_token(request)
+    row = await client.get_attendance(access_token, attendance_id)
+    event_map, location_map = await _event_and_location_maps(request, ctx)
+    return _normalize_attendance(row, event_map=event_map, location_map=location_map)
+
+
 ChurchDataService._scope_path = staticmethod(_church_data_scope_path)
 ChurchDataService.list_events = staticmethod(_list_events_public)
-ChurchDataService.list_counts = staticmethod(_list_counts_public)
+ChurchDataService.list_count_submissions = staticmethod(_list_count_submissions_public)
+ChurchDataService.list_counts = staticmethod(_list_count_submissions_public)
 ChurchDataService.count_summary = staticmethod(_count_summary_public)
 ChurchDataService.list_finance = staticmethod(_list_finance_public)
 ChurchDataService.finance_summary = staticmethod(_finance_summary_public)
 ChurchDataService.create_finance = staticmethod(_create_finance_public)
 ChurchDataService.list_records = staticmethod(_list_records_public)
 ChurchDataService.create_record = staticmethod(_create_record_public)
+ChurchDataService.get_record = staticmethod(ChurchDataService.get_record)
+ChurchDataService.create_count = staticmethod(_create_count_public)
 ChurchDataService.list_attendance = staticmethod(_list_attendance_public)
 ChurchDataService.attendance_summary = staticmethod(_attendance_summary_public)
 ChurchDataService.create_attendance = staticmethod(_create_attendance_public)
+ChurchDataService.get_attendance_entry = staticmethod(_get_attendance_detail)
 
 
 dual_mode_class(ChurchDataService)

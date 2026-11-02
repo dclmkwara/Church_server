@@ -744,7 +744,7 @@ class DashboardService:
                 "total_locations": len(STORE.visible_locations(ctx.current_scope_path)),
                 "total_groups": 0,
                 "total_regions": 0,
-                "total": STORE.counts_summary(ctx.current_scope_path)["latest_total"],
+                "total": (await ChurchDataService.count_summary(request, ctx))["latest_total"],
             }
         try:
             client = async_client(get_api_client())

@@ -44,7 +44,7 @@ async def poll_notifications(
     Poll for new data (counts, offerings, attendance, etc.) created since the provided timestamp.
     Used for client-side notifications.
     """
-    scope_path = str(current_user.path)
+    scope_path = deps.effective_scope_path(current_user)
     return await NotificationService.poll_new_data(db, scope_path, since, per_bucket_limit=limit)
 
 
@@ -67,7 +67,7 @@ async def list_notification_history(
     effective_since = since or (datetime.now(timezone.utc) - timedelta(days=days))
     return await NotificationService.history(
         db,
-        scope_path=str(current_user.path),
+        scope_path=deps.effective_scope_path(current_user),
         user_id=current_user.user_id,
         since=effective_since,
         kind=kind,

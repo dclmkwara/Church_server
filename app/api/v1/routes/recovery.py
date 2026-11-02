@@ -1,5 +1,4 @@
-import logging
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Any
 
@@ -9,22 +8,29 @@ from app.schemas.recovery import (
     PasswordResetRequest, PasswordResetConfirm, PasswordResetResponse, PasswordResetVerify,
     RecoveryQuestionSetup, RecoveryQuestionUpdate, RecoveryQuestionResponse
 )
+from app.core.rate_limiter import check_rate_limit
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
 
 @router.post("/request-reset", response_model=PasswordResetResponse)
 async def request_password_reset(
-    request: PasswordResetRequest,
+    request: Request,
+    payload: PasswordResetRequest,
     db: AsyncSession = Depends(deps.get_db)
 ) -> Any:
     """
     Request a password reset token.
     """
-    token = await recovery.create_token(db, email=request.email)
+    client_ip = request.client.host if request.client else "unknown"
+    await check_rate_limit(
+        f"password-reset-request:{client_ip}",
+        max_requests=5,
+        window_seconds=900,
+    )
+    token = await recovery.create_token(db, email=payload.email)
     
     if token:
-        logger.info("Password reset token created for email=%s", request.email)
+        logger.info("Password reset token created")
     
     # Always return success to prevent user enumeration
     return {"message": "If an account exists with this email, a reset link has been sent."}
@@ -45,12 +51,19 @@ async def verify_reset_token(
 
 @router.post("/reset-password", response_model=PasswordResetResponse)
 async def reset_password(
+    request: Request,
     confirm: PasswordResetConfirm,
     db: AsyncSession = Depends(deps.get_db)
 ) -> Any:
     """
     Reset password using a valid token.
     """
+    client_ip = request.client.host if request.client else "unknown"
+    await check_rate_limit(
+        f"password-reset-confirm:{client_ip}",
+        max_requests=10,
+        window_seconds=900,
+    )
     success = await recovery.reset_password(db, token=confirm.token, new_password=confirm.new_password)
     if not success:
         raise HTTPException(status_code=400, detail="Invalid or expired token")

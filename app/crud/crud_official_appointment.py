@@ -4,13 +4,14 @@ from typing import Any, Optional
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import or_, select, text
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.crud.base import CRUDBase
 from app.models.official_appointment import OfficialAppointment
 from app.models.user import User, Worker
 from app.schemas.official_appointment import OfficialAppointmentCreate, OfficialAppointmentUpdate
+from app.db.filters import scope_filter
 
 VALID_STATUSES = {"active", "revoked"}
 
@@ -34,7 +35,7 @@ class CRUDOfficialAppointment(CRUDBase[OfficialAppointment, OfficialAppointmentC
     ) -> list[OfficialAppointment]:
         self._validate_status(status)
         query = select(OfficialAppointment).where(
-            text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path),
+            scope_filter(OfficialAppointment.path, scope_path),
             OfficialAppointment.is_deleted == False,
         )
         if status:

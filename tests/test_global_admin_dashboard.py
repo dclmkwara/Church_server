@@ -43,6 +43,7 @@ def test_visible_modules_all_levels():
             current_scope_kind="global",
             current_scope_label="Global",
             current_scope_path="org",
+            permissions=frozenset({"reports:read"}) if lvl >= 3 else frozenset(),
         )
         modules = ctx.visible_modules
         assert isinstance(modules, list)
@@ -51,6 +52,15 @@ def test_visible_modules_all_levels():
         if lvl >= 6:
             assert "reports" in modules
             assert "communication" in modules
+
+
+def test_reports_module_requires_explicit_permission_at_any_level():
+    base = dict(
+        profile=ProfileConfig(key="admin", level=6, user_name="Admin", role_label="Admin", mode_label="Oversight", root_kind="state", root_label="State", root_path="org.st", selector_fields=()),
+        selected={}, options={}, current_scope_kind="state", current_scope_label="State", current_scope_path="org.st",
+    )
+    assert "reports" not in AdminContext(**base).visible_modules
+    assert "reports" in AdminContext(**base, permissions=frozenset({"reports:read"})).visible_modules
 
 
 def test_global_admin_dashboard_profile_and_keys():

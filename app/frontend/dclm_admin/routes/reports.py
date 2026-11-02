@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
-from datetime import date
+from datetime import date, timedelta
+from statistics import pstdev
 from typing import Any
 
-from fasthtml.common import A, Div, H3, H4, P
+from fasthtml.common import A, Div, Form, H3, H4, Input, Label, P
 from starlette.requests import Request
 from starlette.responses import Response
 
@@ -14,7 +15,7 @@ from faststrap import Button, PlaceholderCard, Spinner
 from ..backend import BackendClientError
 from ..auth_context import build_context
 from ..communication import ReportService
-from ..communication.async_compat import maybe_await
+from ..communication.count_aggregation import aggregate_count_submissions
 from ..components.chartjs import sparkline_chart as _sparkline
 from ..components.feedback import simple_toast_response
 from ..components.shell import shell_layout
@@ -34,6 +35,18 @@ REPORT_TABS = [
 ]
 
 
+def _report_window(request: Request) -> tuple[str, str]:
+    today = date.today()
+    try:
+        start = date.fromisoformat(request.query_params.get("start_date", "")) if request.query_params.get("start_date") else today - timedelta(days=90)
+        end = date.fromisoformat(request.query_params.get("end_date", "")) if request.query_params.get("end_date") else today
+    except ValueError:
+        start, end = today - timedelta(days=90), today
+    if start > end:
+        start, end = today - timedelta(days=90), today
+    return start.isoformat(), end.isoformat()
+
+
 def _trend_label(points: list[tuple[str, int]]) -> str:
     if len(points) < 2:
         return "Stable"
@@ -47,47 +60,60 @@ def _trend_label(points: list[tuple[str, int]]) -> str:
 
 
 async def _summary_rows(request: Request, ctx) -> list[dict[str, Any]]:
+    start, end = _report_window(request)
     if await ReportService.live_enabled(request):
         return await ReportService.summary_rows(request, ctx)
-    return STORE.list_counts(ctx.current_scope_path)[:8]
+    rows = aggregate_count_submissions(STORE.list_counts(ctx.current_scope_path))
+    rows = [row for row in rows if start <= str(row.get("date") or "") <= end]
+    for row in rows:
+        row["submitted_by"] = f"{row['submissions']} usher section(s)"
+    return rows
 
 
 async def _financial_rows(request: Request, ctx) -> list[dict[str, Any]]:
     if await ReportService.live_enabled(request):
         return await ReportService.financial_rows(request, ctx)
-    return STORE.list_finance(ctx.current_scope_path)[:8]
+    start, end = _report_window(request)
+    return [row for row in STORE.list_finance(ctx.current_scope_path) if start <= str(row.get("date") or "")[:10] <= end][:8]
 
 
 async def _attendance_rows(request: Request, ctx) -> list[dict[str, Any]]:
     if await ReportService.live_enabled(request):
         return await ReportService.attendance_rows(request, ctx)
-    return STORE.list_attendance(ctx.current_scope_path)[:8]
+    start, end = _report_window(request)
+    return [row for row in STORE.list_attendance(ctx.current_scope_path) if start <= str(row.get("date") or "")[:10] <= end][:8]
 
 
 async def _counts_series(request: Request, ctx) -> list[tuple[str, int]]:
+    start, end = _report_window(request)
     if await ReportService.live_enabled(request):
         return await ReportService.counts_series(request, ctx)
     bucket: dict[str, int] = defaultdict(int)
     for row in STORE.list_counts(ctx.current_scope_path):
-        bucket[row["date"]] += row["total"]
+        if start <= row["date"][:10] <= end:
+            bucket[row["date"][:10]] += row["total"]
     return sorted(bucket.items())
 
 
 async def _finance_series(request: Request, ctx) -> list[tuple[str, int]]:
+    start, end = _report_window(request)
     if await ReportService.live_enabled(request):
         return await ReportService.finance_series(request, ctx)
     bucket: dict[str, int] = defaultdict(int)
     for row in STORE.list_finance(ctx.current_scope_path):
-        bucket[row["date"]] += row["amount"]
+        if start <= row["date"][:10] <= end:
+            bucket[row["date"][:10]] += int(row["amount"])
     return sorted(bucket.items())
 
 
 async def _attendance_series(request: Request, ctx) -> list[tuple[str, int]]:
+    start, end = _report_window(request)
     if await ReportService.live_enabled(request):
         return await ReportService.attendance_series(request, ctx)
     bucket: dict[str, int] = defaultdict(int)
     for row in STORE.list_attendance(ctx.current_scope_path):
-        bucket[row["date"]] += 1
+        if start <= row["date"][:10] <= end:
+            bucket[row["date"][:10]] += 1
     return sorted(bucket.items())
 
 
@@ -157,8 +183,9 @@ async def _anomaly_rows(request: Request, ctx) -> list[dict[str, Any]]:
     count_rows = STORE.list_counts(ctx.current_scope_path)
     if count_rows:
         average = sum(row["total"] for row in count_rows) / len(count_rows)
+        deviation = pstdev(row["total"] for row in count_rows)
         for row in count_rows:
-            if row["total"] >= average * 1.2 or row["total"] <= average * 0.8:
+            if deviation > 0 and abs(row["total"] - average) >= 2 * deviation:
                 rows.append(
                     {
                         "title": f"Attendance unusual at {row['location']}",
@@ -182,12 +209,12 @@ async def _anomaly_rows(request: Request, ctx) -> list[dict[str, Any]]:
 
 
 async def _summary_tab(request: Request, ctx) -> Div:
-    summary_coro = ReportService.summary_metrics(request, ctx) if await ReportService.live_enabled(request) else STORE.dashboard_summary(ctx.current_scope_path, ctx.level)
-    summary, rows = await asyncio.gather(
-        maybe_await(summary_coro),
-        _summary_rows(request, ctx),
-    )
-    counts_summary = {"latest_total": summary["latest_total"], "locations_reporting": summary["locations_reporting"]} if await ReportService.live_enabled(request) else STORE.counts_summary(ctx.current_scope_path)
+    rows = await _summary_rows(request, ctx)
+    latest = rows[0] if rows else None
+    counts_summary = {
+        "latest_total": int(latest.get("total") or 0) if latest else 0,
+        "locations_reporting": len({row.get("location_id") or row.get("location") for row in rows}),
+    }
 
     desktop_rows = [
         [row["date"], row["location"], row["event_title"], row["total"], row["submitted_by"]]
@@ -206,8 +233,6 @@ async def _summary_tab(request: Request, ctx) -> Div:
 
     return Div(
         Div(
-            stat_card("Workers", str(summary["workers_total"]), "Workers included in the report", "people", tone="primary"),
-            stat_card("Pending actions", str(summary["pending_items"]), "Items still waiting for review", "inbox", tone="warning"),
             stat_card("Latest total", str(counts_summary["latest_total"]), "Most recent recorded attendance", "bar-chart", tone="success"),
             stat_card("Locations reporting", str(counts_summary["locations_reporting"]), "Branches that have submitted", "geo-alt", tone="info"),
             cls="counts-stat-grid",
@@ -227,11 +252,10 @@ async def _summary_tab(request: Request, ctx) -> Div:
 
 
 async def _financial_tab(request: Request, ctx) -> Div:
-    summary_coro = ReportService.financial_summary(request, ctx) if await ReportService.live_enabled(request) else STORE.finance_summary(ctx.current_scope_path)
-    summary, rows = await asyncio.gather(
-        maybe_await(summary_coro),
-        _financial_rows(request, ctx),
-    )
+    rows = await _financial_rows(request, ctx)
+    total = sum(float(row.get("amount") or 0) for row in rows)
+    transactions = sum(int(row.get("transaction_count") or 1) for row in rows)
+    summary = {"month_total": total, "year_total": total, "average_entry": round(total / transactions, 2) if transactions else 0, "entries": transactions}
     desktop_rows = [
         [row["date"], row["location"], row["fund_type"].title(), format_naira(row["amount"]), row["method"], row["submitted_by"]]
         for row in rows
@@ -248,15 +272,15 @@ async def _financial_tab(request: Request, ctx) -> Div:
     ]
     return Div(
         Div(
-            stat_card("This month", format_naira(summary["month_total"]), "Visible offering and tithe entries", "cash-stack", tone="primary"),
-            stat_card("This year", format_naira(summary["year_total"]), "All current-year finance entries", "cash-coin", tone="success"),
+            stat_card("Approved total", format_naira(summary["year_total"]), "Approved offerings and tithes within the selected dates", "cash-stack", tone="primary"),
+            stat_card("Transactions", str(summary["entries"]), "Approved finance entries within the selected dates", "cash-coin", tone="success"),
             stat_card("Average entry", format_naira(summary["average_entry"]), "Helps spot unusual values quickly", "calculator", tone="warning"),
             stat_card("Entry count", str(summary["entries"]), "Recorded finance submissions", "receipt", tone="info"),
             cls="counts-stat-grid",
         ),
         section_card(
             "Financial summary",
-            "Recent offering and tithe entries in scope.",
+            "Approved offering and tithe entries within the selected date window.",
             responsive_table(
                 ["Date", "Location", "Type", "Amount", "Method", "Recorded By"],
                 desktop_rows,
@@ -268,11 +292,11 @@ async def _financial_tab(request: Request, ctx) -> Div:
 
 
 async def _attendance_tab(request: Request, ctx) -> Div:
-    summary_coro = ReportService.attendance_summary(request, ctx) if await ReportService.live_enabled(request) else STORE.attendance_summary(ctx.current_scope_path)
-    summary, rows = await asyncio.gather(
-        maybe_await(summary_coro),
-        _attendance_rows(request, ctx),
-    )
+    rows = await _attendance_rows(request, ctx)
+    present = sum(int(row.get("worker_count") or 1) for row in rows if str(row.get("status") or "").lower() == "present")
+    late = sum(int(row.get("worker_count") or 1) for row in rows if str(row.get("status") or "").lower() == "late")
+    expected = sum(int(row.get("worker_count") or 1) for row in rows)
+    summary = {"expected": expected, "present": present, "late": late, "rate": round(present * 100 / expected, 1) if expected else 0}
     desktop_rows = [
         [row["date"], row["worker_name"], row["unit"], row["event_title"], row["location"], status_badge(row["status"])]
         for row in rows
@@ -289,15 +313,15 @@ async def _attendance_tab(request: Request, ctx) -> Div:
     ]
     return Div(
         Div(
-            stat_card("Expected workers", str(summary["expected"]), "Workers expected for attendance", "people", tone="primary"),
+            stat_card("Attendance records", str(summary["expected"]), "Worker attendance records in this date window", "people", tone="primary"),
             stat_card("Present", str(summary["present"]), "Attendance marked present", "check2-circle", tone="success"),
             stat_card("Late", str(summary["late"]), "Late attendance records", "clock-history", tone="warning"),
-            stat_card("Attendance rate", f"{summary['rate']}%", "Present versus expected", "graph-up", tone="info"),
+            stat_card("Present share", f"{summary['rate']}%", "Present records as a share of attendance records", "graph-up", tone="info"),
             cls="counts-stat-grid",
         ),
         section_card(
             "Attendance summary",
-            "Recent worker attendance records are grouped here for quick oversight.",
+            "Worker attendance records within the selected date window.",
             responsive_table(
                 ["Date", "Worker", "Unit", "Event", "Location", "Status"],
                 desktop_rows,
@@ -418,24 +442,22 @@ async def _anomalies_tab(request: Request, ctx) -> Div:
 
 
 async def _exports_tab(request: Request, ctx) -> Div:
+    start_date, end_date = _report_window(request)
     export_cards = []
     for report_type, title in [
         ("counts", "Attendance counts"),
         ("financial", "Financial summary"),
         ("attendance", "Worker attendance"),
-        ("operational_scope", "Operational scope export"),
     ]:
         if await ReportService.live_enabled(request):
             actions = Div(
-                Button("CSV", variant="outline-primary", size="md", href=ctx.url_for("/reports/export/live", report_type=report_type, export_format="csv")),
-                Button("Excel", variant="outline-primary", size="md", href=ctx.url_for("/reports/export/live", report_type=report_type, export_format="excel")),
-                *([] if report_type == "operational_scope" else [Button("PDF", variant="outline-primary", size="md", href=ctx.url_for("/reports/export/live", report_type=report_type, export_format="pdf"))]),
+                Button("CSV", variant="outline-primary", size="md", href=ctx.url_for("/reports/export/live", report_type=report_type, export_format="csv", start_date=start_date, end_date=end_date)),
+                Button("Excel", variant="outline-primary", size="md", href=ctx.url_for("/reports/export/live", report_type=report_type, export_format="excel", start_date=start_date, end_date=end_date)),
+                Button("PDF", variant="outline-primary", size="md", href=ctx.url_for("/reports/export/live", report_type=report_type, export_format="pdf", start_date=start_date, end_date=end_date)),
                 cls="d-grid d-md-flex gap-2",
             )
             description = (
-                "Export the selected admin datasets as CSV or Excel."
-                if report_type == "operational_scope"
-                else "Downloads are proxied through the admin so backend authentication stays server-side."
+                "Downloads are proxied through the admin so backend authentication stays server-side and use the selected date range."
             )
         else:
             actions = Div(
@@ -444,7 +466,7 @@ async def _exports_tab(request: Request, ctx) -> Div:
                     variant="outline-primary",
                     size="md",
                     type="button",
-                    hx_get=ctx.url_for("/reports/export/mock", report_type=report_type, export_format="csv"),
+                    hx_get=ctx.url_for("/reports/export/mock", report_type=report_type, export_format="csv", start_date=start_date, end_date=end_date),
                     hx_target="#reports-export-feedback",
                     hx_swap="innerHTML",
                 ),
@@ -453,20 +475,18 @@ async def _exports_tab(request: Request, ctx) -> Div:
                     variant="outline-primary",
                     size="md",
                     type="button",
-                    hx_get=ctx.url_for("/reports/export/mock", report_type=report_type, export_format="excel"),
+                    hx_get=ctx.url_for("/reports/export/mock", report_type=report_type, export_format="excel", start_date=start_date, end_date=end_date),
                     hx_target="#reports-export-feedback",
                     hx_swap="innerHTML",
                 ),
                 *(
-                    []
-                    if report_type == "operational_scope"
-                    else [
+                    [
                         Button(
                             "PDF",
                             variant="outline-primary",
                             size="md",
                             type="button",
-                            hx_get=ctx.url_for("/reports/export/mock", report_type=report_type, export_format="pdf"),
+                            hx_get=ctx.url_for("/reports/export/mock", report_type=report_type, export_format="pdf", start_date=start_date, end_date=end_date),
                             hx_target="#reports-export-feedback",
                             hx_swap="innerHTML",
                         )
@@ -475,9 +495,7 @@ async def _exports_tab(request: Request, ctx) -> Div:
                 cls="d-grid d-md-flex gap-2",
             )
             description = (
-                "State and oversight users can export the represented datasets in one operational bundle for real-user walkthroughs."
-                if report_type == "operational_scope"
-                else "Mock export actions stay aligned to the backend CSV, Excel, and PDF families."
+                "Mock export actions represent the selected report family and date range."
             )
         export_cards.append(
             section_card(
@@ -494,7 +512,7 @@ def _active_report_tab(tab: str) -> str:
     return tab if tab in valid else "summary"
 
 
-async def _report_tab_nav(ctx, active_tab: str) -> Div:
+async def _report_tab_nav(ctx, active_tab: str, start_date: str, end_date: str) -> Div:
     return Div(
         *[
             Button(
@@ -502,7 +520,7 @@ async def _report_tab_nav(ctx, active_tab: str) -> Div:
                 variant="primary" if key == active_tab else "outline-primary",
                 size="md",
                 type="button",
-                hx_get=ctx.url_for("/reports/content", tab=key),
+                hx_get=ctx.url_for("/reports/content", tab=key, start_date=start_date, end_date=end_date),
                 hx_target="#reports-content",
                 hx_swap="outerHTML",
                 cls="admin-inline-btn",
@@ -528,7 +546,7 @@ async def _report_tab_content(request: Request, ctx, active_tab: str) -> Div:
     return await tab_views[_active_report_tab(active_tab)](request, ctx)
 
 
-async def _reports_loading_content(ctx, active_tab: str) -> Div:
+async def _reports_loading_content(ctx, active_tab: str, start_date: str, end_date: str) -> Div:
     return Div(
         Div(
             P("Loading reports.", cls="text-muted mb-0"),
@@ -537,7 +555,7 @@ async def _reports_loading_content(ctx, active_tab: str) -> Div:
         PlaceholderCard(animation="wave", show_image=False, cls="border-0 shadow-sm"),
         PlaceholderCard(animation="wave", show_image=False, cls="border-0 shadow-sm"),
         id="reports-content",
-        hx_get=ctx.url_for("/reports/content", tab=active_tab),
+        hx_get=ctx.url_for("/reports/content", tab=active_tab, start_date=start_date, end_date=end_date),
         hx_trigger="load",
         hx_swap="outerHTML",
         cls="d-grid gap-3",
@@ -546,13 +564,31 @@ async def _reports_loading_content(ctx, active_tab: str) -> Div:
 
 async def _reports_content(request: Request, ctx, active_tab: str) -> Div:
     active_tab = _active_report_tab(active_tab)
-    tab_nav = await _report_tab_nav(ctx, active_tab)
+    start_date, end_date = _report_window(request)
+    tab_nav = await _report_tab_nav(ctx, active_tab, start_date, end_date)
     tab_content = await _report_tab_content(request, ctx, active_tab)
     return Div(
         section_card(
             "Report categories",
             "Switch between summary, financial, attendance, trends, and exports.",
             Div(
+                Form(
+                    Div(Label("From", fr="report-start-date", cls="form-label"), Input(type="date", id="report-start-date", name="start_date", value=start_date, cls="form-control"), cls="col-12 col-md-4"),
+                    Div(Label("To", fr="report-end-date", cls="form-label"), Input(type="date", id="report-end-date", name="end_date", value=end_date, cls="form-control"), cls="col-12 col-md-4"),
+                    Div(Button("Apply dates", variant="primary", size="md", type="submit"), cls="col-12 col-md-4 d-flex align-items-end"),
+                    Input(type="hidden", name="profile", value=ctx.profile.key),
+                    *[
+                        Input(type="hidden", name=name, value=value)
+                        for name, value in ctx.query_extras.items()
+                        if name not in {"start_date", "end_date", "profile"} and value
+                    ],
+                    action="/reports",
+                    method="get",
+                    hx_get=ctx.url_for("/reports/content", tab="summary", start_date=start_date, end_date=end_date),
+                    hx_target="#reports-content",
+                    hx_swap="outerHTML",
+                    cls="row g-3 align-items-end mb-3",
+                ),
                 tab_nav,
                 tab_content,
             ),
@@ -563,13 +599,13 @@ async def _reports_content(request: Request, ctx, active_tab: str) -> Div:
 
 def register_report_routes(app) -> None:
     @app.get("/reports")
-    async def reports_page(request: Request, tab: str = "summary"):
+    async def reports_page(request: Request, tab: str = "summary", start_date: str = "", end_date: str = ""):
         ctx = build_context(request)
-        if ctx.level < 6:
+        if ctx.level < 3 or not ctx.has_permission("reports:read"):
             body = page_stack(section_card(
                 "Reports",
-                "Reports unlock from Level 6 upward.",
-                empty_state("clipboard-data", "Access restricted", "Use the operational pages for daily review."),
+                "Scoped reports are available to oversight roles at Level 3 and above.",
+                empty_state("clipboard-data", "Access restricted", "Your assigned role does not have reports:read permission."),
             ))
             return shell_layout(
                 ctx,
@@ -589,7 +625,7 @@ def register_report_routes(app) -> None:
                 scope_label=ctx.current_scope_label,
                 scope_kind=ctx.current_scope_kind,
             ),
-            _reports_loading_content(ctx, _active_report_tab(tab)),
+            _reports_loading_content(ctx, _active_report_tab(tab), *_report_window(request)),
         )
         refresh_button = Button(
             "Refresh Reports",
@@ -600,6 +636,8 @@ def register_report_routes(app) -> None:
             hx_target="#reports-refresh-feedback",
             hx_swap="innerHTML",
         )
+        if not ctx.has_permission("reports:refresh"):
+            refresh_button = None
         return shell_layout(
             ctx,
             request_path=request.url.path,
@@ -614,18 +652,27 @@ def register_report_routes(app) -> None:
     @app.get("/reports/content")
     async def reports_content(request: Request, tab: str = "summary"):
         ctx = build_context(request)
-        if ctx.level < 6:
+        if ctx.level < 3 or not ctx.has_permission("reports:read"):
             return Div(
                 section_card(
                     "Reports",
-                    "Reports unlock from Level 6 upward.",
-                    empty_state("clipboard-data", "Access restricted", "Use the operational pages for daily review."),
+                    "Scoped reports are available to oversight roles at Level 3 and above.",
+                    empty_state("clipboard-data", "Access restricted", "Your assigned role does not have reports:read permission."),
                 ),
                 id="reports-content",
             )
         try:
             return await _reports_content(request, ctx, tab)
         except BackendClientError as exc:
+            if exc.status_code == 403:
+                return Div(
+                    section_card(
+                        "Reports",
+                        "Report access is controlled by your assigned role and scope.",
+                        empty_state("shield-lock", "Access restricted", "Ask your level administrator to review the reports permission for your role."),
+                    ),
+                    id="reports-content",
+                )
             return Div(
                 section_card(
                     "Reports hub",
@@ -642,6 +689,8 @@ def register_report_routes(app) -> None:
     @app.post("/reports/refresh")
     async def refresh_reports(request: Request):
         ctx = build_context(request)
+        if not ctx.has_permission("reports:refresh"):
+            return Response("Your role does not have report refresh permission.", status_code=403, media_type="text/plain")
         if await ReportService.live_enabled(request):
             try:
                 payload = await ReportService.refresh(request)
@@ -668,6 +717,8 @@ def register_report_routes(app) -> None:
     @app.get("/reports/export/mock")
     async def reports_export_mock(request: Request, report_type: str = "counts", export_format: str = "csv"):
         ctx = build_context(request)
+        if not ctx.has_permission("reports:read"):
+            return Response("Your role does not have report read permission.", status_code=403, media_type="text/plain")
         label = report_type.replace("_", " ").title()
         export_name = export_format.upper()
         return simple_toast_response(
@@ -682,9 +733,13 @@ def register_report_routes(app) -> None:
     @app.get("/reports/export/live")
     async def reports_export_live(request: Request, report_type: str = "counts", export_format: str = "csv"):
         ctx = build_context(request)
+        if not ctx.has_permission("reports:read"):
+            return Response("Your role does not have report read permission.", status_code=403, media_type="text/plain")
         try:
             payload = await ReportService.export(request, ctx, report_type=report_type, export_format=export_format)
-        except (BackendClientError, ValueError) as exc:
+        except BackendClientError as exc:
+            return Response(str(exc), media_type="text/plain", status_code=exc.status_code or 502)
+        except ValueError as exc:
             return Response(str(exc), media_type="text/plain", status_code=502)
         if payload is None:
             return Response("Live export is only available in backend mode.", media_type="text/plain", status_code=400)

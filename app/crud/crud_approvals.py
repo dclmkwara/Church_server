@@ -5,13 +5,14 @@ from datetime import datetime
 from typing import List, Optional
 from uuid import UUID
 
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import HTTPException
 
 from app.models.approvals import TransferRequest, StatusChangeRequest
 from app.models.user import Worker, User
 from app.models.location import Location, Group, Region, State
+from app.db.filters import scope_filter
 
 
 class CRUDApprovals:
@@ -56,7 +57,7 @@ class CRUDApprovals:
         limit: int = 100,
     ) -> List[TransferRequest]:
         query = select(TransferRequest).where(
-            text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
+            scope_filter(TransferRequest.path, scope_path)
         )
         if status:
             query = query.where(TransferRequest.status == status)
@@ -74,7 +75,7 @@ class CRUDApprovals:
     ) -> TransferRequest:
         stmt = select(TransferRequest).where(TransferRequest.id == request_id)
         if scope_path:
-            stmt = stmt.where(text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path))
+            stmt = stmt.where(scope_filter(TransferRequest.path, scope_path))
         req = (await db.execute(stmt)).scalars().first()
         if not req:
             raise HTTPException(status_code=404, detail="Transfer request not found")
@@ -128,7 +129,7 @@ class CRUDApprovals:
     ) -> TransferRequest:
         stmt = select(TransferRequest).where(TransferRequest.id == request_id)
         if scope_path:
-            stmt = stmt.where(text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path))
+            stmt = stmt.where(scope_filter(TransferRequest.path, scope_path))
         req = (await db.execute(stmt)).scalars().first()
         if not req:
             raise HTTPException(status_code=404, detail="Transfer request not found")
@@ -181,7 +182,7 @@ class CRUDApprovals:
         limit: int = 100,
     ) -> List[StatusChangeRequest]:
         query = select(StatusChangeRequest).where(
-            text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
+            scope_filter(StatusChangeRequest.path, scope_path)
         )
         if status:
             query = query.where(StatusChangeRequest.status == status)
@@ -199,7 +200,7 @@ class CRUDApprovals:
     ) -> StatusChangeRequest:
         stmt = select(StatusChangeRequest).where(StatusChangeRequest.id == request_id)
         if scope_path:
-            stmt = stmt.where(text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path))
+            stmt = stmt.where(scope_filter(StatusChangeRequest.path, scope_path))
         req = (await db.execute(stmt)).scalars().first()
         if not req:
             raise HTTPException(status_code=404, detail="Status change request not found")
@@ -236,7 +237,7 @@ class CRUDApprovals:
     ) -> StatusChangeRequest:
         stmt = select(StatusChangeRequest).where(StatusChangeRequest.id == request_id)
         if scope_path:
-            stmt = stmt.where(text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path))
+            stmt = stmt.where(scope_filter(StatusChangeRequest.path, scope_path))
         req = (await db.execute(stmt)).scalars().first()
         if not req:
             raise HTTPException(status_code=404, detail="Status change request not found")
@@ -325,7 +326,7 @@ class CRUDRemoval:
     ) -> List[WorkerRemovalRequest]:
         """List removal requests within the caller's scope, optionally filtered by status or level."""
         query = select(WorkerRemovalRequest).where(
-            text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path)
+            scope_filter(WorkerRemovalRequest.path, scope_path)
         )
         if status:
             query = query.where(WorkerRemovalRequest.status == status)
@@ -470,7 +471,7 @@ class CRUDRemoval:
     ) -> WorkerRemovalRequest:
         stmt = select(WorkerRemovalRequest).where(
             WorkerRemovalRequest.id == request_id,
-            text("CAST(path AS ltree) <@ CAST(:scope_path AS ltree)").bindparams(scope_path=scope_path),
+            scope_filter(WorkerRemovalRequest.path, scope_path),
         )
         req = (await db.execute(stmt)).scalars().first()
         if not req:
