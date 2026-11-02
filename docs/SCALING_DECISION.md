@@ -27,7 +27,7 @@ Instead, current work should focus on:
 
 The current backend is a single FastAPI application with one app entrypoint and one router mounting surface:
 
-- [app/main.py](../app/main.py)
+- `app/main.py`
 
 This means the system is still operationally one service, even though it contains many domains.
 
@@ -59,8 +59,8 @@ The admin frontend mirrors backend domains through:
 
 Important examples:
 
-- [dclm_admin/routes/dashboard.py](../../FastHTML/Admin-Frontend/dclm_admin/routes/dashboard.py)
-- [dclm_admin/communication/dashboard_service.py](../../FastHTML/Admin-Frontend/dclm_admin/communication/dashboard_service.py)
+- `dclm_admin/routes/dashboard.py`
+- `dclm_admin/communication/dashboard_service.py`
 
 This symmetry is useful and should be preserved.
 
@@ -98,8 +98,8 @@ The dashboard bootstrap route and analytics services aggregate data from several
 
 Relevant files:
 
-- [app/api/v1/routes/dashboard.py](../app/api/v1/routes/dashboard.py)
-- [app/services/dashboard_service.py](../app/services/dashboard_service.py)
+- `app/api/v1/routes/dashboard.py`
+- `app/services/dashboard_service.py`
 
 If these were split into independent services too early, the system would likely replace local SQL/database aggregation with:
 

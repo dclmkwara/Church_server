@@ -21,7 +21,7 @@ The backend exposes a **versioned REST API** at `/api/v1/` and is the single sou
 
 | Reader | What to focus on |
 |---|---|
-| **Church Leadership (non-technical)** | [Executive Summary](../COMPREHENSIVE_PROJECT_REVIEW.md) — explains what the system does in plain language |
+| **Church Leadership (non-technical)** | [Comprehensive Project Review](https://github.com/dclmkwara/Church_server/blob/main/COMPREHENSIVE_PROJECT_REVIEW.md) — explains what the system does in plain language |
 | **Developers integrating with this API** | [API Documentation](API_DOCUMENTATION.md), [Authentication](AUTHENTICATION.md), [Route Details](ROUTE_DETAILS.md) |
 | **Developers contributing to the codebase** | [Architecture](ARCHITECTURE.md), [Tech Stack](TECH_STACK.md), [Setup Guide](SETUP.md), [Database Schema](DATABASE_SCHEMA.md) |
 | **System administrators** | [Deployment](DEPLOYMENT.md), [Security](SECURITY.md), [Troubleshooting](TROUBLESHOOTING.md) |

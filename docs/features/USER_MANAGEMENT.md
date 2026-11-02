@@ -189,6 +189,6 @@ Higher scores can access lower-level data:
 
 ## Related Documentation
 
-- [RBAC System](RBAC.md)
+- [RBAC System](../PERMISSIONS_MATRIX.md)
 - [Security & Access Control](../SECURITY.md)
 - [API Reference](../API_DOCUMENTATION.md)

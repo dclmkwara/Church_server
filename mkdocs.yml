@@ -3,6 +3,11 @@ site_description: Complete documentation for the Deeper Life Church Management S
 site_author: DCLM Development Team
 site_url: https://docs.dclm.org
 
+# The repository README and docs/index.md are separate landing pages. Do not
+# let MkDocs treat README.md as a second implicit index page.
+exclude_docs: |
+  README.md
+
 repo_name: dclm/backend
 repo_url: https://github.com/your-org/dclm-backend
 
@@ -55,21 +60,20 @@ nav:
   - Limitations: LIMITATIONS.md
   - Maintainers: MAINTAINERS.md
   - Frontend Planning:
-      - Design Plan: FRONTEND_DESIGN_PLAN.md
-      - Prompt (Data Entry App): PROMPT_DATA_ENTRY_APP.md
-      - Prompt (Main Dashboard App): PROMPT_MAIN_DASHBOARD_APP.md
+      - Route/API Permission Matrix: FRONTEND_ROUTE_API_PERMISSION_MATRIX.md
+      - Phase 7 Pilot Acceptance: PHASE7_PILOT_ACCEPTANCE.md
   - Non-Technical:
       - Guide: NON_TECHNICAL_GUIDE.md
       - Quickstart: NON_TECHNICAL_QUICKSTART.md
       - Glossary: GLOSSARY_PLAIN.md
   - Getting Started:
-      - Project Readme: README.md
       - Quick Start: QUICK_START.md
       - Setup Guide: SETUP.md
       - Deployment: DEPLOYMENT.md
   - Architecture:
       - System Overview: COMPREHENSIVE_ANALYSIS.md
       - Architecture: ARCHITECTURE.md
+      - Scaling Decision: SCALING_DECISION.md
       - Hierarchy Diagram: HIERARCHY_DIAGRAM.md
       - Database Schema: DATABASE_SCHEMA.md
       - Security & Access Control: SECURITY.md
@@ -97,11 +101,9 @@ nav:
   - Features:
       - User Management: features/USER_MANAGEMENT.md
       - Hierarchy System: features/HIERARCHY.md
-      - Data Collection: features/DATA_COLLECTION.md
-      - Fellowship: features/FELLOWSHIP.md
-      - Media Management: features/MEDIA.md
-      - Public API: features/PUBLIC_API.md
-      - Reports & Analytics: features/REPORTS.md
+      - Data Collection: DATA_FLOW.md
+      - Fellowship: mobile/FELLOWSHIP_APP.md
+      - Feature Catalog: FEATURES.md
   - Mobile Apps:
       - Usher App: mobile/USHER_APP.md
       - Fellowship App: mobile/FELLOWSHIP_APP.md

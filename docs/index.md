@@ -5,7 +5,7 @@
 | Document | Description |
 |---|---|
 | [System Overview](OVERVIEW.md) | What the system is, who uses it, the church hierarchy, and a map of all features |
-| [Executive Summary](../COMPREHENSIVE_PROJECT_REVIEW.md) | Non-technical summary of the entire system for pastors and leadership |
+| [Comprehensive Project Review](https://github.com/dclmkwara/Church_server/blob/main/COMPREHENSIVE_PROJECT_REVIEW.md) | Non-technical summary of the entire system for pastors and leadership |
 
 ---
 
@@ -51,8 +51,9 @@
 
 | Document | Description |
 |---|---|
-| [Mobile Apps](mobile/) | API usage guide for mobile app developers |
-| [Public Website](website/) | Public endpoint reference for the church website |
+| [Usher App](mobile/USHER_APP.md) | API usage guide for usher and field workers |
+| [Fellowship App](mobile/FELLOWSHIP_APP.md) | API usage guide for fellowship leaders |
+| [Public Website](website/PUBLIC_SITE.md) | Public endpoint reference for the church website |
 
 ---
 
