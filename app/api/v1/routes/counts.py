@@ -9,7 +9,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, text
+from sqlalchemy import select, func, text, or_
 
 from app.api import deps
 from app.db.filters import ltree_subpath as _ltree_subpath
@@ -129,9 +129,9 @@ async def aggregate_counts(
         query = query.join(ProgramType, ProgramType.id == ProgramEvent.program_type_id, isouter=True)
         query = query.join(ProgramDomain, ProgramDomain.id == ProgramType.domain_id, isouter=True)
         if program_domain:
-            query = query.where((ProgramDomain.name == program_domain) | (ProgramDomain.slug == program_domain))
+            query = query.where(or_(Count.program_domain == program_domain, ProgramDomain.name == program_domain, ProgramDomain.slug == program_domain))
         if program_type:
-            query = query.where((ProgramType.name == program_type) | (ProgramType.slug == program_type))
+            query = query.where(or_(Count.program_type == program_type, ProgramType.name == program_type, ProgramType.slug == program_type))
 
     query = query.group_by(Count.location_id).order_by(Count.location_id)
     result = await db.execute(query)
@@ -193,9 +193,9 @@ async def aggregate_counts_flexible(
         query = query.join(ProgramType, ProgramType.id == ProgramEvent.program_type_id, isouter=True)
         query = query.join(ProgramDomain, ProgramDomain.id == ProgramType.domain_id, isouter=True)
         if program_domain:
-            query = query.where((ProgramDomain.name == program_domain) | (ProgramDomain.slug == program_domain))
+            query = query.where(or_(Count.program_domain == program_domain, ProgramDomain.name == program_domain, ProgramDomain.slug == program_domain))
         if program_type:
-            query = query.where((ProgramType.name == program_type) | (ProgramType.slug == program_type))
+            query = query.where(or_(Count.program_type == program_type, ProgramType.name == program_type, ProgramType.slug == program_type))
 
     query = query.group_by(group_path).order_by(group_path)
     result = await db.execute(query)

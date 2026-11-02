@@ -2,11 +2,15 @@
 from datetime import datetime
 from typing import Optional
 from uuid import UUID
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 class CountBase(BaseModel):
-    event_id: UUID
+    event_id: Optional[UUID] = None
     location_id: str
+    date: Optional[datetime] = None
+    church_type: Optional[str] = Field(None, max_length=40)
+    program_domain: Optional[str] = Field(None, max_length=80)
+    program_type: Optional[str] = Field(None, max_length=120)
     assignment_id: Optional[UUID] = None
     adult_male: int = Field(0, ge=0)
     adult_female: int = Field(0, ge=0)
@@ -19,6 +23,15 @@ class CountBase(BaseModel):
     source_role: str = Field(default="regular", deprecated=True)
     campaign_code: Optional[str] = Field(None, deprecated=True)
     submission_channel: str = Field(default="admin_web")
+
+    @model_validator(mode="after")
+    def require_context_without_event(self):
+        if self.event_id is None:
+            if not self.date or not self.church_type or not self.program_domain or not self.program_type:
+                raise ValueError("Eventless counts require service date, church section, program domain, and program type")
+            if self.program_domain.lower() == "crusade":
+                raise ValueError("Crusade counts require a scheduled event")
+        return self
 
 class CountCreate(CountBase):
     pass

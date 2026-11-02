@@ -272,16 +272,15 @@ async def get_timeseries_analysis(
         if metric == "attendance":
             period = func.date_trunc(
                 interval_map[interval_key],
-                cast(ProgramEvent.date, DateTime),
+                WorkerAttendance.date,
             ).label("period")
             query = select(
                 period,
                 func.count(WorkerAttendance.id).label("total")
-            ).join(ProgramEvent, ProgramEvent.id == WorkerAttendance.event_id).where(
-                ProgramEvent.date.between(start_date, end_date),
+            ).where(
+                WorkerAttendance.date.between(start_date, end_date),
                 _scope_filter(WorkerAttendance.path, effective_scope),
                 WorkerAttendance.is_deleted == False,
-                ProgramEvent.is_deleted == False,
             ).group_by(period).order_by(period)
             result = await db.execute(query)
             data = [{"date": str(row.period.date()), "value": row.total} for row in result]
@@ -374,11 +373,10 @@ async def get_hierarchical_breakdown(
             query = select(
                 group_path,
                 func.count(WorkerAttendance.id).label("total")
-            ).join(ProgramEvent, ProgramEvent.id == WorkerAttendance.event_id).where(
-                ProgramEvent.date.between(start_date, end_date),
+            ).where(
+                WorkerAttendance.date.between(start_date, end_date),
                 _scope_filter(WorkerAttendance.path, effective_scope),
                 WorkerAttendance.is_deleted == False,
-                ProgramEvent.is_deleted == False,
             ).group_by(group_path).order_by(group_path)
             result = await db.execute(query)
             return {"metric": metric, "level": level, "breakdown": [{"path": str(row.group_path), "total": row.total} for row in result]}
@@ -500,11 +498,11 @@ async def get_growth_rate(
             Offering.is_deleted == False, Offering.status == "approved",
         ).group_by(bucket).order_by(bucket)
     else:
-        bucket = func.date_trunc(period, cast(ProgramEvent.date, DateTime)).label("period")
+        bucket = func.date_trunc(period, WorkerAttendance.date).label("period")
         query = select(bucket, func.count(WorkerAttendance.id).label("total")).select_from(
             WorkerAttendance
-        ).join(ProgramEvent, ProgramEvent.id == WorkerAttendance.event_id).where(
-            ProgramEvent.date >= start_date, ProgramEvent.date < end_date + timedelta(days=1), ProgramEvent.is_deleted == False,
+        ).where(
+            WorkerAttendance.date >= start_date, WorkerAttendance.date < end_date + timedelta(days=1),
             WorkerAttendance.is_deleted == False,
             _scope_filter(WorkerAttendance.path, effective_scope),
         ).group_by(bucket).order_by(bucket)

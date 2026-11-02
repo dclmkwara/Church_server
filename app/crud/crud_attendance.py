@@ -30,11 +30,14 @@ class CRUDWorkerAttendance(CRUDBase[WorkerAttendance, WorkerAttendanceCreate, Wo
         
         # Verify event exists
         from app.crud.crud_programs import program_event
-        event = await program_event.get(db, id=obj_in.event_id)
-        if not event:
+        event = await program_event.get(db, id=obj_in.event_id) if obj_in.event_id else None
+        if obj_in.event_id and not event:
             raise HTTPException(status_code=404, detail="Event not found")
-        campaign = await load_event_campaign(db, event)
-        ensure_collection_open(event, campaign, kind="attendance")
+        if event:
+            campaign = await load_event_campaign(db, event)
+            ensure_collection_open(event, campaign, kind="attendance")
+        elif str(obj_in.program_domain or "").lower() == "crusade":
+            raise HTTPException(status_code=400, detail="Crusade attendance must be linked to the scheduled event")
             
         # Verify worker exists and get details
         from app.models.user import Worker
@@ -61,9 +64,9 @@ class CRUDWorkerAttendance(CRUDBase[WorkerAttendance, WorkerAttendanceCreate, Wo
                 detail="Attendance location must match the worker's assigned location",
             )
 
-        event_path = str(event.path)
+        event_path = str(event.path) if event else None
         location_path = str(location.path)
-        if not (location_path == event_path or location_path.startswith(f"{event_path}.")):
+        if event_path and not (location_path == event_path or location_path.startswith(f"{event_path}.")):
             raise HTTPException(
                 status_code=400,
                 detail="Location must fall within the selected event scope",
@@ -71,6 +74,10 @@ class CRUDWorkerAttendance(CRUDBase[WorkerAttendance, WorkerAttendanceCreate, Wo
         
         db_obj = WorkerAttendance(
             event_id=obj_in.event_id,
+            date=event.date if event else obj_in.date,
+            church_type=obj_in.church_type,
+            program_domain=obj_in.program_domain if not event else None,
+            program_type=obj_in.program_type if not event else None,
             location_id=obj_in.location_id,
             path=location_path,
             client_id=obj_in.client_id,
@@ -85,11 +92,16 @@ class CRUDWorkerAttendance(CRUDBase[WorkerAttendance, WorkerAttendanceCreate, Wo
         )
         
         db.add(db_obj)
-        duplicate = await db.execute(select(WorkerAttendance.id).where(
-            WorkerAttendance.event_id == obj_in.event_id,
+        duplicate_query = select(WorkerAttendance.id).where(
             WorkerAttendance.worker_id == obj_in.worker_id,
+            WorkerAttendance.location_id == obj_in.location_id,
             WorkerAttendance.is_deleted == False,
-        ).limit(1))
+        )
+        duplicate_query = duplicate_query.where(
+            WorkerAttendance.event_id == obj_in.event_id if obj_in.event_id
+            else (WorkerAttendance.event_id.is_(None) & (WorkerAttendance.date == obj_in.date))
+        ).limit(1)
+        duplicate = await db.execute(duplicate_query)
         if duplicate.scalar_one_or_none():
             raise HTTPException(status_code=409, detail="Worker already has an attendance record for this event")
         try:
@@ -100,7 +112,7 @@ class CRUDWorkerAttendance(CRUDBase[WorkerAttendance, WorkerAttendanceCreate, Wo
         except IntegrityError as exc:
             await db.rollback()
             # The unique index is the concurrency-safe authority if two requests race.
-            if "uq_worker_attendance_active_event_worker" in str(exc.orig):
+            if "uq_worker_attendance_active_event_worker" in str(exc.orig) or "uq_worker_attendance_eventless_worker_day" in str(exc.orig):
                 raise HTTPException(status_code=409, detail="Worker already has an attendance record for this event") from exc
             raise
     

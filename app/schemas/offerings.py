@@ -6,7 +6,7 @@ from typing import Optional
 from uuid import UUID
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 MAX_AMOUNT = Decimal("9999999999.99")
 
@@ -17,8 +17,12 @@ def _validate_amount_precision(value: Optional[Decimal]) -> Optional[Decimal]:
     return value
 
 class OfferingBase(BaseModel):
-    event_id: UUID
+    event_id: Optional[UUID] = None
     location_id: str
+    date: Optional[datetime] = None
+    church_type: Optional[str] = Field(None, max_length=40)
+    program_domain: Optional[str] = Field(None, max_length=80)
+    program_type: Optional[str] = Field(None, max_length=120)
     
     amount: Decimal = Field(..., gt=0, le=MAX_AMOUNT, description="Amount in currency")
     payment_method: str = Field(..., description="cash, bank_transfer, mobile_money, check")
@@ -26,6 +30,15 @@ class OfferingBase(BaseModel):
     
     note: Optional[str] = None
     client_id: Optional[UUID] = None # For offline sync
+
+    @model_validator(mode="after")
+    def require_context_without_event(self):
+        if self.event_id is None:
+            if not self.date or not self.church_type or not self.program_domain or not self.program_type:
+                raise ValueError("Eventless offerings require service date, church section, program domain, and program type")
+            if self.program_domain.lower() == "crusade":
+                raise ValueError("Crusade offerings require a scheduled event")
+        return self
 
 class OfferingCreate(OfferingBase):
     _amount_precision = field_validator("amount")(_validate_amount_precision)

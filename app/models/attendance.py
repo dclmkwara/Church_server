@@ -29,7 +29,11 @@ class WorkerAttendance(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     location_id = Column(UUID(as_uuid=False), nullable=False, index=True)
     
     # Event Link (Source of Truth for Date, Program Type, Domain)
-    event_id = Column(UUID(as_uuid=True), ForeignKey("program_events.id"), nullable=False, index=True)
+    event_id = Column(UUID(as_uuid=True), ForeignKey("program_events.id"), nullable=True, index=True)
+    date = Column(DateTime(timezone=True), nullable=False, index=True)
+    church_type = Column(String(40), nullable=True, index=True)
+    program_domain = Column(String(80), nullable=True, index=True)
+    program_type = Column(String(120), nullable=True, index=True)
     
     # Worker Link
     worker_id = Column(UUID(as_uuid=True), ForeignKey("workers.worker_id"), nullable=False, index=True)

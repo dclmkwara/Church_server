@@ -31,20 +31,23 @@ class CRUDOffering(CRUDBase[Offering, OfferingCreate, OfferingUpdate]):
         
         # Verify event exists
         from app.crud.crud_programs import program_event
-        event = await program_event.get(db, id=obj_in.event_id)
-        if not event:
+        event = await program_event.get(db, id=obj_in.event_id) if obj_in.event_id else None
+        if obj_in.event_id and not event:
             raise HTTPException(status_code=404, detail="Event not found")
-        campaign = await load_event_campaign(db, event)
-        ensure_collection_open(event, campaign, kind="financial entry")
+        if not event and str(obj_in.program_domain or "").lower() == "crusade":
+            raise HTTPException(status_code=400, detail="Crusade financial entries must be linked to the scheduled event")
+        if event:
+            campaign = await load_event_campaign(db, event)
+            ensure_collection_open(event, campaign, kind="financial entry")
 
         from app.crud.crud_location import location as crud_location
         location = await crud_location.get(db, obj_in.location_id)
         if not location:
             raise HTTPException(status_code=404, detail="Location not found")
 
-        event_path = str(event.path)
+        event_path = str(event.path) if event else None
         location_path = str(location.path)
-        if not (location_path == event_path or location_path.startswith(f"{event_path}.")):
+        if event_path and not (location_path == event_path or location_path.startswith(f"{event_path}.")):
             raise HTTPException(
                 status_code=400,
                 detail="Location must fall within the selected event scope",
@@ -54,7 +57,10 @@ class CRUDOffering(CRUDBase[Offering, OfferingCreate, OfferingUpdate]):
             event_id=obj_in.event_id,
             location_id=obj_in.location_id,
             path=location_path,
-            date=event.date,
+            date=event.date if event else obj_in.date,
+            church_type=obj_in.church_type,
+            program_domain=obj_in.program_domain if not event else None,
+            program_type=obj_in.program_type if not event else None,
             client_id=obj_in.client_id,
             amount=obj_in.amount,
             payment_method=obj_in.payment_method,

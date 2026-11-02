@@ -2,7 +2,7 @@
 Pydantic schemas for Fellowship Activities.
 """
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 from decimal import Decimal
 
@@ -17,17 +17,19 @@ class FellowshipMemberBase(BaseModel):
     phone: Optional[str] = None
     gender: Optional[str] = None
     address: Optional[str] = None
+    fellowship_group: Optional[Literal["adult", "young_adult", "campus", "youth", "children"]] = None
     role: str = "member"
     client_id: Optional[UUID] = None
 
 class FellowshipMemberCreate(FellowshipMemberBase):
-    pass
+    fellowship_group: Literal["adult", "young_adult", "campus", "youth", "children"]
 
 class FellowshipMemberUpdate(BaseModel):
     name: Optional[str] = None
     phone: Optional[str] = None
     gender: Optional[str] = None
     address: Optional[str] = None
+    fellowship_group: Optional[Literal["adult", "young_adult", "campus", "youth", "children"]] = None
     role: Optional[str] = None
     is_active: Optional[bool] = None
 

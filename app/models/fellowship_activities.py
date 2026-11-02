@@ -37,6 +37,7 @@ class FellowshipMember(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     phone = Column(String, nullable=True) # Optional for some rural areas?
     gender = Column(String, nullable=True)
     address = Column(String, nullable=True)
+    fellowship_group = Column(String(30), nullable=True, index=True)
     
     # Status
     role = Column(String, default="member") # member, leader, assistant

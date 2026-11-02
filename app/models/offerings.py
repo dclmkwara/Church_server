@@ -35,7 +35,10 @@ class Offering(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     date = Column(DateTime(timezone=True), nullable=False, index=True)
     
     # Event Link (Source of Truth for Date, Program Type, Domain)
-    event_id = Column(UUID(as_uuid=True), ForeignKey("program_events.id"), nullable=False, index=True)
+    event_id = Column(UUID(as_uuid=True), ForeignKey("program_events.id"), nullable=True, index=True)
+    church_type = Column(String(40), nullable=True, index=True)
+    program_domain = Column(String(80), nullable=True, index=True)
+    program_type = Column(String(120), nullable=True, index=True)
     
     # Financial Data
     amount = Column(Numeric(12, 2), nullable=False) # Up to 999,999,999.99

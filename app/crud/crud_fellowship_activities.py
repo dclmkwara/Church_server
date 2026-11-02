@@ -63,6 +63,7 @@ class CRUDFellowshipMember(CRUDBase[FellowshipMember, FellowshipMemberCreate, Fe
             phone=obj_in.phone,
             gender=obj_in.gender,
             address=obj_in.address,
+            fellowship_group=obj_in.fellowship_group,
             role=obj_in.role
         )
         db.add(db_obj)

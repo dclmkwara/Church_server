@@ -160,12 +160,12 @@ async def _get_timeseries(db: AsyncSession, scope_path: str, *, metric: str) -> 
         ).group_by(period).order_by(period)
         rows = await db.execute(stmt)
         return [{'date': str(row.period.date()), 'value': float(row.total or 0)} for row in rows]
-    period = func.date_trunc('day', cast(ProgramEvent.date, DateTime)).label('period')
+    period = func.date_trunc('day', WorkerAttendance.date).label('period')
     stmt = select(
         period,
         func.count(WorkerAttendance.id).label('total'),
-    ).select_from(WorkerAttendance).join(ProgramEvent, ProgramEvent.id == WorkerAttendance.event_id).where(
-        ProgramEvent.date >= start_date,
+    ).select_from(WorkerAttendance).where(
+        WorkerAttendance.date >= start_date,
         _scope_filter(WorkerAttendance.path, scope_path),
         WorkerAttendance.is_deleted == False,
     ).group_by(period).order_by(period)

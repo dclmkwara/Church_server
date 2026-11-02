@@ -20,6 +20,9 @@ class Count(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     location_id = Column(UUID(as_uuid=False), nullable=False, index=True)
     date = Column(DateTime(timezone=True), nullable=False, index=True)
     event_id = Column(UUID(as_uuid=True), ForeignKey("program_events.id"), nullable=True, index=True)
+    church_type = Column(String(40), nullable=True, index=True)
+    program_domain = Column(String(80), nullable=True, index=True)
+    program_type = Column(String(120), nullable=True, index=True)
     assignment_id = Column(UUID(as_uuid=True), ForeignKey("event_assignments.id"), nullable=True, index=True)
 
     adult_male = Column(Integer, default=0, nullable=False)
