@@ -170,7 +170,7 @@ OFFICIAL_PERMS = [
     "officials:manage",
 ]
 
-USHER_PERMS = BASE_READ + DATA_ENTRY_PERMS
+USHER_PERMS = BASE_READ + DATA_ENTRY_PERMS + ["sync:batch"]
 
 ADMIN_PERMS = USHER_PERMS + [
     "users:create",
@@ -220,11 +220,13 @@ DEFAULT_ROLES = {
     # Level 1: Fellowship
     "House Fellowship Leader": {
         "score_id": 1,
-        "permissions": ["fellowship:create", "fellowship:read", "fellowship:update"]
+        "permissions": ["fellowship:create", "fellowship:read", "fellowship:update", "sync:batch"]
     },
 
     # Level 2: Location Worker
-    "Location Worker": {"score_id": 2, "permissions": BASE_READ},
+    # A location worker is the designated field data collector in the Utility App.
+    # Batch uploads remain constrained by the worker's assigned location scope.
+    "Location Worker": {"score_id": 2, "permissions": BASE_READ + ["sync:batch"]},
     "Location Usher": {"score_id": 2, "permissions": USHER_PERMS},
 
     # Level 3: Location Governance

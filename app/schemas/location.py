@@ -1,7 +1,7 @@
 """
 Pydantic schemas for hierarchy locations.
 """
-from typing import Optional, List
+from typing import Literal, Optional, List
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from datetime import datetime
 
@@ -209,6 +209,7 @@ class LocationDetailResponse(BaseModel):
 class FellowshipBase(BaseModel):
     """Base fields for Fellowship."""
     fellowship_name: str
+    fellowship_group: Optional[Literal["adult", "young_adult", "campus", "youth", "children"]] = None
     fellowship_address: Optional[str] = None
     associate_church: Optional[str] = None
     leader_in_charge: Optional[str] = None
@@ -218,10 +219,12 @@ class FellowshipCreate(FellowshipBase):
     """Schema for creating a Fellowship."""
     fellowship_code: str # e.g. "F001"
     location_id: str
+    fellowship_group: Literal["adult", "young_adult", "campus", "youth", "children"]
 
 class FellowshipUpdate(BaseModel):
     """Schema for updating a Fellowship."""
     fellowship_name: Optional[str] = None
+    fellowship_group: Optional[Literal["adult", "young_adult", "campus", "youth", "children"]] = None
     fellowship_address: Optional[str] = None
     associate_church: Optional[str] = None
     leader_in_charge: Optional[str] = None

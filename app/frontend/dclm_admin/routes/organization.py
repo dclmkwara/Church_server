@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from fasthtml.common import A, Div, Form, H3, H4, Input, P, Select, Option, Textarea
+from fasthtml.common import A, Div, Form, H3, H4, Input, Label, P, Select, Option, Textarea
 from starlette.requests import Request
 from starlette.responses import RedirectResponse
 import base64
@@ -11,7 +11,7 @@ from ..components.bulk_import_ui import hierarchy_import_drawer, hierarchy_impor
 
 from ..backend import BackendClientError
 from ..auth_context import build_context
-from ..communication import OrganizationService
+from ..communication import FellowshipService, OrganizationService
 from ..components.feedback import simple_toast_response
 from ..components.shell import hidden_context_inputs, primary_button, shell_layout
 from ..components.ui import empty_state, filter_field, page_intro, page_stack, responsive_table, section_card, stat_card, status_badge
@@ -232,6 +232,14 @@ async def _location_panel(ctx, location_key: str, *, oob: bool = False):
             "Connected fellowship units",
             "Open fellowships linked to this location.",
             fellowship_links,
+            action=(
+                primary_button(
+                    "Create fellowship",
+                    href=ctx.url_for(f"/organization/locations/{location_key}/fellowships/new"),
+                )
+                if ctx.has_permission("hierarchy:create_fellowship") and request and await FellowshipService.live_enabled(request)
+                else None
+            ),
         ),
         **attrs,
     )
@@ -564,6 +572,73 @@ def register_organization_routes(app) -> None:
         if profile is None or (not await OrganizationService.live_enabled(request) and not in_scope(profile["path"], ctx.current_scope_path)):
             return Div(empty_state("geo-alt", "Location not found", "Choose another location from the list."))
         return await _location_profile_page_content(ctx, location_key)
+
+    @app.get("/organization/locations/{location_key}/fellowships/new")
+    async def new_location_fellowship(request: Request, location_key: str, error: str = ""):
+        ctx = build_context(request)
+        profile = await OrganizationService.get_location_profile(request, ctx, location_key)
+        if profile is None or not ctx.has_permission("hierarchy:create_fellowship"):
+            return RedirectResponse(ctx.url_for(f"/organization/locations/{location_key}"), status_code=303)
+        form = Form(
+            *hidden_context_inputs(ctx),
+            (Alert(error, variant="danger", cls="mb-3") if error else None),
+            Input(type="hidden", name="location_id", value=location_key),
+            Label("Fellowship name", for_="fellowship_name", cls="form-label fw-semibold"),
+            Input(id="fellowship_name", name="fellowship_name", maxlength="120", required=True, cls="form-control mb-3"),
+            Label("Fellowship code", for_="fellowship_code", cls="form-label fw-semibold"),
+            Input(id="fellowship_code", name="fellowship_code", maxlength="40", required=True, cls="form-control mb-3",
+                  placeholder="For example, F001"),
+            Label("Fellowship category", for_="fellowship_group", cls="form-label fw-semibold"),
+            Select(
+                Option("Select a category", value="", selected=True),
+                Option("Adult Fellowship", value="adult"),
+                Option("Young Adult Fellowship", value="young_adult"),
+                Option("Campus Fellowship", value="campus"),
+                Option("Youth Fellowship", value="youth"),
+                Option("Children Fellowship", value="children"),
+                id="fellowship_group", name="fellowship_group", required=True, cls="form-select mb-3",
+            ),
+            Label("Fellowship address (optional)", for_="fellowship_address", cls="form-label fw-semibold"),
+            Input(id="fellowship_address", name="fellowship_address", maxlength="300", cls="form-control mb-3"),
+            Label("Leader (optional)", for_="leader_in_charge", cls="form-label fw-semibold"),
+            Input(id="leader_in_charge", name="leader_in_charge", maxlength="120", cls="form-control mb-3"),
+            Button("Create fellowship", type="submit", variant="primary"),
+            method="post",
+            action=ctx.url_for(f"/organization/locations/{location_key}/fellowships/create"),
+            cls="d-grid gap-1",
+        )
+        return shell_layout(
+            ctx,
+            request_path=request.url.path,
+            active_key="organization",
+            title="Create fellowship",
+            subtitle=f"Add a categorized fellowship under {profile['location']}.",
+            content=page_stack(
+                A("Back to location", href=ctx.url_for(f"/organization/locations/{location_key}"), cls="btn btn-outline-primary admin-inline-btn mb-3"),
+                section_card("Fellowship details", "Choose the category once; new member registrations inherit it.", form),
+            ),
+        )
+
+    @app.post("/organization/locations/{location_key}/fellowships/create")
+    async def create_location_fellowship(request: Request, location_key: str):
+        ctx = build_context(request)
+        if not ctx.has_permission("hierarchy:create_fellowship"):
+            return RedirectResponse(ctx.url_for(f"/organization/locations/{location_key}"), status_code=303)
+        data = await request.form()
+        payload = {
+            "location_id": location_key,
+            "fellowship_name": str(data.get("fellowship_name") or "").strip(),
+            "fellowship_code": str(data.get("fellowship_code") or "").strip(),
+            "fellowship_group": str(data.get("fellowship_group") or "").strip(),
+            "fellowship_address": str(data.get("fellowship_address") or "").strip() or None,
+            "leader_in_charge": str(data.get("leader_in_charge") or "").strip() or None,
+        }
+        try:
+            await FellowshipService.create_fellowship(request, payload)
+        except BackendClientError as exc:
+            error = "A fellowship with that code already exists." if exc.status_code == 400 else "The fellowship could not be created. Check the details and try again."
+            return RedirectResponse(ctx.url_for(f"/organization/locations/{location_key}/fellowships/new", error=error), status_code=303)
+        return RedirectResponse(ctx.url_for(f"/organization/locations/{location_key}"), status_code=303)
 
     @app.get("/organization/locations/{location_key}/edit")
     async def edit_location_form(request: Request, location_key: str):

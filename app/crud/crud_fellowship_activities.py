@@ -46,6 +46,8 @@ class CRUDFellowshipMember(CRUDBase[FellowshipMember, FellowshipMemberCreate, Fe
         fel = await fellowship.get(db, id=obj_in.fellowship_id)
         if not fel:
             raise HTTPException(status_code=404, detail="Fellowship not found")
+        if not fel.fellowship_group:
+            raise HTTPException(status_code=409, detail="This fellowship needs an assigned category before members can be added")
             
         path_str = str(fel.path)
         
@@ -63,7 +65,7 @@ class CRUDFellowshipMember(CRUDBase[FellowshipMember, FellowshipMemberCreate, Fe
             phone=obj_in.phone,
             gender=obj_in.gender,
             address=obj_in.address,
-            fellowship_group=obj_in.fellowship_group,
+            fellowship_group=fel.fellowship_group,
             role=obj_in.role
         )
         db.add(db_obj)

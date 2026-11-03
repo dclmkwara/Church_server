@@ -218,6 +218,7 @@ class Fellowship(Base, TimestampMixin, AuditMixin):
     location_id = Column(UUID(as_uuid=False), ForeignKey("locations.location_id"), nullable=False, index=True)
     fellowship_code = Column(String, nullable=False, index=True)
     fellowship_name = Column(String, nullable=False)
+    fellowship_group = Column(String(30), nullable=True, index=True)
     fellowship_address = Column(String, nullable=True)
     associate_church = Column(String, nullable=True)
     location_name = Column(String, nullable=True) # Denormalized

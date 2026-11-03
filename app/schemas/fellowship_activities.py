@@ -22,7 +22,7 @@ class FellowshipMemberBase(BaseModel):
     client_id: Optional[UUID] = None
 
 class FellowshipMemberCreate(FellowshipMemberBase):
-    fellowship_group: Literal["adult", "young_adult", "campus", "youth", "children"]
+    fellowship_group: Optional[Literal["adult", "young_adult", "campus", "youth", "children"]] = None
 
 class FellowshipMemberUpdate(BaseModel):
     name: Optional[str] = None

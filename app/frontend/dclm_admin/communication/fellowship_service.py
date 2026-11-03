@@ -13,6 +13,7 @@ from .async_compat import async_client, dual_mode_class, maybe_await
 from .auth_service import AuthService
 from .people_service import PeopleService
 from .pagination import fetch_all_pages
+from .ttl_cache import invalidate_ttl_prefix
 
 
 def _safe_date(value: Any) -> str:
@@ -133,6 +134,15 @@ class FellowshipService:
         if not token:
             raise BackendClientError("Backend authentication is required for fellowship.")
         return token
+
+    @staticmethod
+    async def create_fellowship(request, payload: dict[str, Any]) -> dict[str, Any]:
+        client = async_client(get_api_client())
+        row = await maybe_await(client.create_fellowship(FellowshipService._token(request), payload))
+        invalidate_ttl_prefix(("fellowship",))
+        invalidate_ttl_prefix(("organization", "hierarchy_tree"))
+        invalidate_ttl_prefix(("organization", "location_profile_summary"))
+        return row
 
     @staticmethod
     def _details_key(location_id: str) -> tuple[str, str, str]:

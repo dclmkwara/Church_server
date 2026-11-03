@@ -24,7 +24,7 @@ Example:
 """
 from typing import List, Optional, Any
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from fastapi import HTTPException
 
 from app.crud.base import CRUDBase
@@ -444,6 +444,7 @@ class CRUDFellowship(CRUDBase[Fellowship, FellowshipCreate, FellowshipUpdate]):
             location_id=obj_in.location_id,
             fellowship_code=obj_in.fellowship_code,
             fellowship_name=obj_in.fellowship_name,
+            fellowship_group=obj_in.fellowship_group,
             fellowship_address=obj_in.fellowship_address,
             associate_church=obj_in.associate_church,
             leader_in_charge=obj_in.leader_in_charge,
@@ -454,5 +455,20 @@ class CRUDFellowship(CRUDBase[Fellowship, FellowshipCreate, FellowshipUpdate]):
         await db.commit()
         await db.refresh(db_obj)
         return db_obj
+
+    async def update(self, db: AsyncSession, *, db_obj: Fellowship, obj_in: FellowshipUpdate) -> Fellowship:
+        update_data = obj_in.model_dump(exclude_unset=True)
+        category_changed = "fellowship_group" in update_data
+        updated = await super().update(db, db_obj=db_obj, obj_in=update_data)
+        if category_changed:
+            from app.models.fellowship_activities import FellowshipMember
+
+            await db.execute(
+                update(FellowshipMember)
+                .where(FellowshipMember.fellowship_id == updated.fellowship_id)
+                .values(fellowship_group=updated.fellowship_group)
+            )
+            await db.commit()
+        return updated
 
 fellowship = CRUDFellowship(Fellowship)
