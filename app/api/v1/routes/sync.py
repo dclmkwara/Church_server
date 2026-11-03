@@ -4,7 +4,7 @@ Sync Routes.
 Handles batch synchronization from offline clients.
 """
 from typing import Any, List, Dict, Tuple
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from fastapi import APIRouter, Depends, HTTPException, Body, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,7 +14,10 @@ import logging
 
 from app.api import deps
 from app.models.location import Fellowship
-from app.models.user import User
+from app.models.user import User, Worker
+from app.models.attendance import WorkerAttendance, WorkerAttendanceSubmission
+from app.models.location import Location
+from app.models.programs import ProgramEvent
 from app.schemas.sync import SyncBatchRequest, SyncBatchResponse, SyncResult
 from app.db.filters import scope_filter
 
@@ -23,6 +26,7 @@ from app.crud.crud_counts import count as crud_count
 from app.crud.crud_offerings import offering as crud_offering
 from app.crud.crud_records import record as crud_record
 from app.crud.crud_attendance import attendance as crud_worker_attendance
+from app.crud.workflow_rules import ensure_collection_open, load_event_campaign, require_approved_worker_user
 from app.crud.crud_fellowship_activities import (
     member as crud_fellowship_member,
     attendance as crud_fellowship_attendance,
@@ -47,6 +51,7 @@ def _sync_batch_size(batch: SyncBatchRequest) -> int:
         + len(batch.offerings)
         + len(batch.records)
         + len(batch.worker_attendance)
+        + len(batch.worker_attendance_submissions)
         + len(batch.fellowship_members)
         + len(batch.fellowship_attendance)
         + len(batch.fellowship_offerings)
@@ -102,7 +107,7 @@ async def _fetch_changes(
     db: AsyncSession,
     model: Any,
     since_dt: datetime,
-    scope_path: str,
+    current_user: User,
     limit: int,
     *,
     as_of: datetime,
@@ -112,7 +117,7 @@ async def _fetch_changes(
     conditions = [
         or_(model.created_at > since_dt, model.last_modify > since_dt),
         changed_at <= as_of,
-        _scope_filter(model, scope_path),
+        deps.scope_condition(model.path, current_user),
     ]
     if position:
         try:
@@ -215,7 +220,7 @@ async def _attendance_key_conflicts(
     scope_path: str,
     limit: int = 50,
 ) -> List[Dict[str, Any]]:
-    from app.models.attendance import WorkerAttendance
+    from app.models.attendance import WorkerAttendance, WorkerAttendanceSubmission
     query = select(
         WorkerAttendance.worker_id,
         WorkerAttendance.event_id,
@@ -319,6 +324,132 @@ async def process_sync_list(
     return result
 
 
+async def process_attendance_submissions(
+    db: AsyncSession,
+    items: list[Any],
+    current_user: User,
+    scope_cache: Dict[str, bool],
+) -> SyncResult:
+    """Atomically persist one aggregate capture and its report-friendly worker rows."""
+    from fastapi import HTTPException
+
+    result = SyncResult()
+    details = []
+    for item in items:
+        try:
+            await _ensure_sync_item_in_scope(db, current_user, item, scope_cache)
+            existing = (await db.execute(
+                select(WorkerAttendanceSubmission).where(
+                    WorkerAttendanceSubmission.client_id == item.client_id
+                )
+            )).scalars().first()
+            if existing:
+                deps.ensure_path_in_scope(current_user, existing.path, detail="Existing attendance submission is outside your scope")
+                result.duplicates += 1
+                details.append({"client_id": str(item.client_id), "id": str(existing.id), "status": "duplicate"})
+                continue
+
+            await require_approved_worker_user(db, current_user.user_id)
+            if item.submitted_by_worker_id and item.submitted_by_worker_id != current_user.worker_id:
+                raise HTTPException(status_code=403, detail="Attendance submitter must match the signed-in worker")
+            location = await db.get(Location, item.location_id)
+            if not location:
+                raise HTTPException(status_code=404, detail="Location not found")
+            if item.church_type.strip().lower() != location.church_type.strip().lower():
+                raise HTTPException(status_code=422, detail="Church section does not match this location")
+            if str(item.program_domain or "").lower() not in {"weekly", "retreat", "conference"} or not any(
+                token in item.program_type.lower() for token in ("worker", "leader", "leadership", "overseer")
+            ):
+                raise HTTPException(status_code=422, detail="Worker attendance is only accepted for worker or leader meetings, conferences, and retreats")
+            event = await db.get(ProgramEvent, item.event_id) if item.event_id else None
+            if item.event_id and (not event or event.is_deleted):
+                raise HTTPException(status_code=404, detail="Scheduled program was not found")
+            if event:
+                campaign = await load_event_campaign(db, event)
+                ensure_collection_open(event, campaign, kind="attendance")
+                if str(location.path) != str(event.path) and not str(location.path).startswith(f"{event.path}."):
+                    raise HTTPException(status_code=400, detail="Location must fall within the selected program scope")
+                if event.date != item.date.date():
+                    raise HTTPException(status_code=400, detail="Attendance date must match the scheduled program date")
+
+            worker_ids = [worker.worker_id for worker in item.present_workers]
+            worker_result = await db.execute(select(Worker).where(
+                Worker.worker_id.in_(worker_ids),
+                Worker.location_id == item.location_id,
+                Worker.is_deleted.is_(False),
+                Worker.approval_status == "approved",
+            ))
+            workers = {worker.worker_id: worker for worker in worker_result.scalars().all()}
+            missing_ids = set(worker_ids) - set(workers)
+            if missing_ids:
+                raise HTTPException(status_code=422, detail="One or more selected workers are no longer approved at this location. Refresh the roster and try again.")
+
+            roster_count_result = await db.execute(select(func.count(Worker.worker_id)).where(
+                Worker.location_id == item.location_id,
+                Worker.is_deleted.is_(False),
+                Worker.approval_status == "approved",
+            ))
+            actual_roster_count = int(roster_count_result.scalar_one())
+            if item.expected_workers_count != actual_roster_count:
+                raise HTTPException(status_code=409, detail="The approved worker roster changed. Refresh the roster before submitting attendance.")
+
+            duplicate_query = select(WorkerAttendance.worker_id).where(
+                WorkerAttendance.location_id == item.location_id,
+                WorkerAttendance.worker_id.in_(worker_ids),
+                WorkerAttendance.is_deleted.is_(False),
+                WorkerAttendance.event_id == item.event_id if item.event_id else (
+                    WorkerAttendance.event_id.is_(None) & (WorkerAttendance.date == item.date)
+                ),
+            ).limit(1)
+            if (await db.execute(duplicate_query)).scalar_one_or_none() is not None:
+                raise HTTPException(status_code=409, detail="At least one selected worker is already recorded for this service. Refresh attendance to avoid duplicate counts.")
+
+            path = str(location.path)
+            submission = WorkerAttendanceSubmission(
+                client_id=item.client_id, path=path, location_id=item.location_id,
+                event_id=item.event_id, date=item.date,
+                church_type=item.church_type or location.church_type,
+                program_domain=item.program_domain, program_type=item.program_type,
+                expected_workers_count=actual_roster_count,
+                present_count=len(workers),
+                present_workers=[{
+                    "worker_id": str(workers[worker_id].worker_id),
+                    "worker_name": workers[worker_id].name,
+                } for worker_id in worker_ids],
+                entered_by_id=current_user.user_id,
+                submitted_by_worker_id=current_user.worker_id,
+                submitted_by_name=current_user.name,
+                note=item.note,
+            )
+            db.add(submission)
+            await db.flush()
+            for worker_id in worker_ids:
+                worker = workers[worker_id]
+                db.add(WorkerAttendance(
+                    submission_id=submission.id,
+                    client_id=uuid5(item.client_id, str(worker_id)),
+                    path=path, location_id=item.location_id, event_id=item.event_id,
+                    date=item.date,
+                    church_type=item.church_type or location.church_type,
+                    program_domain=item.program_domain, program_type=item.program_type,
+                    worker_id=worker.worker_id, worker_name=worker.name,
+                    worker_phone=worker.phone, worker_unit=worker.unit,
+                    status="present", entered_by_id=current_user.user_id,
+                ))
+            await db.commit()
+            result.synced += 1
+            details.append({"client_id": str(item.client_id), "id": str(submission.id), "status": "synced", "present_count": len(workers)})
+        except Exception as exc:
+            await db.rollback()
+            result.errors += 1
+            message = str(exc.detail) if isinstance(exc, HTTPException) else "Unable to process this attendance submission"
+            if not isinstance(exc, HTTPException):
+                logger.exception("Aggregate attendance sync failed")
+            details.append({"client_id": str(item.client_id), "status": "error", "error": message})
+    result.details = details
+    return result
+
+
 @router.post(
     "/batch",
     response_model=SyncBatchResponse,
@@ -347,6 +478,9 @@ async def batch_sync(
     offerings_res = await process_sync_list(db, batch.offerings, crud_offering, current_user, scope_cache)
     records_res = await process_sync_list(db, batch.records, crud_record, current_user, scope_cache)
     worker_att_res = await process_sync_list(db, batch.worker_attendance, crud_worker_attendance, current_user, scope_cache)
+    worker_att_submissions_res = await process_attendance_submissions(
+        db, batch.worker_attendance_submissions, current_user, scope_cache
+    )
     
     fel_mem_res = await process_sync_list(db, batch.fellowship_members, crud_fellowship_member, current_user, scope_cache)
     fel_att_res = await process_sync_list(db, batch.fellowship_attendance, crud_fellowship_attendance, current_user, scope_cache)
@@ -357,6 +491,7 @@ async def batch_sync(
         offerings=offerings_res,
         records=records_res,
         worker_attendance=worker_att_res,
+        worker_attendance_submissions=worker_att_submissions_res,
         fellowship_members=fel_mem_res,
         fellowship_attendance=fel_att_res,
         fellowship_offerings=fel_off_res
@@ -407,13 +542,12 @@ async def get_incremental_changes(
         raise HTTPException(status_code=400, detail="Invalid incremental sync cursor")
     
     # Get user's scope path
-    scope_path = deps.effective_scope_path(current_user)
-    
     bucket_models = {
         "counts": Count,
         "offerings": Offering,
         "records": Record,
         "worker_attendance": WorkerAttendance,
+        "worker_attendance_submissions": WorkerAttendanceSubmission,
         "fellowship_members": FellowshipMember,
         "fellowship_attendance": FellowshipAttendance,
         "fellowship_offerings": FellowshipOffering,
@@ -423,7 +557,7 @@ async def get_incremental_changes(
     has_more = {}
     for name, model in bucket_models.items():
         rows, more, next_position = await _fetch_changes(
-            db, model, since_dt, scope_path, limit,
+            db, model, since_dt, current_user, limit,
             as_of=as_of,
             position=positions.get(name),
         )
@@ -438,6 +572,7 @@ async def get_incremental_changes(
     offerings = pages["offerings"]
     records = pages["records"]
     worker_attendance = pages["worker_attendance"]
+    worker_attendance_submissions = pages["worker_attendance_submissions"]
     fellowship_members = pages["fellowship_members"]
     fellowship_attendance = pages["fellowship_attendance"]
     fellowship_offerings = pages["fellowship_offerings"]
@@ -451,6 +586,21 @@ async def get_incremental_changes(
         "worker_attendance": [
             _sync_payload(a, location_id=a.location_id, worker_id=str(a.worker_id), event_id=str(a.event_id))
             for a in worker_attendance
+        ],
+        "worker_attendance_submissions": [
+            _sync_payload(
+                submission,
+                location_id=submission.location_id,
+                event_id=str(submission.event_id) if submission.event_id else None,
+                date=submission.date.isoformat(),
+                present_count=submission.present_count,
+                expected_workers_count=submission.expected_workers_count,
+                present_workers=submission.present_workers,
+                entered_by_id=str(submission.entered_by_id),
+                submitted_by_worker_id=str(submission.submitted_by_worker_id) if submission.submitted_by_worker_id else None,
+                submitted_by_name=submission.submitted_by_name,
+            )
+            for submission in worker_attendance_submissions
         ],
         "fellowship_members": [
             _sync_payload(m, fellowship_id=m.fellowship_id)
@@ -469,6 +619,7 @@ async def get_incremental_changes(
             + len(offerings)
             + len(records)
             + len(worker_attendance)
+            + len(worker_attendance_submissions)
             + len(fellowship_members)
             + len(fellowship_attendance)
             + len(fellowship_offerings)

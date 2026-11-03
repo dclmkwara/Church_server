@@ -33,6 +33,58 @@ class WorkerAttendanceBase(BaseModel):
 class WorkerAttendanceCreate(WorkerAttendanceBase):
     pass
 
+
+class AttendancePresentWorker(BaseModel):
+    worker_id: UUID
+    worker_name: str = Field(min_length=1, max_length=255)
+
+
+class WorkerAttendanceSubmissionCreate(BaseModel):
+    client_id: UUID
+    location_id: str
+    event_id: Optional[UUID] = None
+    date: datetime
+    church_type: str = Field(min_length=1, max_length=40)
+    program_domain: Optional[str] = Field(None, max_length=80)
+    program_type: str = Field(min_length=1, max_length=120)
+    expected_workers_count: int = Field(ge=0)
+    present_workers: list[AttendancePresentWorker] = Field(min_length=1, max_length=5000)
+    submitted_by_worker_id: Optional[UUID] = None
+    note: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_capture(self):
+        ids = [worker.worker_id for worker in self.present_workers]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Attendance capture cannot contain the same worker more than once")
+        if self.expected_workers_count < len(ids):
+            raise ValueError("Present worker count cannot exceed the expected roster count")
+        if self.event_id is None and (not self.program_domain or self.program_domain.lower() == "crusade"):
+            raise ValueError("Attendance requires program metadata; crusade attendance requires a scheduled event")
+        return self
+
+
+class WorkerAttendanceSubmissionResponse(BaseModel):
+    id: UUID
+    client_id: UUID
+    path: str
+    location_id: str
+    event_id: Optional[UUID]
+    date: datetime
+    church_type: str
+    program_domain: Optional[str]
+    program_type: str
+    expected_workers_count: int
+    present_count: int
+    present_workers: list[AttendancePresentWorker]
+    entered_by_id: UUID
+    submitted_by_worker_id: Optional[UUID]
+    submitted_by_name: str
+    note: Optional[str]
+    created_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
 class WorkerAttendanceUpdate(BaseModel):
     status: Optional[Literal["present", "absent", "late", "excused"]] = None
     reason: Optional[str] = None

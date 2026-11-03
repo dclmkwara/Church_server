@@ -11,12 +11,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api import deps
 from app.db.filters import scope_filter
 from app.crud.crud_attendance import attendance as crud_attendance
-from app.schemas.attendance import WorkerAttendanceCreate, WorkerAttendanceResponse, WorkerAttendanceUpdate, WorkerLookupResponse
+from app.schemas.attendance import (
+    WorkerAttendanceCreate, WorkerAttendanceResponse, WorkerAttendanceUpdate,
+    WorkerLookupResponse, WorkerAttendanceSubmissionResponse,
+)
 from app.schemas.user import WorkerResponse
 from app.schemas.sync import SyncResult
 from sqlalchemy import select, func, text, case
 from datetime import date
 from app.models.user import User
+from app.models.attendance import WorkerAttendanceSubmission
 
 router = APIRouter()
 
@@ -127,6 +131,27 @@ async def read_attendance(
         db, scope_path=search_scope, skip=skip, limit=limit
     )
     return deps.filter_rows_in_scope(rows, current_user)
+
+
+@router.get(
+    "/submissions",
+    response_model=List[WorkerAttendanceSubmissionResponse],
+    dependencies=[Depends(deps.PermissionChecker("attendance:read"))],
+)
+async def read_attendance_submissions(
+    db: AsyncSession = Depends(deps.get_db),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+    scope_path: str = Query(None, description="Optional narrower scope path"),
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Read complete usher captures, including the roster and authenticated submitter."""
+    query = select(WorkerAttendanceSubmission).where(
+        deps.scope_condition(WorkerAttendanceSubmission.path, current_user, scope_path),
+        WorkerAttendanceSubmission.is_deleted.is_(False),
+    ).order_by(WorkerAttendanceSubmission.date.desc(), WorkerAttendanceSubmission.created_at.desc())
+    result = await db.execute(query.offset(skip).limit(limit))
+    return result.scalars().all()
 
 
 @router.get(

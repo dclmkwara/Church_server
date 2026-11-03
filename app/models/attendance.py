@@ -2,7 +2,7 @@
 Worker Attendance models.
 """
 from sqlalchemy import Column, String, ForeignKey, Integer, Date, DateTime, Boolean, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 import uuid
 
@@ -51,6 +51,7 @@ class WorkerAttendance(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     
     # Metadata
     note = Column(Text, nullable=True)
+    submission_id = Column(UUID(as_uuid=True), ForeignKey("worker_attendance_submissions.id", ondelete="SET NULL"), nullable=True, index=True)
     entered_by_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False, index=True)
     
     # Relationships
@@ -60,6 +61,36 @@ class WorkerAttendance(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     
     def __repr__(self):
         return f"<WorkerAttendance(worker='{self.worker_name}', status='{self.status}')>"
+
+
+class WorkerAttendanceSubmission(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
+    """One usher's complete roster capture for one service context."""
+    __tablename__ = "worker_attendance_submissions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    client_id = Column(UUID(as_uuid=True), nullable=False, unique=True)
+    path = Column(LtreeType, nullable=False, index=True)
+    location_id = Column(UUID(as_uuid=False), ForeignKey("locations.location_id"), nullable=False, index=True)
+    event_id = Column(UUID(as_uuid=True), ForeignKey("program_events.id"), nullable=True, index=True)
+    date = Column(DateTime(timezone=True), nullable=False, index=True)
+    church_type = Column(String(40), nullable=False, index=True)
+    program_domain = Column(String(80), nullable=True, index=True)
+    program_type = Column(String(120), nullable=False, index=True)
+    expected_workers_count = Column(Integer, nullable=False)
+    present_count = Column(Integer, nullable=False)
+    present_workers = Column(JSONB, nullable=False)
+    entered_by_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False, index=True)
+    submitted_by_worker_id = Column(UUID(as_uuid=True), ForeignKey("workers.worker_id"), nullable=True, index=True)
+    submitted_by_name = Column(String(255), nullable=False)
+    note = Column(Text, nullable=True)
+
+    event = relationship("ProgramEvent")
+    location = relationship("Location")
+    entered_by = relationship("User", foreign_keys=[entered_by_id])
+    attendance_rows = relationship("WorkerAttendance", foreign_keys="WorkerAttendance.submission_id")
+
+    def __repr__(self):
+        return f"<WorkerAttendanceSubmission(id='{self.id}', present_count={self.present_count})>"
 
 
 class WorkerAbsenceNotice(Base, TimestampMixin):

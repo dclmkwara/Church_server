@@ -15,7 +15,7 @@ from app.models.programs import ProgramDomain, ProgramType, ProgramCampaign, Pro
 from app.models.counts import Count
 from app.models.offerings import Offering, OfferingAudit
 from app.models.records import Record
-from app.models.attendance import WorkerAttendance
+from app.models.attendance import WorkerAttendance, WorkerAttendanceSubmission
 from app.models.fellowship_activities import FellowshipMember, FellowshipAttendance, FellowshipOffering
 from app.models.audit import IdempotencyKey, AuditLog, NotificationReadState
 from app.models.announcement import Announcement, AnnouncementItem
