@@ -15,10 +15,10 @@ from .request_cache import request_cached
 
 
 LEVEL_STAGE_MAP = {
-    4: "Group review",
-    5: "Region review",
-    6: "State review",
-    7: "National review",
+    2: "Receiving Location Pastor",
+    3: "Group Pastor review",
+    4: "Regional Pastor review",
+    5: "State Overseer review",
 }
 
 
@@ -60,6 +60,14 @@ def _requested_by_label(requested_by: str, identity) -> str:
 def _normalize_transfer(row: dict[str, Any], worker: dict[str, Any] | None, identity) -> dict[str, Any]:
     request_id = str(row.get("id") or "")
     status = str(row.get("status") or "pending")
+    reviews = row.get("reviews") or []
+    stage = str(row.get("workflow_stage") or "origin_group")
+    stage_labels = {
+        "origin_group": "Originating Group Pastor",
+        "receiving_location": "Receiving Location Pastor",
+        "receiving_group": "Receiving Group Pastor",
+        "region": "Regional Pastor",
+    }
     return {
         "request_id": _request_token("transfer_request", request_id),
         "backend_kind": "transfer_request",
@@ -68,29 +76,24 @@ def _normalize_transfer(row: dict[str, Any], worker: dict[str, Any] | None, iden
         "worker_name": worker["name"] if worker else "Unknown worker",
         "request_type": "transfer_request",
         "status": status,
-        "current_stage": "Awaiting transfer review" if status == "pending" else "Transfer approved" if status == "approved" else "Transfer rejected",
+        "current_stage": stage_labels.get(stage, "Transfer approved" if status == "approved" else "Transfer rejected"),
         "origin_location": worker["location"] if worker else str(row.get("from_location_id") or "-"),
         "destination_location": str(row.get("to_location_id") or "-"),
         "requested_by": _requested_by_label(str(row.get("requested_by") or ""), identity),
         "submitted_at": _safe_date(row.get("created_at")),
         "summary": str(row.get("reason") or "Transfer request waiting for review."),
-        "timeline": [
-            {"label": "Submitted", "state": "done", "note": "Transfer request created."},
-            {"label": "Review", "state": "current" if status == "pending" else "done", "note": "Awaiting decision."},
-            {"label": "Final decision", "state": "pending" if status == "pending" else "done", "note": status.replace("_", " ").title()},
-        ],
-        "review_history": (
-            [
-                {
-                    "reviewer": str(row.get("approved_by") or "Reviewer"),
-                    "action": "approve",
-                    "note": "Transfer approved.",
-                    "time": _safe_date(row.get("approved_at")),
-                }
-            ]
-            if row.get("approved_by")
-            else []
-        ),
+        "timeline": [{"label": "Submitted", "state": "done", "note": "Transfer request created."}] + [
+            {"label": stage_labels.get(str(item.get("workflow_stage") or ""), str(item.get("action") or "Review").replace("_", " ").title()),
+             "state": "done" if item is not reviews[-1] or status in {"approved", "rejected"} else "current",
+             "note": str(item.get("notes") or item.get("action") or "Reviewed")}
+            for item in reviews
+        ] + ([{"label": stage_labels.get(stage, "Final decision"), "state": "current", "note": "Awaiting approval."}] if status not in {"approved", "rejected", "completed"} else []),
+        "review_history": [{
+            "reviewer": str(item.get("reviewer_id") or "Reviewer"),
+            "action": str(item.get("action") or "review"),
+            "note": str(item.get("notes") or ""),
+            "time": _safe_date(item.get("at")),
+        } for item in reviews],
         "path": worker.get("path") if worker else "",
         "allow_escalate": False,
     }

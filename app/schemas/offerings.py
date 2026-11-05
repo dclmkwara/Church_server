@@ -21,6 +21,7 @@ class OfferingBase(BaseModel):
     location_id: str
     date: Optional[datetime] = None
     church_type: Optional[str] = Field(None, max_length=40)
+    program_level: Optional[str] = Field(None, pattern="^(Local|Group|Region|State|National|Global)$", description="Local, Group, Region, State, National, or Global")
     program_domain: Optional[str] = Field(None, max_length=80)
     program_type: Optional[str] = Field(None, max_length=120)
     
@@ -31,17 +32,17 @@ class OfferingBase(BaseModel):
     note: Optional[str] = None
     client_id: Optional[UUID] = None # For offline sync
 
+class OfferingCreate(OfferingBase):
+    _amount_precision = field_validator("amount")(_validate_amount_precision)
+
     @model_validator(mode="after")
     def require_context_without_event(self):
         if self.event_id is None:
-            if not self.date or not self.church_type or not self.program_domain or not self.program_type:
-                raise ValueError("Eventless offerings require service date, church section, program domain, and program type")
+            if not self.date or not self.church_type or not self.program_level or not self.program_domain or not self.program_type:
+                raise ValueError("Eventless offerings require service date, church section, program level, program domain, and program type")
             if self.program_domain.lower() == "crusade":
                 raise ValueError("Crusade offerings require a scheduled event")
         return self
-
-class OfferingCreate(OfferingBase):
-    _amount_precision = field_validator("amount")(_validate_amount_precision)
 
 class OfferingUpdate(BaseModel):
     """Non-financial metadata edit; amounts require a reasoned correction."""
@@ -82,6 +83,7 @@ class OfferingReversal(BaseModel):
 class OfferingResponse(OfferingBase):
     id: UUID
     path: str
+    program_scope_path: Optional[str] = None
     status: str
     reviewed_by_id: Optional[UUID] = None
     reviewed_at: Optional[datetime] = None

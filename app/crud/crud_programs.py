@@ -15,9 +15,15 @@ from app.crud.workflow_rules import validate_campaign_transition
 EVENT_MODES = {"regular", "retreat", "crusade", "special"}
 REPORTING_SCOPES = {"location", "group", "region", "state", "nation", "continent", "global"}
 CAMPAIGN_STATUSES = {"draft", "active", "closed", "archived"}
-ASSIGNMENT_TYPES = {"count", "convert", "both"}
+ASSIGNMENT_TYPES = {"count", "convert", "attendance", "both", "all"}
 SOURCE_ROLES = {"alpha", "satellite", "regular"}
 ASSIGNMENT_STATUSES = {"pending", "approved", "rejected"}
+
+
+async def get_worker_by_public_id(db: AsyncSession, worker_id: UUID) -> Optional[Worker]:
+    """Resolve the worker UUID exposed by clients, not the integer ORM PK."""
+    result = await db.execute(select(Worker).where(Worker.worker_id == worker_id))
+    return result.scalars().first()
 AUDIENCE_SEGMENTS = {"adult", "campus", "youth", "children"}
 
 class CRUDProgramDomain(CRUDBase[ProgramDomain, ProgramDomainCreate, ProgramDomainUpdate]):
@@ -133,7 +139,10 @@ class CRUDProgramEvent(CRUDBase[ProgramEvent, ProgramEventCreate, ProgramEventUp
             payload['alpha_location_id'] = payload.get('alpha_location_id') or campaign.alpha_location_id
             payload['event_mode'] = payload.get('event_mode') or campaign.event_mode
             payload['reporting_scope'] = payload.get('reporting_scope') or campaign.reporting_scope
-        return await super().create(db, obj_in=payload)
+        # The generic CRUD base accepts Pydantic schemas, while event creation
+        # enriches the validated schema with campaign defaults above. Pass the
+        # enriched fields as a schema-shaped object instead of a raw dict.
+        return await super().create(db, obj_in=ProgramEventCreate.model_validate(payload))
     async def update(self, db: AsyncSession, *, db_obj: ProgramEvent, obj_in: ProgramEventUpdate | dict[str, Any]) -> ProgramEvent:
         payload = obj_in if isinstance(obj_in, dict) else obj_in.model_dump(exclude_unset=True)
         for field in ("program_type_id", "date", "path", "event_mode", "reporting_scope", "is_public", "is_alpha_event"):
@@ -170,9 +179,19 @@ class CRUDEventAssignment(CRUDBase[EventAssignment, EventAssignmentCreate, Event
             raise HTTPException(status_code=400, detail="Invalid assignment status")
     async def create_for_event(self, db: AsyncSession, *, event: ProgramEvent, obj_in: EventAssignmentCreate, assigned_by_id: UUID) -> EventAssignment:
         self._validate(assignment_type=obj_in.assignment_type, source_role=obj_in.source_role, status=None)
-        worker = await db.get(Worker, obj_in.worker_id)
-        if not worker:
+        if event.reporting_scope in {"group", "region", "state"} and obj_in.source_role != "regular":
+            raise HTTPException(status_code=400, detail="Combined-meeting assignments must use the regular reporting source")
+        worker = await get_worker_by_public_id(db, obj_in.worker_id)
+        if not worker or worker.is_deleted:
             raise HTTPException(status_code=404, detail="Worker not found")
+        if worker.approval_status != "approved":
+            raise HTTPException(status_code=400, detail="Only an approved worker may receive an event assignment")
+        if obj_in.source_role == "alpha" and not event.alpha_location_id:
+            raise HTTPException(status_code=400, detail="Alpha assignment requires an event host location")
+        if obj_in.source_role == "satellite" and event.event_mode != "crusade":
+            raise HTTPException(status_code=400, detail="Satellite assignments are only valid for crusade events")
+        if obj_in.source_role == "regular" and event.event_mode in {"crusade", "retreat"}:
+            raise HTTPException(status_code=400, detail="Crusade and retreat assignments must identify alpha or satellite source")
         existing = await db.execute(select(EventAssignment).where(EventAssignment.event_id == event.id, EventAssignment.worker_id == obj_in.worker_id))
         if existing.scalars().first():
             raise HTTPException(status_code=400, detail="Worker already assigned to this event")

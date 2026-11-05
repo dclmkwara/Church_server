@@ -3,9 +3,11 @@ from __future__ import annotations
 import re
 
 PROFILE_BY_SCORE = {
-    3: "location_pastor",
-    4: "group_pastor",
-    5: "region_pastor",
+    1: "location_pastor",
+    2: "location_pastor",
+    3: "group_pastor",
+    4: "region_pastor",
+    5: "state_overseer",
     6: "state_overseer",
     7: "state_overseer",
     8: "state_overseer",
@@ -130,7 +132,7 @@ STATE_CODE_BY_NAME = {
 
 
 def profile_key_for_score(score: int) -> str:
-    if score <= 3:
+    if score <= 2:
         return "location_pastor"
     return PROFILE_BY_SCORE.get(score, "state_overseer")
 

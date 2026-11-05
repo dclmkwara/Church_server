@@ -16,7 +16,7 @@ from typing import Any, List, Optional
 from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
@@ -26,6 +26,7 @@ from app.db.filters import scope_filter
 from app.crud.crud_worker import worker as crud_worker
 from app.schemas.user import WorkerCreate, WorkerResponse, WorkerUpdate
 from app.models.user import Worker, User
+from app.models.approvals import StatusChangeRequest
 
 router = APIRouter()
 
@@ -154,6 +155,8 @@ async def list_pending_workers(
     scope_path: str = Query(None, description="Filter by scope path"),
 ) -> Any:
     """List pending worker registrations within scope."""
+    if deps.highest_role_score(current_user) < 3:
+        raise HTTPException(status_code=403, detail="Group Pastor approval is required to review registrations")
     search_scope = deps.resolve_scope_path(current_user, scope_path)
     query = select(Worker).where(
         Worker.approval_status == "pending_verification",
@@ -230,6 +233,10 @@ async def create_worker(
         db, current_user=current_user, location_id=worker_in.location_id,
         detail="You can only create workers within your scope",
     )
+    if deps.highest_role_score(current_user) != 2 or not any(role.role_name == "Location Pastor" for role in (current_user.roles or [])):
+        raise HTTPException(status_code=403, detail="Worker registration is initiated by the Location Pastor")
+    if str(worker_in.location_id) != str(current_user.location_id):
+        raise HTTPException(status_code=403, detail="Location Pastors may register workers only at their assigned location")
     try:
         worker = await crud_worker.create(db, obj_in=worker_in)
     except IntegrityError:
@@ -330,6 +337,13 @@ async def update_worker(
     """
     worker = await _get_worker_or_404(db, worker_id)
     deps.ensure_path_in_scope(current_user, worker.path, detail="Worker outside your scope")
+    update_data = worker_in.model_dump(exclude_unset=True)
+    if "status" in update_data or "approval_status" in update_data:
+        raise HTTPException(status_code=403, detail="Worker status changes require the approval workflow")
+    if "location_id" in update_data and update_data["location_id"] != str(worker.location_id):
+        raise HTTPException(status_code=403, detail="Worker transfers must use the transfer workflow")
+    if not any(role.role_name in {"Location Pastor", "Location Admin"} for role in (current_user.roles or [])):
+        raise HTTPException(status_code=403, detail="Worker profile edits are limited to location administrators")
     worker = await crud_worker.update(db, db_obj=worker, obj_in=worker_in)
     return worker
 
@@ -348,6 +362,8 @@ async def approve_worker_registration(
     """Approve a pending worker registration."""
     worker = await _get_worker_or_404(db, worker_id)
     deps.ensure_path_in_scope(current_user, worker.path, detail="Worker outside your scope")
+    if deps.highest_role_score(current_user) < 3:
+        raise HTTPException(status_code=403, detail="Group Pastor approval is required for worker registration")
     if worker.approval_status != "pending_verification":
         raise HTTPException(status_code=400, detail=f"Worker is already {worker.approval_status}")
     worker.approval_status = "approved"
@@ -378,6 +394,8 @@ async def reject_worker_registration(
 
     worker = await _get_worker_or_404(db, worker_id)
     deps.ensure_path_in_scope(current_user, worker.path, detail="Worker outside your scope")
+    if deps.highest_role_score(current_user) < 3:
+        raise HTTPException(status_code=403, detail="Group Pastor review is required for worker registration")
     if worker.approval_status != "pending_verification":
         raise HTTPException(status_code=400, detail=f"Worker is already {worker.approval_status}")
     worker.approval_status = "rejected"
@@ -385,6 +403,54 @@ async def reject_worker_registration(
     worker.rejection_reason = reason
     worker.approved_by = current_user.user_id
     worker.approved_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(worker)
+    return worker
+
+
+@router.post(
+    "/{worker_id}/suspend",
+    response_model=WorkerResponse,
+    dependencies=[Depends(deps.PermissionChecker("workers:update"))],
+)
+async def suspend_worker(
+    *,
+    db: AsyncSession = Depends(deps.get_db),
+    worker_id: UUID,
+    note: Optional[str] = Body(None, embed=True),
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Allow the assigned Location Pastor to suspend a worker pending review."""
+    if deps.highest_role_score(current_user) < 2:
+        raise HTTPException(status_code=403, detail="Location Pastor or higher authority is required to suspend a worker")
+    worker = await _get_worker_or_404(db, worker_id)
+    deps.ensure_path_in_scope(current_user, worker.path, detail="Worker outside your scope")
+    if worker.is_deleted or worker.approval_status != "approved" or str(worker.status or "").lower() != "active":
+        raise HTTPException(status_code=400, detail="Only an active approved worker can be suspended")
+    if str(worker.status or "").lower() == "suspended":
+        raise HTTPException(status_code=400, detail="Worker is already suspended")
+    if note and len(note.strip()) < 10:
+        raise HTTPException(status_code=400, detail="Suspension note must be at least 10 characters")
+    now = datetime.now(timezone.utc)
+    db.add(StatusChangeRequest(
+        worker_id=worker.worker_id,
+        old_status=worker.status,
+        new_status="Suspended",
+        status="approved",
+        reason=note.strip() if note else "Suspended by the assigned Location Pastor",
+        requested_by=current_user.user_id,
+        approved_by=current_user.user_id,
+        approved_at=now,
+        path=worker.path,
+    ))
+    worker.status = "Suspended"
+    linked_user = (await db.execute(select(User).where(
+        User.worker_id == worker.worker_id, User.is_deleted.is_(False)
+    ))).scalars().first()
+    if linked_user:
+        linked_user.is_active = False
+        from app.core.auth_cache import invalidate_user_cache
+        invalidate_user_cache(str(linked_user.user_id))
     await db.commit()
     await db.refresh(worker)
     return worker
@@ -402,11 +468,17 @@ async def delete_worker(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Soft delete a worker."""
+    if deps.highest_role_score(current_user) < 3:
+        raise HTTPException(status_code=403, detail="Group Pastor approval or higher is required to remove a worker")
     worker = await _get_worker_or_404(db, worker_id)
     deps.ensure_path_in_scope(current_user, worker.path, detail="Worker outside your scope")
+    linked_user_result = await db.execute(
+        select(User).where(User.worker_id == worker.worker_id, User.is_deleted.is_(False))
+    )
+    linked_user = linked_user_result.scalars().first()
     now = datetime.now(timezone.utc)
     await crud_worker.update(db, db_obj=worker, obj_in={"is_deleted": True, "operation": "DELETE", "last_modify": now})
-    if worker.user:
+    if linked_user:
         from app.crud.crud_user import user as crud_user
-        await crud_user.update(db, db_obj=worker.user, obj_in={"is_deleted": True, "operation": "DELETE", "last_modify": now})
+        await crud_user.update(db, db_obj=linked_user, obj_in={"is_deleted": True, "operation": "DELETE", "last_modify": now})
     return None

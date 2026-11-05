@@ -29,14 +29,21 @@ async def create_record(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Submit a new newcomer/convert record."""
-    await deps.get_location_in_scope(
+    if not record_in.assignment_id:
+        await deps.get_location_in_scope(
+            db,
+            current_user=current_user,
+            location_id=record_in.location_id,
+            detail="Record location outside your scope",
+        )
+    created = await crud_record.create(
         db,
-        current_user=current_user,
-        location_id=record_in.location_id,
-        detail="Record location outside your scope",
+        obj_in=record_in,
+        user_id=current_user.user_id,
+        require_assignment=deps.highest_role_score(current_user) == 1,
     )
-    created = await crud_record.create(db, obj_in=record_in, user_id=current_user.user_id)
-    deps.ensure_path_in_scope(current_user, created.path, detail="Existing record is outside your scope")
+    if not record_in.assignment_id:
+        deps.ensure_path_in_scope(current_user, created.path, detail="Existing record is outside your scope")
     return created
 
 

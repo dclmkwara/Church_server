@@ -481,6 +481,17 @@ class PeopleService:
         return _normalize_worker(result)
 
     @staticmethod
+    async def suspend_worker(request, worker_id: str, note: str = "") -> dict[str, Any] | None:
+        if await PeopleService.use_mock(request):
+            return STORE.suspend_worker(worker_id, actor_name="Location Pastor", note=note)
+        client = async_client(get_api_client())
+        access_token = AuthService.get_access_token(request)
+        result = await client.suspend_worker(access_token, worker_id, note or None)
+        invalidate_ttl_prefix(("people", "workers"))
+        invalidate_ttl_prefix(("people", "users"))
+        return _normalize_worker(result)
+
+    @staticmethod
     async def create_worker(request, payload: dict[str, Any]) -> dict[str, Any] | None:
         if await PeopleService.use_mock(request):
             return None
@@ -693,7 +704,13 @@ async def _list_assignable_roles(request) -> list[dict[str, Any]]:
     client = async_client(get_api_client())
     access_token = AuthService.get_access_token(request)
     rows = await client.list_available_roles(access_token)
-    return sorted([_normalize_role(row) for row in rows], key=lambda row: str(row["role_name"]).lower())
+    # This client is the levels 2-5 console. The shared backend exposes higher
+    # roles to their separate client, but this UI never offers them for assignment.
+    rows = [_normalize_role(row) for row in rows]
+    return sorted(
+        [row for row in rows if row["score_value"] is not None and int(row["score_value"]) <= 5],
+        key=lambda row: str(row["role_name"]).lower(),
+    )
 
 
 async def _update_user_roles(request, account_id: str, role_ids: list[int]) -> dict[str, Any] | None:

@@ -42,14 +42,21 @@ async def create_count(
     Supports offline sync via client_id for idempotency.
     If a count with the same client_id already exists, returns the existing record.
     """
-    await deps.get_location_in_scope(
+    if not count_in.assignment_id:
+        await deps.get_location_in_scope(
+            db,
+            current_user=current_user,
+            location_id=count_in.location_id,
+            detail="Count location outside your scope",
+        )
+    created = await crud_count.create(
         db,
-        current_user=current_user,
-        location_id=count_in.location_id,
-        detail="Count location outside your scope",
+        obj_in=count_in,
+        user_id=current_user.user_id,
+        require_assignment=deps.highest_role_score(current_user) == 1,
     )
-    created = await crud_count.create(db, obj_in=count_in, user_id=current_user.user_id)
-    deps.ensure_path_in_scope(current_user, created.path, detail="Existing count is outside your scope")
+    if not count_in.assignment_id:
+        deps.ensure_path_in_scope(current_user, created.path, detail="Existing count is outside your scope")
     await _broadcast_event("count_created", {"id": str(created.id), "location_id": created.location_id})
     return created
 
@@ -93,6 +100,7 @@ async def read_counts(
 async def aggregate_counts(
     program_domain: Optional[str] = Query(None, description="Program domain name or slug"),
     program_type: Optional[str] = Query(None, description="Program type name or slug"),
+    program_level: Optional[str] = Query(None, description="Program reporting level"),
     location_id: Optional[str] = Query(None, description="Filter by location id"),
     start_date: Optional[datetime] = Query(None),
     end_date: Optional[datetime] = Query(None),
@@ -123,11 +131,13 @@ async def aggregate_counts(
         query = query.where(Count.date <= end_date)
     if location_id:
         query = query.where(Count.location_id == location_id)
+    if program_level:
+        query = query.where(Count.program_level == program_level)
 
     if program_domain or program_type:
         query = query.join(ProgramEvent, ProgramEvent.id == Count.event_id, isouter=True)
-        query = query.join(ProgramType, ProgramType.id == ProgramEvent.program_type_id, isouter=True)
-        query = query.join(ProgramDomain, ProgramDomain.id == ProgramType.domain_id, isouter=True)
+        query = query.join(ProgramType, or_(ProgramType.id == Count.program_type_id, ProgramType.id == ProgramEvent.program_type_id), isouter=True)
+        query = query.join(ProgramDomain, or_(ProgramDomain.id == Count.program_domain_id, ProgramDomain.id == ProgramType.domain_id), isouter=True)
         if program_domain:
             query = query.where(or_(Count.program_domain == program_domain, ProgramDomain.name == program_domain, ProgramDomain.slug == program_domain))
         if program_type:
@@ -146,6 +156,7 @@ async def aggregate_counts_flexible(
     view_level: str = Query(..., description="state, region, group, location"),
     program_domain: Optional[str] = Query(None, description="Program domain name or slug"),
     program_type: Optional[str] = Query(None, description="Program type name or slug"),
+    program_level: Optional[str] = Query(None, description="Program reporting level"),
     start_date: Optional[datetime] = Query(None),
     end_date: Optional[datetime] = Query(None),
     db: AsyncSession = Depends(deps.get_db),
@@ -187,11 +198,13 @@ async def aggregate_counts_flexible(
         query = query.where(Count.date >= start_date)
     if end_date:
         query = query.where(Count.date <= end_date)
+    if program_level:
+        query = query.where(Count.program_level == program_level)
 
     if program_domain or program_type:
         query = query.join(ProgramEvent, ProgramEvent.id == Count.event_id, isouter=True)
-        query = query.join(ProgramType, ProgramType.id == ProgramEvent.program_type_id, isouter=True)
-        query = query.join(ProgramDomain, ProgramDomain.id == ProgramType.domain_id, isouter=True)
+        query = query.join(ProgramType, or_(ProgramType.id == Count.program_type_id, ProgramType.id == ProgramEvent.program_type_id), isouter=True)
+        query = query.join(ProgramDomain, or_(ProgramDomain.id == Count.program_domain_id, ProgramDomain.id == ProgramType.domain_id), isouter=True)
         if program_domain:
             query = query.where(or_(Count.program_domain == program_domain, ProgramDomain.name == program_domain, ProgramDomain.slug == program_domain))
         if program_type:

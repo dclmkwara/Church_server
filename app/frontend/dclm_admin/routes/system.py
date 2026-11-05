@@ -18,15 +18,15 @@ from ..mock_data import STORE, TODAY
 
 
 SYSTEM_ITEMS = [
-    ("overview", "Overview", "/system", 7),
-    ("notifications", "Notifications", "/system/notifications", 7),
-    ("public_intake", "Public Intake", "/system/public-intake", 7),
-    ("versions", "App Versions", "/system/app-versions", 7),
-    ("sync", "Sync Governance", "/system/sync", 7),
-    ("health", "Health", "/system/health", 7),
-    ("audit", "Audit Logs", "/system/audit-logs", 7),
-    ("rbac", "RBAC Studio", "/system/rbac", 9),
-    ("utilities", "Utilities", "/system/utilities", 9),
+    ("overview", "Overview", "/system", 5),
+    ("notifications", "Notifications", "/system/notifications", 5),
+    ("public_intake", "Public Intake", "/system/public-intake", 5),
+    ("versions", "App Versions", "/system/app-versions", 5),
+    ("sync", "Sync Governance", "/system/sync", 5),
+    ("health", "Health", "/system/health", 5),
+    ("audit", "Audit Logs", "/system/audit-logs", 5),
+    ("rbac", "Roles & Permissions", "/system/rbac", 2),
+    ("utilities", "Utilities", "/system/utilities", 5),
 ]
 
 NOTIFICATION_FILTERS = [
@@ -37,7 +37,7 @@ NOTIFICATION_FILTERS = [
 
 
 def _system_allowed(ctx, min_level: int = 7) -> bool:
-    return ctx.level >= min_level
+    return min_level <= ctx.level <= 5 and (min_level != 2 or ctx.has_permission("rbac:read"))
 
 
 def _system_guard(ctx, min_level: int, title: str, body_text: str) -> Div | None:
@@ -45,7 +45,7 @@ def _system_guard(ctx, min_level: int, title: str, body_text: str) -> Div | None
         return None
     return section_card(
         title,
-        "This page opens only for higher-level roles.",
+        "This page is not available to the current role.",
         empty_state("shield-lock", "Access restricted", body_text),
     )
 
@@ -60,7 +60,7 @@ async def _system_nav(ctx, active: str) -> Div:
                 **({"aria_current": "page"} if key == active else {}),
             )
             for key, label, path, min_level in SYSTEM_ITEMS
-            if ctx.level >= min_level
+            if ctx.level >= min_level and (key != "rbac" or ctx.level <= 5)
         ],
         cls="workspace-tab-strip mb-4",
     )
@@ -1053,6 +1053,7 @@ async def _public_prayer_workspace(request: Request, ctx, *, status: str = "all"
 
 async def _rbac_view(request: Request, ctx, *, family: str = "all", search: str = "", oob: bool = False) -> Div:
     roles = await SystemService.list_rbac_roles(request) if await SystemService.live_enabled(request) else STORE.list_rbac_roles()
+    roles = [row for row in roles if 1 <= row["level"] <= 5]
     permissions = await SystemService.list_rbac_permissions(request, family=family, search=search) if await SystemService.live_enabled(request) else STORE.list_rbac_permissions(family=family, search=search)
     roles_rows = []
     roles_cards = [
@@ -1069,17 +1070,6 @@ async def _rbac_view(request: Request, ctx, *, family: str = "all", search: str 
                     data_bs_target="#detail-drawer",
                     hx_get=ctx.url_for(f"/system/rbac/roles/{row['role_id']}/drawer", family=family, search=search),
                     hx_target="#detail-drawer-body",
-                    hx_swap="innerHTML",
-                    cls="w-100",
-                ),
-                Button(
-                    "Edit",
-                    variant="primary",
-                    size="md",
-                    data_bs_toggle="offcanvas",
-                    data_bs_target="#form-drawer",
-                    hx_get=ctx.url_for(f"/system/rbac/roles/{row['role_id']}/edit", family=family, search=search),
-                    hx_target="#form-drawer-body",
                     hx_swap="innerHTML",
                     cls="w-100",
                 ),
@@ -1152,16 +1142,6 @@ async def _rbac_view(request: Request, ctx, *, family: str = "all", search: str 
                         data_bs_target="#detail-drawer",
                         hx_get=ctx.url_for(f"/system/rbac/roles/{row['role_id']}/drawer", family=family, search=search),
                         hx_target="#detail-drawer-body",
-                        hx_swap="innerHTML",
-                    ),
-                    Button(
-                        "Edit",
-                        variant="primary",
-                        size="md",
-                        data_bs_toggle="offcanvas",
-                        data_bs_target="#form-drawer",
-                        hx_get=ctx.url_for(f"/system/rbac/roles/{row['role_id']}/edit", family=family, search=search),
-                        hx_target="#form-drawer-body",
                         hx_swap="innerHTML",
                     ),
                     cls="d-grid gap-2",
@@ -1240,19 +1220,7 @@ async def _rbac_role_drawer_content(request: Request, ctx, role: dict[str, Any],
             P(f"Scope: {role['scope']}", cls="small text-muted mb-0"),
             cls="d-flex flex-wrap gap-2 align-items-center mb-3",
         ),
-        Div(
-            Button(
-                "Edit role",
-                variant="primary",
-                size="md",
-                data_bs_toggle="offcanvas",
-                data_bs_target="#form-drawer",
-                hx_get=ctx.url_for(f"/system/rbac/roles/{role['role_id']}/edit", family=family, search=search),
-                hx_target="#form-drawer-body",
-                hx_swap="innerHTML",
-            ),
-            cls="d-grid gap-2 mb-3",
-        ),
+        P("Permission changes follow the approved governance workflow.", cls="small text-muted mb-3"),
         Div(H4("Description", cls="h6 fw-semibold mb-2"), P(role["description"], cls="mb-0"), cls="drawer-note-box mb-3"),
         Div(
             Div(P("Assigned permissions", cls="small text-muted mb-1"), P(str(role["permission_count"]), cls="fw-semibold mb-0")),
@@ -1345,7 +1313,7 @@ def register_system_routes(app) -> None:
     @app.get("/system")
     async def system_home(request: Request):
         ctx = build_context(request)
-        blocked = _system_guard(ctx, 7, "System", "System tools are reserved for national-level governance roles and above.")
+        blocked = _system_guard(ctx, 5, "System", "System tools open to the state-level administration in this app.")
         if blocked is not None:
             return shell_layout(
                 ctx,
@@ -1360,7 +1328,7 @@ def register_system_routes(app) -> None:
         cards = [
             {"title": label, "path": path}
             for key, label, path, min_level in SYSTEM_ITEMS
-            if key != "overview" and ctx.level >= min_level
+            if key != "overview" and ctx.level >= min_level and (key != "rbac" or ctx.level <= 5)
         ]
         body = page_stack(
             page_intro(
@@ -1401,7 +1369,7 @@ def register_system_routes(app) -> None:
     @app.get("/system/notifications")
     async def system_notifications_page(request: Request, status: str = "all", kind: str = "all"):
         ctx = build_context(request)
-        blocked = _system_guard(ctx, 7, "Notification Center", "Notification history opens from national-level roles upward.")
+        blocked = _system_guard(ctx, 5, "Notification Center", "Notification history opens to state-level administration and above.")
         if blocked is not None:
             body = page_stack(page_intro("System", "System notifications and governance alerts.", scope_label=ctx.current_scope_label, scope_kind=ctx.current_scope_kind), blocked)
         else:
@@ -1427,7 +1395,7 @@ def register_system_routes(app) -> None:
     @app.get("/system/notifications/content")
     async def system_notifications_content(request: Request, status: str = "all", kind: str = "all"):
         ctx = build_context(request)
-        if not _system_allowed(ctx, 7):
+        if not _system_allowed(ctx, 5):
             return Div(
                 section_card(
                     "Notification Center",
@@ -1503,6 +1471,8 @@ def register_system_routes(app) -> None:
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
         ctx = build_context(data)
+        if not _system_allowed(ctx, 5):
+            return P("This action is not available for the current level.", cls="text-muted")
         status_filter = data.get("status_filter", "all")
         kind_filter = data.get("kind_filter", "all")
         if await SystemService.live_enabled(request):
@@ -1539,7 +1509,7 @@ def register_system_routes(app) -> None:
     @app.get("/system/public-intake")
     async def system_public_intake_page(request: Request, contact_status: str = "all", contact_search: str = "", prayer_status: str = "all", prayer_urgent: str = "all", prayer_search: str = ""):
         ctx = build_context(request)
-        blocked = _system_guard(ctx, 7, "Public Intake", "Public website submissions open from national-level roles upward.")
+        blocked = _system_guard(ctx, 5, "Public Intake", "Public website submissions open to state-level administration and above.")
         if blocked is not None:
             body = page_stack(page_intro("System", "Review public website submissions.", scope_label=ctx.current_scope_label, scope_kind=ctx.current_scope_kind), blocked)
         elif not await SystemService.live_enabled(request):
@@ -1642,6 +1612,8 @@ def register_system_routes(app) -> None:
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
         ctx = build_context(data)
+        if not _system_allowed(ctx, 5):
+            return P("This action is not available for the current level.", cls="text-muted")
         row = await SystemService.review_public_contact(request, submission_id, status=data.get("status", "reviewed"), review_note=data.get("review_note", ""))
         if row is None:
             return P("Public contact submission not found.", cls="text-muted")
@@ -1695,6 +1667,8 @@ def register_system_routes(app) -> None:
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
         ctx = build_context(data)
+        if not _system_allowed(ctx, 5):
+            return P("This action is not available for the current level.", cls="text-muted")
         row = await SystemService.review_public_prayer(request, submission_id, status=data.get("status", "reviewed"), review_note=data.get("review_note", ""))
         if row is None:
             return P("Public prayer submission not found.", cls="text-muted")
@@ -1718,7 +1692,7 @@ def register_system_routes(app) -> None:
     @app.get("/system/sync")
     async def system_sync_page(request: Request):
         ctx = build_context(request)
-        blocked = _system_guard(ctx, 7, "Sync Governance", "Sync governance opens from national-level roles upward.")
+        blocked = _system_guard(ctx, 5, "Sync Governance", "Sync governance opens to state-level administration and above.")
         if blocked is not None:
             body = page_stack(page_intro("System", "Review sync conflicts and recent offline activity.", scope_label=ctx.current_scope_label, scope_kind=ctx.current_scope_kind), blocked)
         else:
@@ -1791,6 +1765,8 @@ def register_system_routes(app) -> None:
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
         ctx = build_context(data)
+        if not _system_allowed(ctx, 5):
+            return P("This action is not available for the current level.", cls="text-muted")
         resolution = data.get("resolution", "keep_server")
         result = await SystemService.resolve_sync_conflict(request, conflict_id, resolution=resolution)
         if result is None:
@@ -1816,7 +1792,7 @@ def register_system_routes(app) -> None:
     @app.get("/system/app-versions")
     async def system_app_versions_page(request: Request, platform: str = "", status: str = "all"):
         ctx = build_context(request)
-        blocked = _system_guard(ctx, 7, "App Version Management", "App version management opens from national-level roles upward.")
+        blocked = _system_guard(ctx, 5, "App Version Management", "App version management opens to state-level administration and above.")
         if blocked is not None:
             body = page_stack(page_intro("System", "Manage app release records.", scope_label=ctx.current_scope_label, scope_kind=ctx.current_scope_kind), blocked)
         else:
@@ -1851,7 +1827,7 @@ def register_system_routes(app) -> None:
                 ),
             )
         primary = None
-        if _system_allowed(ctx, 7):
+        if _system_allowed(ctx, 5):
             primary = primary_button(
                 "Add Version",
                 href="#",
@@ -1874,7 +1850,7 @@ def register_system_routes(app) -> None:
     @app.get("/system/app-versions/new")
     async def new_app_version_form(request: Request):
         ctx = build_context(request)
-        if not _system_allowed(ctx, 7):
+        if not _system_allowed(ctx, 5):
             return P("This form is not available for the current level.", cls="text-muted")
         live_mode = await SystemService.live_enabled(request)
         return Form(
@@ -1998,6 +1974,8 @@ def register_system_routes(app) -> None:
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
         ctx = build_context(data)
+        if not _system_allowed(ctx, 5):
+            return P("This action is not available for the current level.", cls="text-muted")
         row = (
             await SystemService.activate_app_version(request, version_id)
             if await SystemService.live_enabled(request)
@@ -2028,7 +2006,7 @@ def register_system_routes(app) -> None:
     @app.get("/system/health")
     async def system_health_page(request: Request):
         ctx = build_context(request)
-        blocked = _system_guard(ctx, 7, "System Health", "Health monitoring opens from national-level roles upward.")
+        blocked = _system_guard(ctx, 5, "System Health", "Health monitoring opens to state-level administration and above.")
         body = page_stack(
             page_intro("System", "Review the current health picture without turning this into a dense operations console.", scope_label=ctx.current_scope_label, scope_kind=ctx.current_scope_kind),
             _system_nav(ctx, "health"),
@@ -2047,7 +2025,7 @@ def register_system_routes(app) -> None:
     @app.get("/system/audit-logs")
     async def system_audit_logs_page(request: Request, search: str = "", status: str = "all"):
         ctx = build_context(request)
-        blocked = _system_guard(ctx, 7, "Audit Logs", "Audit logs open from national-level roles upward.")
+        blocked = _system_guard(ctx, 5, "Audit Logs", "Audit logs open to state-level administration and above.")
         body = page_stack(
             page_intro("System", "Inspect governance actions and important system events in plain language.", scope_label=ctx.current_scope_label, scope_kind=ctx.current_scope_kind),
             _system_nav(ctx, "audit"),
@@ -2072,7 +2050,7 @@ def register_system_routes(app) -> None:
     @app.get("/system/audit-logs/content")
     async def system_audit_logs_content(request: Request, search: str = "", status: str = "all"):
         ctx = build_context(request)
-        if not _system_allowed(ctx, 7):
+        if not _system_allowed(ctx, 5):
             return Div(
                 section_card(
                     "Audit Logs",
@@ -2098,7 +2076,7 @@ def register_system_routes(app) -> None:
     @app.get("/system/rbac")
     async def system_rbac_page(request: Request, family: str = "all", search: str = ""):
         ctx = build_context(request)
-        blocked = _system_guard(ctx, 9, "RBAC Studio", "RBAC Studio is restricted to the highest admin level.")
+        blocked = _system_guard(ctx, 2, "RBAC Studio", "RBAC Studio is available to levels 2 through 5 in this application.")
         body = page_stack(
             page_intro("System", "Read roles and permission families using the same backend vocabulary already normalized in the API.", scope_label=ctx.current_scope_label, scope_kind=ctx.current_scope_kind),
             _system_nav(ctx, "rbac"),
@@ -2123,7 +2101,7 @@ def register_system_routes(app) -> None:
     @app.get("/system/rbac/roles/{role_id}/drawer")
     async def system_rbac_role_drawer(request: Request, role_id: str, family: str = "all", search: str = ""):
         ctx = build_context(request)
-        if not _system_allowed(ctx, 9):
+        if not _system_allowed(ctx, 2):
             return P("This detail view is not available for the current level.", cls="text-muted")
         role = await SystemService.get_rbac_role(request, role_id) if await SystemService.live_enabled(request) else STORE.get_rbac_role(role_id)
         if role is None:
@@ -2133,7 +2111,7 @@ def register_system_routes(app) -> None:
     @app.get("/system/rbac/permissions/{permission_id}/drawer")
     async def system_rbac_permission_drawer(request: Request, permission_id: str):
         ctx = build_context(request)
-        if not _system_allowed(ctx, 9):
+        if not _system_allowed(ctx, 2):
             return P("This detail view is not available for the current level.", cls="text-muted")
         permission = await SystemService.get_rbac_permission(request, permission_id) if await SystemService.live_enabled(request) else STORE.get_rbac_permission(permission_id)
         if permission is None:
@@ -2142,57 +2120,16 @@ def register_system_routes(app) -> None:
 
     @app.get("/system/rbac/roles/{role_id}/edit")
     async def system_rbac_role_edit(request: Request, role_id: str, family: str = "all", search: str = ""):
-        ctx = build_context(request)
-        if not _system_allowed(ctx, 9):
-            return P("This form is not available for the current level.", cls="text-muted")
-        role = await SystemService.get_rbac_role(request, role_id) if await SystemService.live_enabled(request) else STORE.get_rbac_role(role_id)
-        if role is None:
-            return P("Role not found.", cls="text-muted")
-        return await _rbac_role_form(request, ctx, role, family=family, search=search)
+        return P("Role permission changes require the approved governance workflow.", cls="text-muted")
 
     @app.post("/system/rbac/roles/{role_id}/update")
     async def system_rbac_role_update(request: Request, role_id: str):
-        form = await request.form()
-        data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
-        if not _system_allowed(ctx, 9):
-            return P("This action is not available for the current level.", cls="text-muted")
-        if await SystemService.live_enabled(request):
-            permission_ids = sorted(
-                int(key.replace("perm_", ""))
-                for key in data
-                if key.startswith("perm_") and key.replace("perm_", "").isdigit()
-            )
-            role = await SystemService.update_rbac_role(
-                request,
-                role_id,
-                description=data.get("description", ""),
-                permission_ids=permission_ids,
-            )
-        else:
-            role = STORE.update_rbac_role(role_id, data, actor_name=ctx.profile.user_name)
-        if role is None:
-            return P("Role not found.", cls="text-muted")
-        family = data.get("family", "all")
-        search = data.get("search", "")
-        return simple_toast_response(
-            content=(
-                Div(H3("RBAC role updated", cls="h5 fw-semibold"), P(f"{role['name']} was updated in RBAC Studio.", cls="mb-0")),
-                await _rbac_view(request, ctx, family=family, search=search, oob=True),
-                Div(
-                    await _rbac_role_drawer_content(request, ctx, role, family=family, search=search),
-                    id="detail-drawer-body",
-                    hx_swap_oob="innerHTML:#detail-drawer-body",
-                ),
-            ),
-            message="RBAC role updated.",
-            variant="success",
-        )
+        return P("Role permission changes require the approved governance workflow.", cls="text-muted")
 
     @app.get("/system/utilities")
     async def system_utilities_page(request: Request):
         ctx = build_context(request)
-        blocked = _system_guard(ctx, 9, "Utilities", "Utilities are restricted to the highest admin level.")
+        blocked = _system_guard(ctx, 5, "Utilities", "Utilities open to state-level administration and above.")
         body = page_stack(
             page_intro("System", "Keep administrative utilities explicit and separated from day-to-day operations.", scope_label=ctx.current_scope_label, scope_kind=ctx.current_scope_kind),
             _system_nav(ctx, "utilities"),
@@ -2267,7 +2204,7 @@ def register_system_routes(app) -> None:
     @app.post("/system/utilities/run")
     async def run_system_utility(request: Request, action: str = ""):
         ctx = build_context(request)
-        if not _system_allowed(ctx, 9):
+        if not _system_allowed(ctx, 5):
             return P("This utility is not available for the current level.", cls="text-muted")
         result = (
             await SystemService.run_utility(request, action)

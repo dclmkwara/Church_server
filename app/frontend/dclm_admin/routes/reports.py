@@ -601,7 +601,7 @@ def register_report_routes(app) -> None:
     @app.get("/reports")
     async def reports_page(request: Request, tab: str = "summary", start_date: str = "", end_date: str = ""):
         ctx = build_context(request)
-        if ctx.level < 3 or not ctx.has_permission("reports:read"):
+        if ctx.level < 2 or not ctx.has_permission("reports:read"):
             body = page_stack(section_card(
                 "Reports",
                 "Scoped reports are available to oversight roles at Level 3 and above.",
@@ -652,7 +652,7 @@ def register_report_routes(app) -> None:
     @app.get("/reports/content")
     async def reports_content(request: Request, tab: str = "summary"):
         ctx = build_context(request)
-        if ctx.level < 3 or not ctx.has_permission("reports:read"):
+        if ctx.level < 2 or not ctx.has_permission("reports:read"):
             return Div(
                 section_card(
                     "Reports",

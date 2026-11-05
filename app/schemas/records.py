@@ -9,6 +9,7 @@ class RecordBase(BaseModel):
     location_id: str
     date: Optional[datetime] = None
     church_type: Optional[str] = Field(None, max_length=40)
+    program_level: Optional[str] = Field(None, pattern="^(Local|Group|Region|State|National|Global)$", description="Local, Group, Region, State, National, or Global")
     program_domain: Optional[str] = Field(None, max_length=80)
     program_type: Optional[str] = Field(None, max_length=120)
     assignment_id: Optional[UUID] = None
@@ -23,17 +24,15 @@ class RecordBase(BaseModel):
     campaign_code: Optional[str] = None
     submission_channel: str = Field(default="admin_web")
 
+class RecordCreate(RecordBase):
     @model_validator(mode="after")
     def require_context_without_event(self):
         if self.event_id is None:
-            if not self.date or not self.church_type or not self.program_domain or not self.program_type:
-                raise ValueError("Eventless registrations require service date, church section, program domain, and program type")
+            if not self.date or not self.church_type or not self.program_level or not self.program_domain or not self.program_type:
+                raise ValueError("Eventless registrations require service date, church section, program level, program domain, and program type")
             if self.program_domain.lower() == "crusade":
                 raise ValueError("Crusade registrations require a scheduled event")
         return self
-
-class RecordCreate(RecordBase):
-    pass
 
 class RecordUpdate(BaseModel):
     name: Optional[str] = None
@@ -45,6 +44,7 @@ class RecordUpdate(BaseModel):
 class RecordResponse(RecordBase):
     id: UUID
     path: str
+    program_scope_path: Optional[str] = None
     status: str
     entered_by_id: UUID
     created_at: Optional[datetime] = None

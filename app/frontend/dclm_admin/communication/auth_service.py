@@ -78,7 +78,7 @@ class AuthService:
             access_token=str(tokens.get("access_token") or ""),
             refresh_token=str(tokens.get("refresh_token") or ""),
             user=user,
-            profile_key=profile_key_for_score(role_score or 3),
+            profile_key=profile_key_for_score(role_score or 2),
             role_score=role_score,
             role_name=role_name,
             scope_path=home_path,

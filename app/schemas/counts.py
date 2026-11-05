@@ -9,6 +9,7 @@ class CountBase(BaseModel):
     location_id: str
     date: Optional[datetime] = None
     church_type: Optional[str] = Field(None, max_length=40)
+    program_level: Optional[str] = Field(None, pattern="^(Local|Group|Region|State|National|Global)$", description="Local, Group, Region, State, National, or Global")
     program_domain: Optional[str] = Field(None, max_length=80)
     program_type: Optional[str] = Field(None, max_length=120)
     assignment_id: Optional[UUID] = None
@@ -24,17 +25,15 @@ class CountBase(BaseModel):
     campaign_code: Optional[str] = Field(None, deprecated=True)
     submission_channel: str = Field(default="admin_web")
 
+class CountCreate(CountBase):
     @model_validator(mode="after")
     def require_context_without_event(self):
         if self.event_id is None:
-            if not self.date or not self.church_type or not self.program_domain or not self.program_type:
-                raise ValueError("Eventless counts require service date, church section, program domain, and program type")
+            if not self.date or not self.church_type or not self.program_level or not self.program_domain or not self.program_type:
+                raise ValueError("Eventless counts require service date, church section, program level, program domain, and program type")
             if self.program_domain.lower() == "crusade":
                 raise ValueError("Crusade counts require a scheduled event")
         return self
-
-class CountCreate(CountBase):
-    pass
 
 class CountUpdate(BaseModel):
     adult_male: Optional[int] = Field(None, ge=0)
@@ -48,6 +47,7 @@ class CountUpdate(BaseModel):
 class CountResponse(CountBase):
     id: UUID
     path: str
+    program_scope_path: Optional[str] = None
     total: int
     status: str
     entered_by_id: UUID

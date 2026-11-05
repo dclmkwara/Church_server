@@ -25,9 +25,15 @@ class Announcement(Base, TimestampMixin, LTreePathMixin):
     
     sws_topic = Column(String, nullable=True)
     sws_bible_reading = Column(String, nullable=True)
+    sws_hymn = Column(String, nullable=True)
     
     mbs_bible_reading = Column(String, nullable=True)
+    mbs_topic = Column(String, nullable=True)
     sts_study = Column(String, nullable=True)
+    revival_topic = Column(String, nullable=True)
+    revival_info = Column(Text, nullable=True)
+    wedding_announcements = Column(Text, nullable=True)
+    general_announcements = Column(Text, nullable=True)
     
     adult_hcf_lesson = Column(String, nullable=True)
     adult_hcf_volume = Column(String, nullable=True)

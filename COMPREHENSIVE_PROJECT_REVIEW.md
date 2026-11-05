@@ -357,7 +357,7 @@ CREATE MATERIALIZED VIEW mv_daily_counts_by_location AS
 9 - General Overseer / Global Admin
 8 - Continental Leader
 7 - National Overseer
-6 - National Admin
+6 - Zonal Coordinator
 5 - State Pastor
 4 - Regional Pastor
 3 - Group Pastor

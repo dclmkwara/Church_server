@@ -30,8 +30,14 @@ class WorkerAttendance(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     
     # Event Link (Source of Truth for Date, Program Type, Domain)
     event_id = Column(UUID(as_uuid=True), ForeignKey("program_events.id"), nullable=True, index=True)
+    assignment_id = Column(UUID(as_uuid=True), ForeignKey("event_assignments.id"), nullable=True, index=True)
+    assignment_id = Column(UUID(as_uuid=True), ForeignKey("event_assignments.id"), nullable=True, index=True)
     date = Column(DateTime(timezone=True), nullable=False, index=True)
     church_type = Column(String(40), nullable=True, index=True)
+    program_level = Column(String(20), nullable=True, index=True)
+    program_domain_id = Column(Integer, ForeignKey("program_domains.id", ondelete="RESTRICT"), nullable=True, index=True)
+    program_type_id = Column(Integer, ForeignKey("program_types.id", ondelete="RESTRICT"), nullable=True, index=True)
+    program_scope_path = Column(LtreeType, nullable=True, index=True)
     program_domain = Column(String(80), nullable=True, index=True)
     program_type = Column(String(120), nullable=True, index=True)
     
@@ -56,6 +62,8 @@ class WorkerAttendance(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     
     # Relationships
     event = relationship("ProgramEvent")
+    assignment = relationship("EventAssignment")
+    assignment = relationship("EventAssignment")
     worker = relationship("Worker")
     entered_by = relationship("User", foreign_keys=[entered_by_id])
     
@@ -72,8 +80,14 @@ class WorkerAttendanceSubmission(Base, TimestampMixin, SoftDeleteMixin, LTreePat
     path = Column(LtreeType, nullable=False, index=True)
     location_id = Column(UUID(as_uuid=False), ForeignKey("locations.location_id"), nullable=False, index=True)
     event_id = Column(UUID(as_uuid=True), ForeignKey("program_events.id"), nullable=True, index=True)
+    assignment_id = Column(UUID(as_uuid=True), ForeignKey("event_assignments.id"), nullable=True, index=True)
+    assignment_id = Column(UUID(as_uuid=True), ForeignKey("event_assignments.id"), nullable=True, index=True)
     date = Column(DateTime(timezone=True), nullable=False, index=True)
     church_type = Column(String(40), nullable=False, index=True)
+    program_level = Column(String(20), nullable=True, index=True)
+    program_domain_id = Column(Integer, ForeignKey("program_domains.id", ondelete="RESTRICT"), nullable=True, index=True)
+    program_type_id = Column(Integer, ForeignKey("program_types.id", ondelete="RESTRICT"), nullable=True, index=True)
+    program_scope_path = Column(LtreeType, nullable=True, index=True)
     program_domain = Column(String(80), nullable=True, index=True)
     program_type = Column(String(120), nullable=False, index=True)
     expected_workers_count = Column(Integer, nullable=False)
@@ -85,6 +99,8 @@ class WorkerAttendanceSubmission(Base, TimestampMixin, SoftDeleteMixin, LTreePat
     note = Column(Text, nullable=True)
 
     event = relationship("ProgramEvent")
+    assignment = relationship("EventAssignment")
+    assignment = relationship("EventAssignment")
     location = relationship("Location")
     entered_by = relationship("User", foreign_keys=[entered_by_id])
     attendance_rows = relationship("WorkerAttendance", foreign_keys="WorkerAttendance.submission_id")

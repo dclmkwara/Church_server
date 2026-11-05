@@ -117,13 +117,15 @@ def create_admin_access_id(user_path: str, score: int) -> str:
     """
     Derive a scope path from a user's home path and role score.
 
-    Score → scope depth mapping:
-        1-3  → full path (location only)
-        4    → group level  (5 segments)
-        5    → region level (4 segments)
-        6    → state level  (3 segments)
-        7    → national     (2 segments)
-        8-9  → root         (1 segment, 'org')
+    Church score → scope depth mapping:
+        1-2  → full location path (worker/location pastor)
+        3    → group level         (5 segments)
+        4    → region level        (4 segments)
+        5    → state level         (3 segments)
+        6    → zonal jurisdiction (reserved; requires an explicit zonal path)
+        7    → nation level        (reserved national role)
+        8    → continent scope     (resolved through Nation.continent)
+        9    → global scope
 
     Args:
         user_path: e.g. 'org.234.kw.iln.ile.001'
@@ -133,17 +135,24 @@ def create_admin_access_id(user_path: str, score: int) -> str:
         Effective scope path string.
     """
     segments = user_path.split(".")
-    if score <= 3:
+    if score <= 2:
         return user_path
-    if score == 4:
+    if score == 3:
         return ".".join(segments[:5]) if len(segments) >= 5 else user_path
-    if score == 5:
+    if score == 4:
         return ".".join(segments[:4]) if len(segments) >= 4 else user_path
-    if score == 6:
+    if score == 5:
         return ".".join(segments[:3]) if len(segments) >= 3 else user_path
+    if score == 6:
+        # The home-path convention for zonal jurisdiction is not established.
+        # Fail closed to the assigned path until a dedicated zone mapping exists.
+        return user_path
     if score == 7:
         return ".".join(segments[:2]) if len(segments) >= 2 else user_path
-    # score >= 8
+    if score == 8:
+        # Query envelope only. Callers must also apply the resolved continent.
+        return segments[0]
+    # Score 9 is the global super-admin scope.
     return segments[0]
 
 
@@ -152,4 +161,4 @@ def can_assign_role(assigner_score: int, target_score: int) -> bool:
     Return True when the assigner's score is strictly above the target score.
     Users may only assign roles with a lower hierarchy score than their own.
     """
-    return assigner_score > target_score
+    return 1 <= target_score < assigner_score

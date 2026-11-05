@@ -4,7 +4,7 @@ User and authentication related database models.
 This module contains all models related to user management, authentication,
 workers, roles, permissions, and RBAC.
 """
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, Table, UniqueConstraint, DateTime
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, Table, UniqueConstraint, DateTime, Index, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 import uuid
@@ -34,14 +34,15 @@ class RoleScore(Base, TimestampMixin, SoftDeleteMixin):
     Role score model for hierarchical access levels (1-9).
     
     Score hierarchy:
-        1-2: Worker/Usher (location level)
-        3: Location Pastor (location level)
-        4: Group Pastor (group level)
-        5: Regional Pastor (regional level)
-        6: State Pastor (state level)
-        7: National Admin (national level)
-        8: Continental Leader (continental level)
-        9: Global Admin (global level)
+        1: Worker/Usher
+        2: Location Pastor (location level)
+        3: Group Pastor (group level)
+        4: Regional Pastor (regional level)
+        5: State Pastor (state level)
+        6: Zonal Coordinator (reserved for future application)
+        7: National Overseer (reserved for future application)
+        8: Continental / General Administrator (continent level)
+        9: Super Administrator / Superintendent (global level)
     """
     __tablename__ = "role_scores"
     
@@ -126,6 +127,8 @@ class Worker(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     id = Column(Integer, primary_key=True, autoincrement=True)
     worker_id = Column(UUID(as_uuid=True), unique=True, nullable=False, index=True, default=uuid.uuid4)
     user_id = Column(String, unique=True, nullable=False, index=True)  # Custom ID (e.g., W001)
+    client_id = Column(UUID(as_uuid=True), nullable=True)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True, index=True)
     
     # Location information - STRICT ENFORCEMENT: Worker MUST belong to a location
     location_id = Column(
@@ -157,7 +160,7 @@ class Worker(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     approval_status = Column(
         String,
         nullable=False,
-        default="approved",  # approved, pending_verification, rejected
+        default="pending_verification",  # approved, pending_verification, rejected
         index=True
     )
     approved_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True, index=True)
@@ -177,6 +180,7 @@ class Worker(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     __table_args__ = (
         UniqueConstraint('phone', name='uq_worker_phone'),
         UniqueConstraint('email', name='uq_worker_email'),
+        Index("uq_workers_client_id", "client_id", unique=True, postgresql_where=text("client_id IS NOT NULL")),
     )
     
     def __repr__(self):

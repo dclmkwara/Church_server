@@ -17,6 +17,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.api import deps
 from app.db.filters import scope_filter
@@ -160,6 +161,20 @@ async def create_user(
     if not worker:
         raise HTTPException(status_code=404, detail="Worker not found")
     deps.ensure_path_in_scope(current_user, worker.path, detail="Worker outside your scope")
+    if worker.approval_status != "approved":
+        raise HTTPException(status_code=403, detail="A worker must be approved before an application account can be created")
+    if not user_in.roles:
+        raise HTTPException(status_code=400, detail="At least one in-scope role must be assigned")
+    from app.models.user import Role as RoleModel
+    target_roles_result = await db.execute(
+        select(RoleModel).where(RoleModel.id.in_(user_in.roles)).options(selectinload(RoleModel.score))
+    )
+    target_roles = target_roles_result.scalars().all()
+    if len(target_roles) != len(set(user_in.roles)):
+        raise HTTPException(status_code=400, detail="One or more role IDs are invalid")
+    assigner_score = deps.highest_role_score(current_user)
+    if assigner_score < 2 or any((role.score_value != 1 and not security.can_assign_role(assigner_score, role.score_value)) for role in target_roles):
+        raise HTTPException(status_code=403, detail="You may assign worker roles or lower pastoral roles within your authority")
     
     # Create user (CRUD will validate worker exists)
     user = await crud_user.create(db, obj_in=user_in)
@@ -392,21 +407,23 @@ async def assign_roles_to_user(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     deps.ensure_path_in_scope(current_user, user.path, detail="User outside your scope")
+    assigner_score = deps.highest_role_score(current_user)
+    if not 2 <= assigner_score <= 9:
+        raise HTTPException(status_code=403, detail="A recognized pastoral or higher leadership role is required")
     
     # Validate current user can assign these roles by score
     if current_user.roles:
-        current_max = max([r.score.score for r in current_user.roles if r.score])
+        current_max = assigner_score
         # Fetch target roles
         from app.models.user import Role as RoleModel
         from sqlalchemy import select
-        stmt = select(RoleModel).where(RoleModel.id.in_(role_ids))
+        stmt = select(RoleModel).where(RoleModel.id.in_(role_ids)).options(selectinload(RoleModel.score))
         res = await db.execute(stmt)
         target_roles = res.scalars().all()
-        if not target_roles:
+        if len(target_roles) != len(set(role_ids)):
             raise HTTPException(status_code=400, detail="Invalid role IDs")
-        target_max = max([r.score.score for r in target_roles if r.score])
-        if target_max >= current_max:
-            raise HTTPException(status_code=403, detail="Cannot assign roles at or above your level")
+        if any((role.score_value != 1 and not security.can_assign_role(current_max, role.score_value)) for role in target_roles):
+            raise HTTPException(status_code=403, detail="You may assign worker roles or lower pastoral roles within your authority")
     
     user = await crud_user.assign_roles(db, user=user, role_ids=role_ids)
     return user

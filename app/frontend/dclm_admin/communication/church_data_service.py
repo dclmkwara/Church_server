@@ -427,21 +427,9 @@ class ChurchDataService:
     async def attendance_summary(request, ctx) -> dict[str, Any]:
         if not await ChurchDataService.live_enabled(request):
             return STORE.attendance_summary(ctx.current_scope_path)
-        expected = len(await PeopleService.list_workers(request, ctx))
-        rows = await ChurchDataService.list_attendance(request, ctx)
-        present = sum(1 for row in rows if row["status"] == "present")
-        absent = sum(1 for row in rows if row["status"] == "absent")
-        late = sum(1 for row in rows if row["status"] == "late")
-        excused = sum(1 for row in rows if row["status"] == "excused")
-        rate = round((present / expected) * 100) if expected else 0
-        return {
-            "expected": expected,
-            "present": present,
-            "absent": absent,
-            "late": late,
-            "excused": excused,
-            "rate": rate,
-        }
+        client = async_client(get_api_client())
+        access_token = AuthService.get_access_token(request)
+        return await client.get_attendance_stats(access_token)
 
     @staticmethod
     async def _get_attendance_entry_legacy(request, ctx, attendance_id: str) -> dict[str, Any] | None:
@@ -662,13 +650,9 @@ async def _list_attendance_public(request, ctx, *, status: str = "", location: s
 async def _attendance_summary_public(request, ctx) -> dict[str, Any]:
     if await ChurchDataService.use_mock(request):
         return STORE.attendance_summary(ctx.current_scope_path)
-    expected = len(await PeopleService.list_workers(request, ctx))
-    rows = await _list_attendance_public(request, ctx)
-    present = sum(1 for row in rows if row["status"] == "present")
-    absent = sum(1 for row in rows if row["status"] == "absent")
-    late = sum(1 for row in rows if row["status"] == "late")
-    excused = sum(1 for row in rows if row["status"] == "excused")
-    return {"expected": expected, "present": present, "absent": absent, "late": late, "excused": excused, "rate": round((present / expected) * 100) if expected else 0}
+    client = async_client(get_api_client())
+    access_token = AuthService.get_access_token(request)
+    return await client.get_attendance_stats(access_token)
 
 
 async def _create_attendance_public(request, payload: dict[str, Any]) -> dict[str, Any] | None:

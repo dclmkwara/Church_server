@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from ..backend import BackendClientError, format_scope_display_id, split_scope_path
 from ..backend.config import get_backend_config
@@ -19,9 +20,9 @@ from .ttl_cache import invalidate_ttl_prefix, ttl_cached
 FALLBACK_PROGRAM_DOMAINS: list[dict[str, Any]] = [
     {
         "id": 1,
-        "name": "Regular Services",
-        "slug": "regular_services",
-        "description": "Weekly and routine worship, study, workers, and leaders services.",
+        "name": "Weekly Programs",
+        "slug": "weekly_programs",
+        "description": "Weekly worship, study, revival, workers, and leaders meetings.",
     },
     {
         "id": 2,
@@ -31,10 +32,11 @@ FALLBACK_PROGRAM_DOMAINS: list[dict[str, Any]] = [
     },
     {
         "id": 3,
-        "name": "Open Crusade",
-        "slug": "open_crusade",
-        "description": "Monthly crusade and outreach program family.",
+        "name": "Global Crusade",
+        "slug": "global_crusade",
+        "description": "Global Crusade with Kumuyi and its sessions.",
     },
+    {"id": 5, "name": "Conferences", "slug": "conferences", "description": "Workers, ministers, leaders, youth, and campus conferences."},
     {
         "id": 4,
         "name": "Special Programs",
@@ -46,6 +48,16 @@ FALLBACK_PROGRAM_DOMAINS: list[dict[str, Any]] = [
 
 def _today_iso() -> str:
     return date.today().isoformat()
+
+
+def _schedule_datetime(value: str | None) -> str | None:
+    """Interpret admin datetime-local values in the church's configured Nigeria timezone."""
+    if not value:
+        return None
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=ZoneInfo("Africa/Lagos"))
+    return parsed.astimezone(timezone.utc).isoformat()
 
 
 def _event_status(raw_date: str, published_at: str) -> str:
@@ -103,12 +115,21 @@ def _normalize_event(row: dict[str, Any], domain_lookup: dict[int, str]) -> dict
         "location": str(scope_bits.get("location_id") or format_scope_display_id(path) or "Scoped event"),
         "location_id": str(scope_bits.get("location_id") or ""),
         "date": raw_date,
-        "status": _event_status(raw_date, str(row.get("published_at") or "")),
+        "status": "pending approval" if row.get("approval_status") == "pending" else (
+            "rejected" if row.get("approval_status") == "rejected" else _event_status(raw_date, str(row.get("published_at") or ""))
+        ),
         "path": path,
         "created_by": "Backend",
         "is_public": bool(row.get("is_public")),
         "event_mode": str(row.get("event_mode") or "regular"),
         "reporting_scope": str(row.get("reporting_scope") or "location"),
+        "approval_status": str(row.get("approval_status") or "approved"),
+        "created_by_id": str(row.get("created_by_id") or ""),
+        "approved_by_id": str(row.get("approved_by_id") or ""),
+        "approval_note": str(row.get("approval_note") or ""),
+        "alpha_location_id": str(row.get("alpha_location_id") or ""),
+        "collection_window_start": str(row.get("collection_window_start") or ""),
+        "collection_window_end": str(row.get("collection_window_end") or ""),
         "audience_segment": str(row.get("audience_segment") or ""),
     }
 
@@ -656,6 +677,11 @@ class ProgramService:
                 "path": payload.get("path") or "",
                 "title": payload.get("title") or None,
                 "is_public": payload.get("status") == "published",
+                "event_mode": payload.get("event_mode") or "regular",
+                "reporting_scope": payload.get("reporting_scope") or "location",
+                "alpha_location_id": payload.get("alpha_location_id") or None,
+                "collection_window_start": _schedule_datetime(payload.get("collection_window_start")),
+                "collection_window_end": _schedule_datetime(payload.get("collection_window_end")),
                 "audience_segment": payload.get("audience_segment") or None,
             },
         )
@@ -666,6 +692,41 @@ class ProgramService:
         ))
         domain_lookup = {int(row.get("id") or 0): str(row.get("name") or "") for row in domains}
         return _normalize_event(created, domain_lookup)
+
+    @staticmethod
+    async def approve_program_event(request, ctx, event_id: str) -> dict[str, Any] | None:
+        if await ProgramService.use_mock(request):
+            return None
+        client = async_client(get_api_client())
+        token = AuthService.get_access_token(request)
+        updated = await client.approve_program_event(token, event_id)
+        invalidate_ttl_prefix(("programs", "events"))
+        return _normalize_event(updated, {})
+
+    @staticmethod
+    async def reject_program_event(request, ctx, event_id: str, note: str) -> dict[str, Any] | None:
+        if await ProgramService.use_mock(request):
+            return None
+        client = async_client(get_api_client())
+        token = AuthService.get_access_token(request)
+        updated = await client.reject_program_event(token, event_id, note)
+        invalidate_ttl_prefix(("programs", "events"))
+        return _normalize_event(updated, {})
+
+    @staticmethod
+    async def close_event_collection(request, ctx, event_id: str) -> dict[str, Any] | None:
+        if await ProgramService.use_mock(request):
+            return None
+        client = async_client(get_api_client())
+        access_token = AuthService.get_access_token(request)
+        closed = await client.close_event_collection(access_token, event_id)
+        domains = await maybe_await(ttl_cached(
+            ("programs", "domains"), 60.0,
+            lambda: client.list_program_domains(access_token, limit=200),
+        ))
+        domain_lookup = {int(row.get("id") or 0): str(row.get("name") or "") for row in domains}
+        invalidate_ttl_prefix(("programs", "events"))
+        return _normalize_event(closed, domain_lookup)
 
     @staticmethod
     async def create_campaign(request, payload: dict[str, Any]) -> dict[str, Any] | None:

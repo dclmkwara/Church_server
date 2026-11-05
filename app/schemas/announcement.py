@@ -26,9 +26,15 @@ class AnnouncementBase(BaseModel):
     
     sws_topic: Optional[str] = None
     sws_bible_reading: Optional[str] = None
+    sws_hymn: Optional[str] = None
     
     mbs_bible_reading: Optional[str] = None
+    mbs_topic: Optional[str] = None
     sts_study: Optional[str] = None
+    revival_topic: Optional[str] = None
+    revival_info: Optional[str] = None
+    wedding_announcements: Optional[str] = None
+    general_announcements: Optional[str] = None
     
     adult_hcf_lesson: Optional[str] = None
     adult_hcf_volume: Optional[str] = None
@@ -54,9 +60,15 @@ class AnnouncementUpdate(BaseModel):
     
     sws_topic: Optional[str] = None
     sws_bible_reading: Optional[str] = None
+    sws_hymn: Optional[str] = None
     
     mbs_bible_reading: Optional[str] = None
+    mbs_topic: Optional[str] = None
     sts_study: Optional[str] = None
+    revival_topic: Optional[str] = None
+    revival_info: Optional[str] = None
+    wedding_announcements: Optional[str] = None
+    general_announcements: Optional[str] = None
     
     adult_hcf_lesson: Optional[str] = None
     adult_hcf_volume: Optional[str] = None

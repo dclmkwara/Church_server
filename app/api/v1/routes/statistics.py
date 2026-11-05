@@ -1,5 +1,5 @@
 from typing import Optional
-from datetime import date
+from datetime import date as Date
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
@@ -46,7 +46,7 @@ class ChurchStatistics(BaseModel):
     boys: int
     girls: int
     total: int
-    date: Optional[date] = None
+    date: Optional[Date] = None
 
 class UserStatistics(BaseModel):
     active_user: int
@@ -62,7 +62,7 @@ async def get_population_statistics(
     program_domain: Optional[str] = Query(None),
     program_type: Optional[str] = Query(None),
     location_id: Optional[str] = Query(None),
-    date_filter: Optional[date] = Query(None, alias="date"),
+    date_filter: Optional[Date] = Query(None, alias="date"),
     start_month: Optional[int] = Query(None, ge=1, le=12),
     end_month: Optional[int] = Query(None, ge=1, le=12),
     start_year: Optional[int] = Query(None, ge=1900, le=2100),

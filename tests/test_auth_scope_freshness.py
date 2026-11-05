@@ -17,7 +17,7 @@ def test_request_scope_is_recomputed_from_current_database_roles(monkeypatch):
     user = SimpleNamespace(
         user_id="user-1",
         path="org.234.KW.ILR.ILE.003",
-        roles=[SimpleNamespace(score_value=4)],
+        roles=[SimpleNamespace(score_value=3)],
         is_deleted=False,
         is_active=True,
         approval_status="approved",
@@ -47,8 +47,8 @@ def test_request_scope_is_recomputed_from_current_database_roles(monkeypatch):
     returned = asyncio.run(deps.get_current_user(db=object(), token="signed-token"))
 
     assert returned is user
-    assert injected_scopes == [("org.234.KW.ILR.ILE", 4, None, "user-1", ())]
-    assert context_scopes == [(4, ())]
+    assert injected_scopes == [("org.234.KW.ILR.ILE", 3, None, "user-1", ())]
+    assert context_scopes == [(3, ())]
 
 
 def test_request_rejects_unapproved_account(monkeypatch):

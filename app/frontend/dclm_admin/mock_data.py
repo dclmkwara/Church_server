@@ -91,42 +91,44 @@ SCOPE_PATHS = {
 BASE_PROGRAM_DOMAINS = [
     {
         "domain_id": "dom-001",
-        "name": "Sunday Services",
-        "description": "Weekly Sunday worship and teaching meetings.",
+        "name": "Global Crusade",
+        "description": "Global Crusade with Kumuyi and its sessions.",
     },
     {
         "domain_id": "dom-002",
-        "name": "Midweek Meetings",
-        "description": "Bible study, revival hour, and weekday teaching meetings.",
+        "name": "Retreat",
+        "description": "Easter and December retreats and their sessions.",
     },
     {
         "domain_id": "dom-003",
-        "name": "Fellowship Meetings",
-        "description": "Smaller fellowship and home care gatherings.",
+        "name": "Weekly Programs",
+        "description": "Weekly worship, study, revival, workers, and leaders meetings.",
     },
+    {"domain_id": "dom-004", "name": "Conferences", "description": "Workers, ministers, leaders, youth, and campus conferences."},
+    {"domain_id": "dom-005", "name": "Special Programs", "description": "Rallies, solemn assemblies, anniversaries, and other special programs."},
 ]
 
 BASE_PROGRAM_TYPES = [
     {
         "type_id": "typ-001",
-        "domain_id": "dom-001",
-        "domain_name": "Sunday Services",
+        "domain_id": "dom-003",
+        "domain_name": "Weekly Programs",
         "name": "Sunday Worship Service",
         "description": "Main worship service held on Sundays.",
     },
     {
         "type_id": "typ-002",
-        "domain_id": "dom-002",
-        "domain_name": "Midweek Meetings",
-        "name": "Bible Study",
+        "domain_id": "dom-003",
+        "domain_name": "Weekly Programs",
+        "name": "Monday Bible Study",
         "description": "Midweek Bible study service.",
     },
     {
         "type_id": "typ-003",
         "domain_id": "dom-003",
-        "domain_name": "Fellowship Meetings",
-        "name": "Home Care Fellowship",
-        "description": "Smaller care group and fellowship gathering.",
+        "domain_name": "Weekly Programs",
+        "name": "Saturday Workers Meeting",
+        "description": "Weekly workers meeting at the configured reporting level.",
     },
 ]
 
@@ -134,8 +136,8 @@ BASE_PROGRAM_EVENTS = [
     {
         "event_id": "evt-sws-0322",
         "title": "Sunday Worship Service",
-        "domain_id": "dom-001",
-        "domain_name": "Sunday Services",
+        "domain_id": "dom-003",
+        "domain_name": "Weekly Programs",
         "type_id": "typ-001",
         "program_type": "Sunday Worship Service",
         "date": "2026-03-22",
@@ -148,10 +150,10 @@ BASE_PROGRAM_EVENTS = [
     {
         "event_id": "evt-mbs-0324",
         "title": "Monday Bible Study",
-        "domain_id": "dom-002",
-        "domain_name": "Midweek Meetings",
+        "domain_id": "dom-003",
+        "domain_name": "Weekly Programs",
         "type_id": "typ-002",
-        "program_type": "Bible Study",
+        "program_type": "Monday Bible Study",
         "date": "2026-03-24",
         "status": "scheduled",
         "level": "location",
@@ -160,24 +162,24 @@ BASE_PROGRAM_EVENTS = [
         "path": LOCATION_LOOKUP["DLCF Kwara Poly"]["path"],
     },
     {
-        "event_id": "evt-hcf-0326",
-        "title": "Home Care Fellowship",
+        "event_id": "evt-swm-0328",
+        "title": "Saturday Workers Meeting",
         "domain_id": "dom-003",
-        "domain_name": "Fellowship Meetings",
+        "domain_name": "Weekly Programs",
         "type_id": "typ-003",
-        "program_type": "Home Care Fellowship",
-        "date": "2026-03-26",
+        "program_type": "Saturday Workers Meeting",
+        "date": "2026-03-28",
         "status": "scheduled",
         "level": "location",
         "location": "DLCF Kwara Poly",
-        "created_by": "Brother Kehinde Bello",
+        "created_by": "Pastor Samuel Adebayo",
         "path": LOCATION_LOOKUP["DLCF Kwara Poly"]["path"],
     },
     {
         "event_id": "evt-sws-0322-uni",
         "title": "Sunday Worship Service",
-        "domain_id": "dom-001",
-        "domain_name": "Sunday Services",
+        "domain_id": "dom-003",
+        "domain_name": "Weekly Programs",
         "type_id": "typ-001",
         "program_type": "Sunday Worship Service",
         "date": "2026-03-22",
@@ -2460,45 +2462,7 @@ class DemoStore:
         *,
         actor_name: str,
     ) -> dict[str, Any] | None:
-        role = self.get_rbac_role(role_id)
-        if role is None:
-            return None
-        role["description"] = payload.get("description", role.get("description", "")).strip()
-        role["scope"] = payload.get("scope", role.get("scope", ""))
-        role["status"] = payload.get("status", role.get("status", "active"))
-        permission_ids = []
-        for permission in self.rbac_permissions:
-            if payload.get(f"perm_{permission['permission_id']}") == "on":
-                permission_ids.append(permission["permission_id"])
-        role["permission_ids"] = permission_ids
-        role["permission_count"] = len(permission_ids)
-        self.audit_logs.insert(
-            0,
-            {
-                "log_id": f"aud-{len(self.audit_logs) + 1:03d}",
-                "time": f"{TODAY.isoformat()} 10:55",
-                "actor": actor_name,
-                "action": "Updated RBAC role",
-                "target": role["name"],
-                "status": "success",
-                "scope_label": "Global",
-                "path": "global",
-            },
-        )
-        self.system_notifications.insert(
-            0,
-            {
-                "notification_id": f"sysn-{len(self.system_notifications) + 1:03d}",
-                "title": f"RBAC role updated: {role['name']}",
-                "body": "A governance role was updated in the RBAC studio and should be reviewed if this was a production change.",
-                "kind": "rbac",
-                "priority": "medium",
-                "status": "unread",
-                "time": f"{TODAY.isoformat()} 10:55",
-                "path": "global",
-            },
-        )
-        return role
+        return None
 
     def run_system_utility(self, action: str, *, actor_name: str) -> dict[str, str]:
         message_map = {

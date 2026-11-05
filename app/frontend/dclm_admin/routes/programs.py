@@ -7,7 +7,7 @@ from typing import Any
 from fasthtml.common import Button as HtmlButton, Div, Form, H3, H4, Input, Label, Li, Option, P, Select, Span, Textarea, Ul
 from starlette.requests import Request
 
-from faststrap import Button, Icon, PlaceholderCard, Spinner, TabPane, Tabs, ToggleGroup
+from faststrap import Button, Icon, Input as FsInput, Select as FsSelect, PlaceholderCard, Spinner, TabPane, Tabs, ToggleGroup
 
 from ..auth_context import build_context
 from ..backend import BackendClientError
@@ -22,7 +22,7 @@ from ..components.ui import empty_state, filter_field, page_intro, page_stack, r
 EVENT_STATUSES = ["scheduled", "completed", "cancelled", "draft"]
 CAMPAIGN_STATUSES = ["draft", "active", "closed", "archived"]
 CAMPAIGN_MODES = ["crusade", "retreat", "special", "regular"]
-ASSIGNMENT_TYPES = ["both", "count", "convert"]
+ASSIGNMENT_TYPES = ["both", "count", "convert", "attendance", "all"]
 ASSIGNMENT_SOURCE_ROLES = ["alpha", "satellite", "regular"]
 AUDIENCE_SEGMENTS = ["adult", "campus", "youth", "children"]
 
@@ -346,7 +346,8 @@ async def _event_mobile_card(ctx, row):
             cls="d-flex justify-content-between gap-3 mb-1",
         ),
         P(f"{row['program_type']} - {row['domain_name']}", cls="text-muted mb-2"),
-        Div(P(row["location"], cls="small text-muted mb-0"), P(row["date"], cls="small text-muted mb-0"), cls="d-flex justify-content-between gap-2 mb-3"),
+        Div(P(row["location"], cls="small text-muted mb-0"), P(row["date"], cls="small text-muted mb-0"), cls="d-flex justify-content-between gap-2 mb-1"),
+        P(f"{row.get('reporting_scope', 'location').title()} scope · Expires {row.get('collection_window_end') or 'not configured'}", cls="small text-muted mb-3"),
         Button(
             "View details",
             variant="outline-primary",
@@ -398,6 +399,7 @@ async def _events_table(
                 row["domain_name"],
                 row["location"],
                 row["date"],
+                f"{row.get('reporting_scope', 'location').title()} · {row.get('collection_window_end') or 'No expiry'}",
                 status_badge(row["status"]),
                 Button(
                     "View",
@@ -413,7 +415,7 @@ async def _events_table(
         )
         mobile_cards.append(await _event_mobile_card(ctx, row))
     return responsive_table(
-        ["Title", "Type", "Domain", "Location", "Date", "Status", "Action"],
+        ["Title", "Type", "Domain", "Location", "Date", "Scope / expiry", "Status", "Action"],
         desktop_rows,
         mobile_cards,
         results_id="program-events-results",
@@ -614,6 +616,7 @@ async def _campaign_report_panel(ctx, campaign: dict[str, Any], activity: dict[s
 
 async def _assignments_section(request: Request, ctx, event_id: str) -> Div:
     rows = await ProgramService.list_assignments(request, ctx, event_id) if await ProgramService.live_enabled(request) else []
+    event = await ProgramService.get_event(request, ctx, event_id) if await ProgramService.live_enabled(request) else None
     action = (
         primary_button(
             "Assign Worker",
@@ -629,8 +632,8 @@ async def _assignments_section(request: Request, ctx, event_id: str) -> Div:
     )
     if not rows:
         return section_card(
-            "Officiating workers",
-            "Use assignments for crusade alpha-ground count and convert control.",
+            "Assigned field workers",
+            "Approved workers receive this session automatically in Utility while its collection window is open.",
             empty_state("person-check", "No assignments", "No workers are assigned to this event."),
             action or Div(),
             body_id="program-assignment-results",
@@ -936,7 +939,7 @@ async def _programs_workspace(
                             hx_get=ctx.url_for("/church-data/programs/events/new"),
                             hx_target="#form-drawer-body",
                             hx_swap="innerHTML",
-                        ),
+                        ) if ctx.has_permission("programs:create_event") else None,
                         cls="d-flex justify-content-between align-items-center mb-3",
                     ),
                     event_filter_form,
@@ -960,7 +963,7 @@ async def _programs_workspace(
                 hx_get=ctx.url_for("/church-data/programs/events/new"),
                 hx_target="#form-drawer-body",
                 hx_swap="innerHTML",
-            ),
+            ) if ctx.has_permission("programs:create_event") else None,
             Button(
                 Icon("plus-circle", cls="me-1"),
                 "Add Domain",
@@ -1368,70 +1371,52 @@ def register_program_routes(app) -> None:
     @app.get("/church-data/programs/events/new")
     async def new_event_form(request: Request):
         ctx = build_context(request)
+        if not ctx.has_permission("programs:create_event"):
+            return P("Your role is not permitted to create program events.", cls="text-muted")
         domains = await ProgramService.list_domains(request, ctx)
         campaigns = await ProgramService.list_campaigns(request, ctx)
-        raw_locations = await _scope_locations(request, ctx)
-        location_options = [Option(name, value=name) for name in raw_locations]
-        if ctx.level >= 8 or ctx.profile.role_label in ("Global Admin", "National Admin", "State Overseer"):
-            location_options.insert(0, Option("All Churches (Global / Organization-wide)", value="org"))
+        locations = await PeopleService.list_locations(request, ctx)
+        scope_path = str(ctx.current_scope_path or "")
+        scope_depth = len([part for part in scope_path.split(".") if part])
+        scope_for_depth = {3: "state", 4: "region", 5: "group", 6: "location"}
+        reporting_scope = scope_for_depth.get(scope_depth)
+        if reporting_scope not in {"location", "group", "region", "state"}:
+            reporting_scope = {2: "location", 3: "group", 4: "region", 5: "state"}.get(ctx.level, "")
+        if not reporting_scope:
+            return P("Your account does not have a schedulable location, group, region, or state scope.", cls="text-muted")
         return Form(
             *hidden_context_inputs(ctx),
             H3("Create event", cls="h5 fw-semibold"),
-            P("This is the event record other pages will use for counts, finance, and attendance.", cls="text-muted"),
-            Input(type="text", name="title", placeholder="Event title", cls="form-control mb-3", required=True),
+            P("Schedule a program session for your jurisdiction. Admin-created schedules await this level's pastor; a pastor-created schedule is approved immediately.", cls="text-muted"),
+            Input(type="hidden", name="path", value=scope_path),
+            FsInput("title", input_type="text", label="Program session name", placeholder="For example: Combined Workers Meeting", required=True, cls="mb-3"),
             Div(
-                Select(
-                    Option("Select domain", value=""),
-                    *[Option(row["name"], value=row["domain_id"]) for row in domains],
-                    name="domain_id",
-                    cls="form-select",
-                    required=True,
-                ),
-                Select(
-                    Option("Select type", value=""),
-                    *[Option(row["name"], value=row["type_id"]) for row in await ProgramService.list_types(request, ctx)],
-                    name="type_id",
-                    cls="form-select",
-                    required=True,
-                ),
+                FsSelect("domain_id", ("", "Select domain"), *[(row["domain_id"], row["name"]) for row in domains], label="Program domain", required=True),
+                FsSelect("type_id", ("", "Select program type"), *[(row["type_id"], row["name"]) for row in await ProgramService.list_types(request, ctx)], label="Program type", required=True),
                 cls="drawer-two-up mb-3",
             ),
             Div(
-                Select(
-                    Option("No campaign link", value=""),
-                    *[Option(f"{row['title']} ({row['campaign_code']})", value=row["campaign_id"]) for row in campaigns],
-                    name="campaign_id",
-                    cls="form-select",
-                ),
-                Input(type="date", name="date", value=date.today().isoformat(), cls="form-control", required=True),
+            FsSelect("campaign_id", ("", "No campaign link"), *[(row["campaign_id"], f"{row['title']} ({row['campaign_code']})") for row in campaigns], label="Campaign / series"),
+                FsInput("date", input_type="date", label="Session date", value=date.today().isoformat(), required=True),
                 cls="drawer-two-up mb-3",
             ),
-            Select(
-                Option("General audience", value=""),
-                *[Option(_segment_label(name), value=name) for name in AUDIENCE_SEGMENTS],
-                name="audience_segment",
-                cls="form-select mb-3",
-            ),
-            P("Use audience segment for retreat reporting. Leave it blank for general services, crusades, and special programs.", cls="small text-muted mb-3"),
             Div(
-                Select(
-                    Option("Select location", value=""),
-                    *location_options,
-                    name="location",
-                    cls="form-select",
-                    required=True,
-                ),
-                Select(
-                    Option("Select status", value=""),
-                    *[Option(name.title(), value=name) for name in EVENT_STATUSES],
-                    name="status",
-                    cls="form-select",
-                    required=True,
-                ),
+                FsSelect("event_mode", *[(name, name.title(), name == "regular") for name in CAMPAIGN_MODES], label="Program workflow", required=True),
+                FsSelect("reporting_scope", (reporting_scope, reporting_scope.title(), True), label="Reporting jurisdiction", required=True),
                 cls="drawer-two-up mb-3",
             ),
-            Input(type="text", name="created_by", value=ctx.profile.user_name, cls="form-control mb-3", readonly=True),
-            Button("Save event", variant="success", size="md", type="submit", cls="w-100"),
+            FsSelect("alpha_location_id", ("", "No Alpha Location"), *[
+            (str(row.get("location_id") or ""), str(row.get("location_name") or row.get("location_code") or "Church location"))
+                for row in locations if row.get("location_id")
+            ], label="Alpha Location (crusades only)"),
+            P(f"Crusade and Retreat sessions require a campaign with its own collection window. All other sessions use this session's window. Scheduled scope: {reporting_scope} ({scope_path}).", cls="small text-muted mb-3"),
+            Div(
+                FsInput("collection_window_start", input_type="datetime-local", label="Collection opens", required=True),
+                FsInput("collection_window_end", input_type="datetime-local", label="Collection expires", required=True),
+                cls="drawer-two-up mb-3",
+            ),
+            FsSelect("audience_segment", ("", "General audience"), *[(name, _segment_label(name)) for name in AUDIENCE_SEGMENTS], label="Audience segment"),
+            Button("Schedule program", variant="success", size="md", type="submit", cls="w-100"),
             hx_post=ctx.url_for("/church-data/programs/events/create"),
             hx_target="#form-drawer-body",
             hx_swap="innerHTML",
@@ -1442,35 +1427,31 @@ def register_program_routes(app) -> None:
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
         ctx = build_context(data)
-        loc_val = data.get("location", "")
-        if loc_val in ("org", "global", "All Churches (Global / Organization-wide)") or loc_val == ctx.current_scope_path:
-            payload_path = "org" if loc_val in ("org", "global", "All Churches (Global / Organization-wide)") else (ctx.current_scope_path or "org")
-        else:
-            selected_location = next(
-                (
-                    row
-                    for row in await PeopleService.list_locations(request, ctx)
-                    if (row.get("location_name") or row.get("location_id")) == loc_val
-                ),
-                None,
-            )
-            payload_path = str(selected_location.get("path") or "") if selected_location else (ctx.current_scope_path or "org")
-        payload = {**data, "path": payload_path}
+        if not ctx.has_permission("programs:create_event"):
+            return P("Your role is not permitted to create program events.", cls="text-muted")
+        payload = {**data, "path": ctx.current_scope_path}
         row = await ProgramService.create_event(request, payload) if await ProgramService.live_enabled(request) else None
         if row is None:
             return P("Could not save this event right now.", cls="text-muted")
+        approved = row.get("approval_status") == "approved"
+        approval_heading = "Event created and approved" if approved else "Submitted for pastor approval"
+        approval_message = (
+            f"'{row['title']}' is approved and can be assigned to workers."
+            if approved
+            else f"'{row['title']}' was submitted for approval by the pastor at this level. It will become available to assigned workers after approval."
+        )
         return simple_toast_response(
             content=(
                 Div(
-                    H3("Session saved", cls="h5 fw-semibold text-success"),
-                    P(f"'{row['title']}' has been added for {row['location']}.", cls="text-muted mb-3"),
+                    H3(approval_heading, cls="h5 fw-semibold text-success"),
+                    P(approval_message, cls="text-muted mb-3"),
                     Button("Done", variant="primary", size="md", cls="w-100", data_bs_dismiss="offcanvas"),
                 ),
                 await _events_table(request, ctx, oob=True),
                 await _program_summary(request, ctx, oob=True),
             ),
-            message="Program session saved.",
-            variant="success",
+            message="Program created and approved." if approved else "Program submitted for pastor approval.",
+            variant="success" if approved else "warning",
         )
 
     @app.get("/church-data/programs/events/{event_id}/drawer")
@@ -1479,6 +1460,28 @@ def register_program_routes(app) -> None:
         row = await ProgramService.get_event(request, ctx, event_id)
         if row is None:
             return P("Program event not found.", cls="text-muted")
+        expected_pastor = {
+            "location": "Location Pastor", "group": "Group Pastor",
+            "region": "Region Pastor", "state": "State Overseer",
+        }.get(row.get("reporting_scope"))
+        can_approve_event = row.get("approval_status") == "pending" and ctx.profile.role_label == expected_pastor
+        event_approval = Div(
+            P("Awaiting approval from the pastor at this level.", cls="small text-warning mb-2"),
+            Button(
+                "Approve schedule", variant="success", size="md",
+                hx_post=ctx.url_for(f"/church-data/programs/events/{event_id}/approve"),
+                hx_target="#detail-drawer-body", hx_swap="innerHTML", cls="w-100 mb-2",
+            ),
+            Form(
+                Textarea(name="note", placeholder="Reason for rejection (required)", cls="form-control mb-2", rows="2", required=True),
+                Button("Reject schedule", variant="outline-danger", size="md", type="submit", cls="w-100"),
+                hx_post=ctx.url_for(f"/church-data/programs/events/{event_id}/reject"),
+                hx_target="#detail-drawer-body", hx_swap="innerHTML",
+            ),
+            cls="border rounded p-3 mb-3",
+        ) if can_approve_event else Div(
+            P(f"Approval: {str(row.get('approval_status') or 'approved').replace('_', ' ').title()}", cls="small text-muted mb-3")
+        )
         return Div(
             H3(row["title"], cls="h5 fw-semibold"),
             P(f"{row['program_type']} - {row['domain_name']}", cls="text-muted"),
@@ -1486,12 +1489,70 @@ def register_program_routes(app) -> None:
                 Div(P("Status", cls="small text-muted mb-1"), status_badge(row["status"])),
                 Div(P("Date", cls="small text-muted mb-1"), P(row["date"], cls="fw-semibold mb-0")),
                 Div(P("Location", cls="small text-muted mb-1"), P(row["location"], cls="fw-semibold mb-0")),
+                Div(P("Collection window", cls="small text-muted mb-1"), P(f"{row.get('collection_window_start') or 'Not set'} → {row.get('collection_window_end') or 'Not set'}", cls="fw-semibold mb-0")),
                 Div(P("Audience", cls="small text-muted mb-1"), P(_segment_label(str(row.get("audience_segment") or "")), cls="fw-semibold mb-0")),
                 Div(P("Campaign", cls="small text-muted mb-1"), P(row["campaign_title"] or row["campaign_code"] or "Not linked", cls="fw-semibold mb-0")),
                 Div(P("Created by", cls="small text-muted mb-1"), P(row["created_by"], cls="fw-semibold mb-0")),
                 cls="drawer-meta-grid",
             ),
+            event_approval,
+            Button(
+                "End data collection now",
+                variant="outline-danger",
+                size="md",
+                hx_post=ctx.url_for(f"/church-data/programs/events/{event_id}/close-collection"),
+                hx_target="#detail-drawer-body",
+                hx_swap="innerHTML",
+                cls="w-100 mt-3",
+            ),
             _assignments_section(request, ctx, event_id),
+        )
+
+    @app.post("/church-data/programs/events/{event_id}/approve")
+    async def approve_event(request: Request, event_id: str):
+        ctx = build_context(request)
+        try:
+            updated = await ProgramService.approve_program_event(request, ctx, event_id) if await ProgramService.live_enabled(request) else None
+        except BackendClientError as exc:
+            return P(f"Could not approve this schedule: {exc}", cls="text-muted")
+        if updated is None:
+            return P("Could not approve this schedule right now.", cls="text-muted")
+        return simple_toast_response(
+            content=Div(event_drawer(request, event_id), id="detail-drawer-body", hx_swap_oob="innerHTML:#detail-drawer-body"),
+            message="Program schedule approved. Assigned workers can now receive its Utility setup.",
+            variant="success",
+        )
+
+    @app.post("/church-data/programs/events/{event_id}/reject")
+    async def reject_event(request: Request, event_id: str):
+        form = await request.form()
+        note = str(form.get("note") or "Schedule needs correction before approval.")
+        ctx = build_context(request)
+        try:
+            updated = await ProgramService.reject_program_event(request, ctx, event_id, note) if await ProgramService.live_enabled(request) else None
+        except BackendClientError as exc:
+            return P(f"Could not reject this schedule: {exc}", cls="text-muted")
+        if updated is None:
+            return P("Could not reject this schedule right now.", cls="text-muted")
+        return simple_toast_response(
+            content=Div(event_drawer(request, event_id), id="detail-drawer-body", hx_swap_oob="innerHTML:#detail-drawer-body"),
+            message="Program schedule rejected with an approval note.",
+            variant="warning",
+        )
+
+    @app.post("/church-data/programs/events/{event_id}/close-collection")
+    async def close_event_collection(request: Request, event_id: str):
+        ctx = build_context(request)
+        try:
+            updated = await ProgramService.close_event_collection(request, ctx, event_id) if await ProgramService.live_enabled(request) else None
+        except BackendClientError as exc:
+            return P(f"Could not close collection: {exc}", cls="text-muted")
+        if updated is None:
+            return P("Could not close collection right now.", cls="text-muted")
+        return simple_toast_response(
+            content=Div(event_drawer(request, event_id), id="detail-drawer-body", hx_swap_oob="innerHTML:#detail-drawer-body"),
+            message="Program collection ended. Assigned Utility sessions will expire.",
+            variant="success",
         )
 
     @app.get("/church-data/programs/campaigns/{campaign_id}/report")
@@ -1549,6 +1610,7 @@ def register_program_routes(app) -> None:
         event = await ProgramService.get_event(request, ctx, event_id)
         if event is None:
             return P("Program event not found.", cls="text-muted")
+        assignments = await ProgramService.list_assignments(request, ctx, event_id) if await ProgramService.live_enabled(request) else []
         workers = [
             row
             for row in await PeopleService.list_workers(request, ctx)
@@ -1556,36 +1618,27 @@ def register_program_routes(app) -> None:
         ]
         return Form(
             *hidden_context_inputs(ctx),
-            H3("Assign officiating worker", cls="h5 fw-semibold"),
-            P(f"Prepare approved workers for {event['title']}. Alpha-ground count and convert capture will use these assignments.", cls="text-muted"),
-            Select(
-                Option("Select worker", value=""),
-                *[
-                    Option(
-                        f"{row['name']} ({row.get('public_code') or row['worker_id']})",
-                        value=row["worker_id"],
-                    )
-                    for row in workers
-                ],
-                name="worker_id",
-                cls="form-select mb-3",
-                required=True,
-            ),
-            Input(type="text", name="assignment_label", placeholder="Block, zone, desk, or seat section", cls="form-control mb-3"),
+            H3("Assign field worker", cls="h5 fw-semibold"),
+            P(f"Assign approved workers to {event['title']}. Their Utility app will load this session automatically after approval, and access ends when collection expires.", cls="text-muted"),
+            FsSelect("worker_id", ("", "Select worker"), *[
+                (row["worker_id"], f"{row['name']} ({row.get('public_code') or row['worker_id']})")
+                for row in workers
+            ], label="Worker", required=True),
+            P("Assigned workers already scheduled on this event:", cls="small text-muted mt-3 mb-1"),
+            Div(*[
+                Div(Span(row["worker_name"], cls="fw-semibold"), Span(f" · {row['status'].title()} · {row['assignment_type'].title()}", cls="text-muted small"), cls="d-flex justify-content-between border-bottom py-2")
+                for row in assignments
+            ] or [P("No workers assigned yet.", cls="small text-muted")], cls="mb-3"),
+            FsInput("assignment_label", input_type="text", label="Assignment label", placeholder="Block, zone, desk, or seat section", cls="mb-3"),
             Div(
-                Select(
-                    Option("Assignment type", value="both"),
-                    *[Option(name.title(), value=name) for name in ASSIGNMENT_TYPES],
-                    name="assignment_type",
-                    cls="form-select",
-                    required=True,
-                ),
-                Select(
-                    Option("Source role", value="alpha"),
-                    *[Option(name.title(), value=name) for name in ASSIGNMENT_SOURCE_ROLES],
-                    name="source_role",
-                    cls="form-select",
-                    required=True,
+                FsSelect("assignment_type", *[(name, name.replace("_", " ").title(), name == "both") for name in ASSIGNMENT_TYPES], label="Data access", required=True),
+                FsSelect(
+                    "source_role",
+                    *[(name, name.title(), name == ("regular" if event and event.get("reporting_scope") in {"group", "region", "state"} else "alpha"))
+                      for name in ( ["regular"] if event and event.get("reporting_scope") in {"group", "region", "state"}
+                                    else ["alpha", "satellite"] if event and event.get("event_mode") in {"crusade", "retreat"}
+                                    else ["regular"] )],
+                    label="Reporting source", required=True,
                 ),
                 cls="drawer-two-up mb-3",
             ),

@@ -85,7 +85,7 @@ async def _hierarchy_panel(ctx, focus_path: str | None, *, oob: bool = False):
     if oob:
         attrs["hx_swap_oob"] = "outerHTML:#hierarchy-panel"
 
-    if ctx.level < 4:
+    if ctx.level < 3:
         return Div(
             empty_state(
                 "geo-alt",
@@ -403,7 +403,7 @@ def register_organization_routes(app) -> None:
     @app.get("/organization")
     async def organization_root(request: Request):
         ctx = build_context(request)
-        if ctx.level < 4:
+        if ctx.level < 3:
             return RedirectResponse(ctx.url_for(f"/organization/locations/{ctx.current_scope_path.split('.')[-1]}"))
         return RedirectResponse(ctx.url_for("/organization/hierarchy"))
 
@@ -446,7 +446,7 @@ def register_organization_routes(app) -> None:
                     ),
                     cls="d-flex align-items-center gap-2",
                 )
-                if ctx.level >= 4
+                if ctx.level >= 3
                 else None
             ),
             content=body,
@@ -480,7 +480,7 @@ def register_organization_routes(app) -> None:
             ),
         )
         primary = None
-        if ctx.level < 4:
+        if ctx.level < 3:
             primary = primary_button("Open My Location", href=ctx.url_for(f"/organization/locations/{ctx.current_scope_path.split('.')[-1]}"))
         return shell_layout(
             ctx,
@@ -725,7 +725,7 @@ def register_organization_routes(app) -> None:
     async def hierarchy_import_form(request: Request):
         ctx = build_context(request)
         object.__setattr__(ctx, "_request", request)
-        if ctx.level < 4:
+        if ctx.level < 3:
             return P("Hierarchy bulk import requires group level or above authority.", cls="text-muted")
         tree = await OrganizationService.list_hierarchy_tree(request, ctx)
         states = [row for row in tree if row["kind"] == "state"]

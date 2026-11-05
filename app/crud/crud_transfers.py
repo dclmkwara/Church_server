@@ -39,10 +39,21 @@ async def create_transfer(
     worker = worker_result.scalars().first()
     if not worker:
         raise HTTPException(status_code=404, detail="Worker not found")
+    if worker.approval_status != "approved" or str(worker.status or "").lower() != "active":
+        raise HTTPException(status_code=409, detail="Only active approved workers may be transferred")
+    if worker.approval_status != "approved" or str(worker.status or "").lower() != "active":
+        raise HTTPException(status_code=409, detail="Only active approved workers may be transferred")
     if worker.location_id != obj_in.from_location_id:
         raise HTTPException(status_code=400, detail="Origin location does not match the worker record")
     if obj_in.from_location_id == obj_in.to_location_id:
         raise HTTPException(status_code=400, detail="Origin and destination locations must be different")
+    open_transfer = (await db.execute(select(WorkerTransfer.id).where(
+        WorkerTransfer.worker_id == obj_in.worker_id,
+        WorkerTransfer.status.notin_(("completed", "rejected")),
+        WorkerTransfer.is_deleted.is_(False),
+    ).limit(1))).scalar_one_or_none()
+    if open_transfer:
+        raise HTTPException(status_code=409, detail="This worker already has a transfer awaiting review")
 
     origin_context = await db.execute(
         select(Location).where(Location.location_id == obj_in.from_location_id)
@@ -50,8 +61,14 @@ async def create_transfer(
     destination_context = await db.execute(
         select(Location).where(Location.location_id == obj_in.to_location_id)
     )
-    if not origin_context.scalars().first() or not destination_context.scalars().first():
+    origin = origin_context.scalars().first()
+    destination = destination_context.scalars().first()
+    if not origin or not destination:
         raise HTTPException(status_code=404, detail="Transfer location not found")
+    origin_state = (await db.execute(select(State.state_id).join(Region, Region.state_id == State.state_id).join(Group, Group.region_id == Region.region_id).join(Location, Location.group_id == Group.group_id).where(Location.location_id == origin.location_id))).scalar_one_or_none()
+    destination_state = (await db.execute(select(State.state_id).join(Region, Region.state_id == State.state_id).join(Group, Group.region_id == Region.region_id).join(Location, Location.group_id == Group.group_id).where(Location.location_id == destination.location_id))).scalar_one_or_none()
+    if not origin_state or str(origin_state) != str(destination_state):
+        raise HTTPException(status_code=422, detail="Transfers are limited to locations within the same state")
 
     # Generate a collision-resistant reference number without table scans.
     year = datetime.now(timezone.utc).year
@@ -65,6 +82,9 @@ async def create_transfer(
         effective_date=obj_in.effective_date,
         requested_by_id=requested_by_id,
         status="pending",
+        current_level=3,
+        workflow_stage="origin_group",
+        reviews=[{"level": 2, "reviewer_id": str(requested_by_id), "action": "submit", "notes": obj_in.transfer_reason, "at": datetime.now(timezone.utc).isoformat()}],
         reference_number=ref_number,
     )
     db.add(db_obj)
@@ -124,13 +144,39 @@ async def approve_origin(
     *,
     transfer: WorkerTransfer,
     approved_by_id: UUID,
+    approver_score: int = 3,
+    approver_path: Optional[str] = None,
     note: Optional[str] = None,
 ) -> WorkerTransfer:
-    """Origin pastor approves / releases the worker."""
-    transfer.status = "approved_by_origin"
-    transfer.origin_approved_by = approved_by_id
-    transfer.origin_approved_at = datetime.now(timezone.utc)
-    transfer.origin_note = note
+    """Advance one governance stage of a worker transfer."""
+    stage = transfer.workflow_stage or "origin_group"
+    target_id = transfer.from_location_id if stage == "origin_group" else transfer.to_location_id
+    target = (await db.execute(select(Location).where(Location.location_id == target_id))).scalars().first()
+    if not target or (approver_path and not (str(target.path) == str(approver_path) or str(target.path).startswith(str(approver_path).rstrip(".") + "."))):
+        raise HTTPException(status_code=403, detail="Reviewer is outside the location hierarchy required for this stage")
+    now = datetime.now(timezone.utc)
+    reviews = list(transfer.reviews or [])
+    if stage == "origin_group" and approver_score == 3:
+        transfer.origin_approved_by = transfer.group_approved_by = approved_by_id
+        transfer.origin_approved_at = transfer.group_approved_at = now
+        transfer.origin_note = transfer.group_note = note
+        transfer.workflow_stage, transfer.current_level, transfer.status = "receiving_location", 2, "pending_receiving_location"
+    elif stage == "receiving_location" and approver_score == 2:
+        transfer.receiving_location_approved_by = approved_by_id
+        transfer.receiving_location_approved_at = now
+        transfer.receiving_location_note = note
+        transfer.workflow_stage, transfer.current_level, transfer.status = "receiving_group", 3, "pending_receiving_group"
+    elif stage == "receiving_group" and approver_score == 3:
+        transfer.receiving_group_approved_by = approved_by_id
+        transfer.receiving_group_approved_at = now
+        transfer.receiving_group_note = note
+        transfer.workflow_stage, transfer.current_level, transfer.status = "region", 4, "pending_region"
+    elif stage == "region" and approver_score >= 4:
+        return await _complete_transfer(db, transfer=transfer, approved_by_id=approved_by_id, note=note)
+    else:
+        raise HTTPException(status_code=403, detail="Your role cannot approve the current transfer stage")
+    reviews.append({"level": approver_score, "reviewer_id": str(approved_by_id), "action": f"approve_{stage}", "notes": note, "at": now.isoformat()})
+    transfer.reviews = reviews
     await db.commit()
     await db.refresh(transfer)
     return transfer
@@ -143,7 +189,13 @@ async def approve_destination(
     approved_by_id: UUID,
     note: Optional[str] = None,
 ) -> WorkerTransfer:
-    """Destination pastor accepts the worker. Completes the transfer."""
+    """Compatibility wrapper for the receiving Location Pastor approval."""
+    return await approve_origin(db, transfer=transfer, approved_by_id=approved_by_id,
+                                approver_score=2, approver_path=transfer.to_location.path if transfer.to_location else "", note=note)
+
+
+async def _complete_transfer(db: AsyncSession, *, transfer: WorkerTransfer, approved_by_id: UUID, note: Optional[str]) -> WorkerTransfer:
+    """Complete transfer only after origin and receiving leadership approvals."""
     destination_result = await db.execute(
         select(Location, Group, Region, State)
         .join(Group, Group.group_id == Location.group_id)
@@ -166,9 +218,9 @@ async def approve_destination(
     if not worker:
         raise HTTPException(status_code=404, detail="Worker not found")
 
-    transfer.destination_approved_by = approved_by_id
-    transfer.destination_approved_at = datetime.now(timezone.utc)
-    transfer.destination_note = note
+    transfer.destination_approved_by = transfer.region_approved_by = approved_by_id
+    transfer.destination_approved_at = transfer.region_approved_at = datetime.now(timezone.utc)
+    transfer.destination_note = transfer.region_note = note
     transfer.status = "completed"
 
     worker.location_id = location.location_id
@@ -201,12 +253,24 @@ async def reject_transfer(
     *,
     transfer: WorkerTransfer,
     rejected_by_id: UUID,
+    approver_score: int = 3,
+    approver_path: Optional[str] = None,
     rejection_reason: str,
 ) -> WorkerTransfer:
+    if approver_score < transfer.current_level or (transfer.current_level == 2 and approver_score != 2):
+        raise HTTPException(status_code=403, detail="Your role cannot reject at the current transfer stage")
+    stage = transfer.workflow_stage or "origin_group"
+    target_id = transfer.from_location_id if stage == "origin_group" else transfer.to_location_id
+    target = (await db.execute(select(Location).where(Location.location_id == target_id))).scalars().first()
+    if not target or (approver_path and not (str(target.path) == str(approver_path) or str(target.path).startswith(str(approver_path).rstrip(".") + "."))):
+        raise HTTPException(status_code=403, detail="Reviewer is outside the location hierarchy required for this stage")
     transfer.status = "rejected"
     transfer.rejected_by = rejected_by_id
     transfer.rejected_at = datetime.now(timezone.utc)
     transfer.rejection_reason = rejection_reason
+    reviews = list(transfer.reviews or [])
+    reviews.append({"level": approver_score, "reviewer_id": str(rejected_by_id), "action": "reject", "notes": rejection_reason, "at": datetime.now(timezone.utc).isoformat()})
+    transfer.reviews = reviews
     await db.commit()
     await db.refresh(transfer)
     return transfer

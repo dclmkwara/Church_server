@@ -21,48 +21,48 @@ from app.models.user import RoleScore
 ROLE_SCORES = [
     {
         "score": 1,
-        "score_name": "Level 1",
-        "description": "Least level in the church (ordinary usher / basic worker at location).",
+        "score_name": "Church Worker / Usher",
+        "description": "Field worker or usher. This app grants only assigned collection permissions at this level.",
     },
     {
         "score": 2,
-        "score_name": "Level 2",
-        "description": "Special responsibilities at location level (general coordinator, financial secretary, sister welfare, etc.).",
+        "score_name": "Location Pastor",
+        "description": "Location-level pastor responsible for one physical location.",
     },
     {
         "score": 3,
-        "score_name": "Level 3",
-        "description": "Highest location-level authority (location pastor).",
+        "score_name": "Group Pastor",
+        "description": "Group-level pastor responsible for locations in one group.",
     },
     {
         "score": 4,
-        "score_name": "Level 4",
-        "description": "Group level leadership and key positions (group pastors and group officials).",
+        "score_name": "Regional Pastor",
+        "description": "Region-level pastor responsible for groups in one region.",
     },
     {
         "score": 5,
-        "score_name": "Level 5",
-        "description": "Region level leadership and key positions (regional pastors and officials).",
+        "score_name": "State Pastor / Overseer",
+        "description": "State-level pastor responsible for regions in one state.",
     },
     {
         "score": 6,
-        "score_name": "Level 6",
-        "description": "State level leadership and key positions (state pastors and officials).",
+        "score_name": "Zonal Coordinator",
+        "description": "Reserved zonal leadership; scope awaits the church's zone-to-hierarchy mapping.",
     },
     {
         "score": 7,
-        "score_name": "Level 7",
-        "description": "National level leadership and key positions.",
+        "score_name": "National Overseer",
+        "description": "National leadership; overrides state-level authority within the assigned nation.",
     },
     {
         "score": 8,
-        "score_name": "Level 8",
-        "description": "General church admin level leadership.",
+        "score_name": "Continental Leader",
+        "description": "Continental and general administration; overrides national and state authority within the assigned continent.",
     },
     {
         "score": 9,
-        "score_name": "Level 9",
-        "description": "Highest level (super admin & General Superintendents) with all system rights.",
+        "score_name": "General Overseer / Global Admin",
+        "description": "Super-administrator and superintendent with global authority.",
     },
 ]
 

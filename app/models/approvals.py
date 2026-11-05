@@ -1,7 +1,7 @@
 """
 Approval workflow models for transfers, status changes, and worker removal requests.
 """
-from sqlalchemy import Column, String, DateTime, Integer, ForeignKey, Text
+from sqlalchemy import Column, String, DateTime, Integer, ForeignKey, Text, Boolean
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 import uuid
@@ -21,8 +21,26 @@ class TransferRequest(Base, TimestampMixin, LTreePathMixin):
     from_location_id = Column(UUID(as_uuid=False), nullable=False, index=True)
     to_location_id = Column(UUID(as_uuid=False), nullable=False, index=True)
 
-    status = Column(String, default="pending", index=True)  # pending, approved, rejected
+    status = Column(String, default="pending", index=True)  # pending, pending_region, approved, rejected
     reason = Column(String, nullable=True)
+    rejection_reason = Column(Text, nullable=True)
+
+    # Pastoral transfer review: group approval followed by regional approval.
+    current_level = Column(Integer, nullable=False, default=3, server_default="3", index=True)
+    workflow_stage = Column(String, nullable=False, default="origin_group", server_default="origin_group", index=True)
+    group_approved_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True, index=True)
+    group_approved_at = Column(DateTime(timezone=True), nullable=True)
+    group_note = Column(Text, nullable=True)
+    region_approved_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True, index=True)
+    region_approved_at = Column(DateTime(timezone=True), nullable=True)
+    region_note = Column(Text, nullable=True)
+    receiving_location_approved_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True, index=True)
+    receiving_location_approved_at = Column(DateTime(timezone=True), nullable=True)
+    receiving_location_note = Column(Text, nullable=True)
+    receiving_group_approved_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True, index=True)
+    receiving_group_approved_at = Column(DateTime(timezone=True), nullable=True)
+    receiving_group_note = Column(Text, nullable=True)
+    reviews = Column(JSONB, nullable=False, default=list)
 
     requested_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True, index=True)
     approved_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True, index=True)
@@ -62,10 +80,10 @@ class WorkerRemovalRequest(Base, TimestampMixin, LTreePathMixin):
     Worker removal request with multi-level escalation.
 
     Flow:
-      Level 3 (Location Pastor) submits → status=pending, current_level=3
-      Level 4 (Group Pastor) reviews   → approve (executes removal) OR reject OR escalate to level 5
-      Level 5 (Region Pastor) reviews  → approve OR reject OR escalate to level 6
-      Level 6 (State Overseer) reviews → approve OR reject (final)
+      Score 2 (Location Pastor) submits → status=pending, current_level=3
+      Score 3 (Group Pastor) reviews → approve, reject, or escalate to score 4
+      Score 4 (Region Pastor) reviews → approve, reject, or escalate to score 5
+      Score 5 (State Overseer) reviews → approve or reject (final)
 
     The `reviews` JSONB column stores the full audit trail:
       [
@@ -81,16 +99,20 @@ class WorkerRemovalRequest(Base, TimestampMixin, LTreePathMixin):
     # Status: pending | approved | rejected | escalated
     status = Column(String, default="pending", index=True)
 
-    # Which governance level currently holds this request (3=Location, 4=Group, 5=Region, 6=State)
+    # Score currently holding this request (3=Group, 4=Region, 5=State).
     current_level = Column(Integer, default=3, nullable=False)
 
     # Initial reason given by Location Pastor
     reason = Column(Text, nullable=False)
 
+    # Snapshot prior to the automatic suspension when removal is requested.
+    worker_status_before_request = Column(String, nullable=True)
+    user_was_active_before_request = Column(Boolean, nullable=True)
+
     # Full escalation / review audit trail stored as JSONB array
     reviews = Column(JSONB, default=list)
 
-    # Who submitted the original request (Level 3 user)
+    # Who submitted the original request (Score 2 user)
     requested_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False, index=True)
 
     # Who took the final action (approve / reject)

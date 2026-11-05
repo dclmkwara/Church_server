@@ -43,6 +43,32 @@ def test_event_rejects_reversed_collection_window():
         )
 
 
+def test_crusade_event_requires_campaign_and_alpha_location():
+    from app.api.v1.routes.programs import create_program_event
+    from app.schemas.programs import ProgramEventCreate
+
+    user = SimpleNamespace(roles=[SimpleNamespace(score_value=5, role_name="State Overseer")], user_id="u", path="org.234.KW")
+    event = ProgramEventCreate(
+        program_type_id=1, date=date(2026, 11, 5), path="org.234.KW",
+        event_mode="crusade", reporting_scope="state",
+    )
+
+    class ScopeDB:
+        async def execute(self, query):
+            from sqlalchemy.dialects import postgresql
+            rendered = str(query.compile(dialect=postgresql.dialect()))
+            value = 3 if "nlevel" in rendered else True
+            return SimpleNamespace(scalar=lambda: value)
+
+        async def scalar(self, query):
+            return 3
+
+    with pytest.raises(HTTPException) as exc:
+        __import__("asyncio").run(create_program_event(db=ScopeDB(), event_in=event, current_user=user))
+    assert exc.value.status_code == 422
+    assert "campaign" in exc.value.detail.lower()
+
+
 def test_attendance_status_is_restricted_to_supported_values():
     with pytest.raises(ValidationError):
         WorkerAttendanceCreate(

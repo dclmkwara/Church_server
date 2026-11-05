@@ -1,12 +1,14 @@
 from datetime import datetime, timezone
 from typing import List, Dict, Any
 
-from sqlalchemy import and_, select
+from sqlalchemy import and_, cast, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.filters import scope_filter as _scope_filter
+from app.db.filters import scope_filter as _scope_filter, scope_or_ancestor_filter
 from app.models.approvals import WorkerRemovalRequest
 from app.models.audit import NotificationReadState
+from app.models.broadcast import BroadcastMessage
+from app.models.core import _LTREE
 from app.models.counts import Count
 from app.models.fellowship_activities import FellowshipAttendance, PrayerRequest, Testimony
 from app.models.offerings import Offering
@@ -167,6 +169,7 @@ class NotificationService:
         since: datetime,
         kind: str | None = None,
         limit: int = 200,
+        role_score: int = 1,
     ) -> list[dict[str, Any]]:
         payload = await NotificationService.poll_new_data(db, scope_path, since, per_bucket_limit=limit)
         items: list[dict[str, Any]] = []
@@ -188,6 +191,30 @@ class NotificationService:
                         "created_at": created_at,
                     }
                 )
+        if not kind or kind in {"all", "broadcast", "broadcasts"}:
+            broadcast_rows = (await db.execute(
+                select(BroadcastMessage).where(
+                    scope_or_ancestor_filter(BroadcastMessage.path, scope_path),
+                    BroadcastMessage.is_active.is_(True),
+                    BroadcastMessage.sent_at > since,
+                ).order_by(BroadcastMessage.sent_at.desc()).limit(limit)
+            )).scalars().all()
+            for message in broadcast_rows:
+                target_path = str(message.path)
+                addressed_to_user = target_path == scope_path or scope_path.startswith(target_path + ".")
+                if not addressed_to_user and role_score < 3:
+                    continue
+                if message.audience == "pastors" and role_score < 2:
+                    continue
+                items.append({
+                    "notification_key": NotificationService._notification_key("broadcast", str(message.id)),
+                    "source_id": str(message.id),
+                    "kind": "broadcast",
+                    "title": message.title,
+                    "body": message.content,
+                    "priority": message.priority,
+                    "created_at": message.sent_at,
+                })
         items.sort(key=lambda row: row.get("created_at") or datetime.now(timezone.utc), reverse=True)
         items = items[:limit]
         state_map = await NotificationService._read_state_map(db, user_id, [item["notification_key"] for item in items])

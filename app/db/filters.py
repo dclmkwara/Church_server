@@ -62,8 +62,12 @@ def scope_filter(column, scope_path: str):
     path_scope = ltree_col.op("<@")(ltree_scope)
 
     role_score, nation_paths = _scope_context.get()
-    if role_score != 8:
+    if role_score not in (8, 9):
         return path_scope
+    if role_score == 9:
+        return path_scope
+    # For score 9 the global path is intentionally unrestricted; score 8 is
+    # further filtered to the user's resolved continent below.
     if not nation_paths:
         # Missing continental context must fail closed.
         return and_(path_scope, literal(False))

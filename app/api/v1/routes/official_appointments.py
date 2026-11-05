@@ -48,7 +48,7 @@ async def list_official_appointments(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
 ):
-    _ensure_min_score(current_user, 4, "Group-level access required for official appointments")
+    _ensure_min_score(current_user, 3, "Group-level access required for official appointments")
     search_scope = deps.resolve_scope_path(current_user, scope_path)
     rows = await official_appointment.list_by_scope(
         db,
@@ -72,7 +72,7 @@ async def create_official_appointment(
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ):
-    _ensure_min_score(current_user, 4, "Group-level access required for official appointments")
+    _ensure_min_score(current_user, 3, "Group-level access required for official appointments")
     assigned_scope_path = deps.resolve_scope_path(current_user, appointment_in.assigned_scope_path)
     worker = await db.execute(select(Worker).where(Worker.worker_id == appointment_in.worker_id, Worker.is_deleted == False))
     worker = worker.scalars().first()
@@ -95,7 +95,7 @@ async def get_official_appointment(
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ):
-    _ensure_min_score(current_user, 4, "Group-level access required for official appointments")
+    _ensure_min_score(current_user, 3, "Group-level access required for official appointments")
     return await _get_appointment_in_scope(db, appointment_id, current_user)
 
 
@@ -110,7 +110,7 @@ async def update_official_appointment(
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ):
-    _ensure_min_score(current_user, 4, "Group-level access required for official appointments")
+    _ensure_min_score(current_user, 3, "Group-level access required for official appointments")
     appointment = await _get_appointment_in_scope(db, appointment_id, current_user)
     payload = appointment_in.model_dump(exclude_unset=True)
     assigned_scope_path = payload.get("assigned_scope_path")
@@ -131,6 +131,6 @@ async def revoke_official_appointment(
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ):
-    _ensure_min_score(current_user, 4, "Group-level access required for official appointments")
+    _ensure_min_score(current_user, 3, "Group-level access required for official appointments")
     appointment = await _get_appointment_in_scope(db, appointment_id, current_user)
     return await official_appointment.revoke(db, db_obj=appointment, current_user=current_user, note=revoke_in.note)

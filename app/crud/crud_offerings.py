@@ -13,7 +13,7 @@ from app.models.offerings import Offering, OfferingAudit
 from app.schemas.offerings import OfferingCreate, OfferingUpdate, OfferingCorrection
 from app.crud.idempotency import commit_idempotent, mark_existing_submission
 from app.db.filters import scope_filter
-from app.crud.workflow_rules import ensure_collection_open, load_event_campaign, require_approved_worker_user
+from app.crud.workflow_rules import ensure_collection_open, load_event_campaign, require_approved_worker_user, resolve_program_context, resolve_program_level
 from app.core import analytics_cache
 
 
@@ -34,6 +34,8 @@ class CRUDOffering(CRUDBase[Offering, OfferingCreate, OfferingUpdate]):
         event = await program_event.get(db, id=obj_in.event_id) if obj_in.event_id else None
         if obj_in.event_id and not event:
             raise HTTPException(status_code=404, detail="Event not found")
+        program_domain_id, program_type_id = await resolve_program_context(db, event=event, program_domain=obj_in.program_domain, program_type=obj_in.program_type)
+        program_level = resolve_program_level(event=event, program_level=obj_in.program_level)
         if not event and str(obj_in.program_domain or "").lower() == "crusade":
             raise HTTPException(status_code=400, detail="Crusade financial entries must be linked to the scheduled event")
         if event:
@@ -57,8 +59,12 @@ class CRUDOffering(CRUDBase[Offering, OfferingCreate, OfferingUpdate]):
             event_id=obj_in.event_id,
             location_id=obj_in.location_id,
             path=location_path,
+            program_scope_path=str(event.path) if event else location_path,
             date=event.date if event else obj_in.date,
             church_type=obj_in.church_type,
+            program_level=program_level,
+            program_domain_id=program_domain_id,
+            program_type_id=program_type_id,
             program_domain=obj_in.program_domain if not event else None,
             program_type=obj_in.program_type if not event else None,
             client_id=obj_in.client_id,

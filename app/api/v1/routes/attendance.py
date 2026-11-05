@@ -2,7 +2,7 @@
 Worker Attendance routes.
 """
 from typing import Any, List
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -154,25 +154,6 @@ async def read_attendance_submissions(
     return result.scalars().all()
 
 
-@router.get(
-    "/{attendance_id}",
-    response_model=WorkerAttendanceResponse,
-    dependencies=[Depends(deps.PermissionChecker("attendance:read"))],
-)
-async def read_attendance_record(
-    *,
-    db: AsyncSession = Depends(deps.get_db),
-    attendance_id: UUID,
-    current_user: User = Depends(deps.get_current_active_user),
-) -> Any:
-    """Get a specific attendance record by ID."""
-    record = await crud_attendance.get(db, id=attendance_id)
-    if not record:
-        raise HTTPException(status_code=404, detail="Attendance record not found")
-    deps.ensure_path_in_scope(current_user, record.path, detail="Attendance record outside your scope")
-    return record
-
-
 @router.put(
     "/{attendance_id}",
     response_model=WorkerAttendanceResponse,
@@ -261,18 +242,54 @@ async def get_attendance_stats(
         scope_filter(WorkerAttendance.path, scope_path)
     )
     if start_date:
-        query = query.where(WorkerAttendance.created_at >= start_date)
+        query = query.where(WorkerAttendance.date >= start_date)
     if end_date:
-        query = query.where(WorkerAttendance.created_at <= end_date)
+        query = query.where(WorkerAttendance.date < end_date + timedelta(days=1))
+    query = query.where(WorkerAttendance.is_deleted.is_(False))
     result = await db.execute(query)
     row = result.first()
+    opportunity_filters = [
+        scope_filter(WorkerAttendanceSubmission.program_scope_path, scope_path),
+        WorkerAttendanceSubmission.is_deleted.is_(False),
+        *([WorkerAttendanceSubmission.date >= datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc)] if start_date else []),
+        *([WorkerAttendanceSubmission.date < datetime.combine(end_date + timedelta(days=1), datetime.min.time(), tzinfo=timezone.utc)] if end_date else []),
+    ]
+    opportunity_result = await db.execute(select(
+        func.coalesce(func.sum(WorkerAttendanceSubmission.expected_workers_count), 0).label("opportunities"),
+        func.coalesce(func.sum(WorkerAttendanceSubmission.present_count), 0).label("submitted_present"),
+    ).where(*opportunity_filters))
+    opportunities = opportunity_result.one()
+    expected_opportunities = int(opportunities.opportunities or 0)
+    submitted_present = int(opportunities.submitted_present or 0)
     return {
         "count": row.count if row else 0,
         "present": row.present if row else 0,
         "absent": row.absent if row else 0,
         "late": row.late if row else 0,
         "excused": row.excused if row else 0,
+        "expected": expected_opportunities,
+        "opportunities": expected_opportunities,
+        "rate": round(submitted_present * 100 / expected_opportunities, 1) if expected_opportunities else 0,
     }
+
+
+@router.get(
+    "/{attendance_id}",
+    response_model=WorkerAttendanceResponse,
+    dependencies=[Depends(deps.PermissionChecker("attendance:read"))],
+)
+async def read_attendance_record(
+    *,
+    db: AsyncSession = Depends(deps.get_db),
+    attendance_id: UUID,
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Get a specific attendance record by ID."""
+    record = await crud_attendance.get(db, id=attendance_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Attendance record not found")
+    deps.ensure_path_in_scope(current_user, record.path, detail="Attendance record outside your scope")
+    return record
 
 
 @router.delete(

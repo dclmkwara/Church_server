@@ -72,6 +72,19 @@ class WorkerCreate(WorkerBase):
     pass
 
 
+class WorkerCandidateCreate(BaseModel):
+    """Level 1 field intake; jurisdiction and approval state are server-derived."""
+    client_id: UUID
+    name: str = Field(min_length=2, max_length=255)
+    gender: str = Field(min_length=1, max_length=30)
+    phone: str = Field(min_length=7, max_length=30)
+    email: EmailStr
+    unit: str = Field(min_length=1, max_length=120)
+    address: Optional[str] = Field(None, max_length=500)
+    occupation: Optional[str] = Field(None, max_length=200)
+    marital_status: Optional[str] = Field(None, max_length=50)
+
+
 class WorkerUpdate(BaseModel):
     name: Optional[str] = None
     location_id: Optional[str] = None

@@ -50,7 +50,7 @@ NAV_GROUPS = [
             {"label": "Organization", "icon": "geo-alt", "href": "/organization", "key": "organization"},
             {"label": "Communication", "icon": "megaphone", "href": "/communication", "key": "communication", "module": "communication"},
             {"label": "Reports", "icon": "clipboard-data", "href": "/reports", "key": "reports", "module": "reports"},
-            # {"label": "System", "icon": "shield-lock", "href": "/system", "key": "system", "module": "system"},
+            {"label": "Roles & Permissions", "icon": "shield-lock", "href": "/system/rbac", "key": "system", "module": "system", "min_level": 2},
         ],
     },
 ]
@@ -75,7 +75,7 @@ def _demo_profile_switcher(ctx: AdminContext, request_path: str) -> Any:
             ),
             cls="scope-static-card",
         )
-    profile_options = sorted([p for p in PROFILE_CONFIGS.values() if p.level <= 6], key=lambda row: (row.level, row.role_label))
+    profile_options = sorted([p for p in PROFILE_CONFIGS.values() if 2 <= p.level <= 5], key=lambda row: (row.level, row.role_label))
     return Form(
         P("Role view", cls="small text-muted mb-1"),
         Div(
@@ -101,7 +101,7 @@ def _demo_profile_switcher(ctx: AdminContext, request_path: str) -> Any:
 
 
 def _scope_selector(ctx: AdminContext, request_path: str) -> Any:
-    if ctx.level < 4:
+    if ctx.level < 3:
         return Div(
             P("Scope", cls="small text-muted mb-1"),
             Div(

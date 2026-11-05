@@ -9,9 +9,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 class WorkerAttendanceBase(BaseModel):
     event_id: Optional[UUID] = None
+    assignment_id: Optional[UUID] = None
     location_id: str
     date: Optional[datetime] = None
     church_type: Optional[str] = Field(None, max_length=40)
+    program_level: Optional[str] = Field(None, pattern="^(Local|Group|Region|State|National|Global)$", description="Local, Group, Region, State, National, or Global")
     program_domain: Optional[str] = Field(None, max_length=80)
     program_type: Optional[str] = Field(None, max_length=120)
     worker_id: UUID
@@ -21,17 +23,15 @@ class WorkerAttendanceBase(BaseModel):
     note: Optional[str] = None
     client_id: Optional[UUID] = None
 
+class WorkerAttendanceCreate(WorkerAttendanceBase):
     @model_validator(mode="after")
     def require_context_without_event(self):
         if self.event_id is None:
-            if not self.date or not self.church_type or not self.program_domain or not self.program_type:
-                raise ValueError("Eventless attendance requires service date, church section, program domain, and program type")
+            if not self.date or not self.church_type or not self.program_level or not self.program_domain or not self.program_type:
+                raise ValueError("Eventless attendance requires service date, church section, program level, program domain, and program type")
             if self.program_domain.lower() == "crusade":
                 raise ValueError("Crusade attendance requires a scheduled event")
         return self
-
-class WorkerAttendanceCreate(WorkerAttendanceBase):
-    pass
 
 
 class AttendancePresentWorker(BaseModel):
@@ -43,8 +43,11 @@ class WorkerAttendanceSubmissionCreate(BaseModel):
     client_id: UUID
     location_id: str
     event_id: Optional[UUID] = None
+    assignment_id: Optional[UUID] = None
+    assignment_id: Optional[UUID] = None
     date: datetime
     church_type: str = Field(min_length=1, max_length=40)
+    program_level: Optional[str] = Field(None, pattern="^(Local|Group|Region|State|National|Global)$", description="Local, Group, Region, State, National, or Global")
     program_domain: Optional[str] = Field(None, max_length=80)
     program_type: str = Field(min_length=1, max_length=120)
     expected_workers_count: int = Field(ge=0)
@@ -59,7 +62,7 @@ class WorkerAttendanceSubmissionCreate(BaseModel):
             raise ValueError("Attendance capture cannot contain the same worker more than once")
         if self.expected_workers_count < len(ids):
             raise ValueError("Present worker count cannot exceed the expected roster count")
-        if self.event_id is None and (not self.program_domain or self.program_domain.lower() == "crusade"):
+        if self.event_id is None and (not self.program_level or not self.program_domain or self.program_domain.lower() == "crusade"):
             raise ValueError("Attendance requires program metadata; crusade attendance requires a scheduled event")
         return self
 
@@ -68,10 +71,14 @@ class WorkerAttendanceSubmissionResponse(BaseModel):
     id: UUID
     client_id: UUID
     path: str
+    program_scope_path: Optional[str] = None
     location_id: str
     event_id: Optional[UUID]
+    assignment_id: Optional[UUID] = None
+    assignment_id: Optional[UUID] = None
     date: datetime
     church_type: str
+    program_level: Optional[str] = Field(None, pattern="^(Local|Group|Region|State|National|Global)$")
     program_domain: Optional[str]
     program_type: str
     expected_workers_count: int
@@ -93,6 +100,7 @@ class WorkerAttendanceUpdate(BaseModel):
 class WorkerAttendanceResponse(WorkerAttendanceBase):
     id: UUID
     path: str
+    program_scope_path: Optional[str] = None
     worker_name: str
     worker_phone: str
     worker_unit: Optional[str]

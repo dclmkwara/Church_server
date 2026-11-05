@@ -551,6 +551,12 @@ class BackendClient:
     async def delete_announcement(self, access_token: str, announcement_id: str) -> Any:
         return await self._request("DELETE", f"/announcements/{announcement_id}", access_token=access_token)
 
+    async def list_broadcasts(self, access_token: str, *, limit: int = 100) -> list[dict[str, Any]]:
+        return await self._request("GET", "/broadcasts/", access_token=access_token, params={"limit": limit})
+
+    async def create_broadcast(self, access_token: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return await self._request("POST", "/broadcasts/", access_token=access_token, json=payload)
+
     async def list_media_galleries(
         self,
         access_token: str,
@@ -620,6 +626,15 @@ class BackendClient:
 
     async def create_program_event(self, access_token: str, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._request("POST", "/programs/events", access_token=access_token, json=payload)
+
+    async def approve_program_event(self, access_token: str, event_id: str) -> dict[str, Any]:
+        return await self._request("POST", f"/programs/events/{event_id}/approve", access_token=access_token)
+
+    async def reject_program_event(self, access_token: str, event_id: str, note: str) -> dict[str, Any]:
+        return await self._request("POST", f"/programs/events/{event_id}/reject", access_token=access_token, params={"note": note})
+
+    async def close_event_collection(self, access_token: str, event_id: str) -> dict[str, Any]:
+        return await self._request("POST", f"/programs/events/{event_id}/close-collection", access_token=access_token)
 
     async def list_program_campaigns(
         self,
@@ -820,9 +835,11 @@ class BackendClient:
         scope_path: str | None = None,
         location_id: str | None = None,
         months: int = 12,
+        period: str = "recent",
         sections: list[str] | None = None,
     ) -> dict[str, Any]:
         params: dict[str, Any] = {"months": months}
+        params["period"] = period
         if scope_path:
             params["scope_path"] = scope_path
         if location_id:
@@ -1067,6 +1084,12 @@ class BackendClient:
 
     async def reject_worker(self, access_token: str, worker_id: str, reason: str) -> dict[str, Any]:
         return await self._request("POST", f"/workers/{worker_id}/reject", access_token=access_token, params={"reason": reason})
+
+    async def suspend_worker(self, access_token: str, worker_id: str, note: str | None = None) -> dict[str, Any]:
+        return await self._request(
+            "POST", f"/workers/{worker_id}/suspend", access_token=access_token,
+            json={"note": note} if note else None,
+        )
 
     async def list_transfer_requests(self, access_token: str, *, status: str | None = None, skip: int = 0, limit: int = 100) -> list[dict[str, Any]]:
         params: dict[str, Any] = {"skip": skip, "limit": limit}

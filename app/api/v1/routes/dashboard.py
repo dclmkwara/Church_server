@@ -13,9 +13,9 @@ from app.core import analytics_cache
 from app.db.filters import ltree_subpath as _ltree_subpath
 from app.db.filters import scope_filter as _scope_filter
 from app.models.core import _LTREE
-from app.models.attendance import WorkerAttendance
+from app.models.attendance import WorkerAttendance, WorkerAttendanceSubmission
 from app.models.counts import Count
-from app.models.location import Location
+from app.models.location import Group, Location, Region, State
 from app.models.offerings import Offering
 from app.models.programs import ProgramEvent
 from app.models.user import User, Worker
@@ -122,9 +122,27 @@ async def _get_attendance_summary(db: AsyncSession, scope_path: str, *, location
     late = int(attendance_row.late or 0)
     absent = int(attendance_row.absent or 0)
     excused = int(attendance_row.excused or 0)
-    rate = round((present / expected) * 100) if expected else 0
+    # A current worker snapshot is not the denominator for a historical period.
+    # Use the roster size captured with each usher submission so every meeting
+    # contributes its own attendance opportunity count.
+    submission_filters = [
+        _scope_filter(WorkerAttendanceSubmission.program_scope_path, scope_path),
+        WorkerAttendanceSubmission.is_deleted.is_(False),
+    ]
+    if location_id:
+        submission_filters.append(WorkerAttendanceSubmission.location_id == location_id)
+    submission_stmt = select(
+        func.coalesce(func.sum(WorkerAttendanceSubmission.expected_workers_count), 0).label('opportunities'),
+        func.coalesce(func.sum(WorkerAttendanceSubmission.present_count), 0).label('submitted_present'),
+    ).where(and_(*submission_filters))
+    submission_row = (await db.execute(submission_stmt)).one()
+    opportunities = int(submission_row.opportunities or 0)
+    submitted_present = int(submission_row.submitted_present or 0)
+    rate = round((submitted_present / opportunities) * 100, 1) if opportunities else 0
     return {
-        'expected': expected,
+        'expected': opportunities,
+        'current_roster': expected,
+        'opportunities': opportunities,
         'present': present,
         'late': late,
         'absent': absent,
@@ -173,7 +191,7 @@ async def _get_timeseries(db: AsyncSession, scope_path: str, *, metric: str) -> 
     return [{'date': str(row.period.date()), 'value': int(row.total or 0)} for row in rows]
 
 
-async def _get_scope_snapshot(db: AsyncSession, scope_path: str) -> list[dict[str, Any]]:
+async def _get_scope_snapshot(db: AsyncSession, scope_path: str, *, date_filter: date) -> list[dict[str, Any]]:
     level = _breakdown_level(scope_path)
     segment_count = {
         'location': 6,
@@ -186,12 +204,45 @@ async def _get_scope_snapshot(db: AsyncSession, scope_path: str) -> list[dict[st
         group_expr,
         func.coalesce(func.sum(Count.total), 0).label('total'),
     ).where(
-        Count.date >= date.today() - timedelta(days=30),
+        Count.date >= date_filter,
         _scope_filter(Count.path, scope_path),
         Count.is_deleted == False,
     ).group_by(group_expr).order_by(func.coalesce(func.sum(Count.total), 0).desc()).limit(5)
     rows = await db.execute(stmt)
     return [{'path': str(row.group_path), 'total': int(row.total or 0)} for row in rows]
+
+
+def _period_start(period: str, today: date | None = None) -> date:
+    today = today or date.today()
+    if period == 'month':
+        return today.replace(day=1)
+    if period == 'quarter':
+        return today.replace(month=((today.month - 1) // 3) * 3 + 1, day=1)
+    if period == 'year':
+        return today.replace(month=1, day=1)
+    return today - timedelta(days=29)
+
+
+async def _get_scope_children(db: AsyncSession, scope_path: str) -> list[dict[str, str]]:
+    kind = _scope_kind(scope_path)
+    if kind == 'state':
+        model, name, code = Region, Region.region_name, Region.region_code
+    elif kind == 'region':
+        model, name, code = Group, Group.group_name, Group.group_code
+    elif kind == 'group':
+        model, name, code = Location, Location.location_name, Location.location_code
+    else:
+        return []
+    rows = await db.execute(
+        select(model.path, name, code).where(
+            _scope_filter(model.path, scope_path),
+            func.nlevel(model.path) == len(scope_path.split('.')) + 1,
+        ).order_by(name)
+    )
+    return [
+        {'path': str(row.path), 'name': str(row[1]), 'code': str(row[2])}
+        for row in rows
+    ]
 
 
 @router.get(
@@ -202,6 +253,7 @@ async def get_dashboard_bootstrap(
     scope_path: Optional[str] = Query(None),
     location_id: Optional[str] = Query(None),
     months: int = Query(12, ge=1, le=24),
+    period: str = Query('recent', pattern='^(recent|month|quarter|year)$'),
     sections: Optional[list[str]] = Query(None),
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_user),
@@ -214,6 +266,7 @@ async def get_dashboard_bootstrap(
         payload: dict[str, Any] = {
             'scope_path': effective_scope,
             'scope_kind': _scope_kind(effective_scope),
+            'population_period': period,
         }
 
         if 'summary' in requested_sections:
@@ -230,6 +283,7 @@ async def get_dashboard_bootstrap(
                 db,
                 effective_scope,
                 location_id=effective_location_id,
+                date_filter=_period_start(period),
             )
         if 'worker_analytics' in requested_sections:
             payload['worker_analytics'] = await DashboardService.get_worker_analytics(
@@ -275,12 +329,14 @@ async def get_dashboard_bootstrap(
                 'attendance': await _get_timeseries(db, effective_scope, metric='attendance'),
             }
         if 'scope_snapshot' in requested_sections:
-            payload['scope_snapshot'] = await _get_scope_snapshot(db, effective_scope)
+            payload['scope_snapshot'] = await _get_scope_snapshot(db, effective_scope, date_filter=_period_start(period))
+        if 'scope_children' in requested_sections:
+            payload['scope_children'] = await _get_scope_children(db, effective_scope)
 
         return payload
 
     return await analytics_cache.get_or_set(
-        ('dashboard', 'bootstrap', effective_scope, effective_location_id, months, requested_sections),
+        ('dashboard', 'bootstrap', effective_scope, effective_location_id, months, period, requested_sections),
         _build_payload,
         ttl=_DASHBOARD_CACHE_TTL,
     )

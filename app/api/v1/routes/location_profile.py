@@ -19,7 +19,7 @@ router = APIRouter()
 
 
 def _has_location_admin_access(current_user: User) -> bool:
-    return bool(current_user.roles) and max(role.score_value for role in current_user.roles) >= 3
+    return bool(current_user.roles) and max(role.score_value for role in current_user.roles) >= 2
 
 
 @router.get("/{location_id}/profile", response_model=LocationProfileResponse, tags=["Hierarchy"])

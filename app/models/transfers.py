@@ -5,17 +5,15 @@ Manages the formal transfer workflow when a worker moves from one branch
 to another. Generates a PDF transfer/reference letter on final approval.
 
 Workflow:
-  Request created →
-  Origin pastor approves (confirms service record) →
-  Destination pastor approves (accepts the worker) →
-  System updates Worker.location_id and generates PDF letter →
-  Status: completed
+  Origin Location Pastor initiates → origin Group Pastor approves →
+  receiving Location Pastor accepts → receiving Group Pastor approves →
+  Region Pastor (or State Overseer) confirms → system updates worker/user scope.
 
 Rejection at any stage ends the workflow with status: rejected.
 """
 import uuid
 from sqlalchemy import Column, String, Integer, Boolean, Date, Text, DateTime, ForeignKey
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 
 from app.db.base import Base
@@ -27,14 +25,15 @@ class WorkerTransfer(Base, TimestampMixin, SoftDeleteMixin):
     Worker Transfer Request & Approval Record.
 
     Tracks a formal request to move a worker from one location to another.
-    Both origin and destination pastors must approve before the transfer
-    is executed. A PDF reference letter is generated on completion.
+    Origin and receiving location/group leaders approve before regional
+    confirmation. A PDF reference letter is available after completion.
 
     Workflow states:
         pending             → Initial request created
-        approved_by_origin  → Origin pastor has approved/released
-        approved_by_dest    → Destination pastor has accepted
-        completed           → Worker relocated, letter generated
+        pending_receiving_location → Origin group approved
+        pending_receiving_group    → Receiving location accepted
+        pending_region      → Receiving group approved
+        completed           → Region/state confirmed; worker relocated
         rejected            → Rejected at any stage
 
     Attributes:
@@ -76,9 +75,11 @@ class WorkerTransfer(Base, TimestampMixin, SoftDeleteMixin):
     transfer_reason = Column(Text, nullable=False)
     effective_date = Column(Date, nullable=False)
 
-    # Workflow Status
+    # Workflow Status: pending_group -> pending_region -> completed | rejected
     status = Column(String, default="pending", nullable=False, index=True)
-    # pending | approved_by_origin | approved_by_dest | completed | rejected
+    current_level = Column(Integer, nullable=False, default=3, server_default="3", index=True)
+    workflow_stage = Column(String, nullable=False, default="origin_group", server_default="origin_group", index=True)
+    reviews = Column(JSONB, nullable=False, default=list)
 
     # Request
     requested_by_id = Column(
@@ -88,7 +89,7 @@ class WorkerTransfer(Base, TimestampMixin, SoftDeleteMixin):
         index=True,
     )
 
-    # Origin Approval
+    # Group approval (legacy origin_approved fields remain for compatibility).
     origin_approved_by = Column(
         UUID(as_uuid=True),
         ForeignKey("users.user_id"),
@@ -98,7 +99,11 @@ class WorkerTransfer(Base, TimestampMixin, SoftDeleteMixin):
     origin_approved_at = Column(DateTime(timezone=True), nullable=True)
     origin_note = Column(Text, nullable=True)
 
-    # Destination Approval
+    group_approved_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True, index=True)
+    group_approved_at = Column(DateTime(timezone=True), nullable=True)
+    group_note = Column(Text, nullable=True)
+
+    # Regional approval (legacy destination_approved fields remain for compatibility).
     destination_approved_by = Column(
         UUID(as_uuid=True),
         ForeignKey("users.user_id"),
@@ -107,6 +112,17 @@ class WorkerTransfer(Base, TimestampMixin, SoftDeleteMixin):
     )
     destination_approved_at = Column(DateTime(timezone=True), nullable=True)
     destination_note = Column(Text, nullable=True)
+
+    region_approved_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True, index=True)
+    region_approved_at = Column(DateTime(timezone=True), nullable=True)
+    region_note = Column(Text, nullable=True)
+
+    receiving_location_approved_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True, index=True)
+    receiving_location_approved_at = Column(DateTime(timezone=True), nullable=True)
+    receiving_location_note = Column(Text, nullable=True)
+    receiving_group_approved_by = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True, index=True)
+    receiving_group_approved_at = Column(DateTime(timezone=True), nullable=True)
+    receiving_group_note = Column(Text, nullable=True)
 
     # Rejection
     rejected_by = Column(

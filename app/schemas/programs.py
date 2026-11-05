@@ -1,5 +1,5 @@
 """Pydantic schemas for Program models."""
-from datetime import date, datetime
+from datetime import date as date_type, datetime
 from typing import Optional
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -54,8 +54,8 @@ class ProgramCampaignBase(BaseModel):
     reporting_scope: str = Field(default="global")
     status: str = Field(default="draft")
     alpha_location_id: Optional[str] = None
-    start_date: date
-    end_date: date
+    start_date: date_type
+    end_date: date_type
     collection_window_start: Optional[datetime] = None
     collection_window_end: Optional[datetime] = None
     flyer_url: Optional[str] = None
@@ -77,8 +77,8 @@ class ProgramCampaignUpdate(BaseModel):
     reporting_scope: Optional[str] = None
     status: Optional[str] = None
     alpha_location_id: Optional[str] = None
-    start_date: Optional[date] = None
-    end_date: Optional[date] = None
+    start_date: Optional[date_type] = None
+    end_date: Optional[date_type] = None
     collection_window_start: Optional[datetime] = None
     collection_window_end: Optional[datetime] = None
     flyer_url: Optional[str] = None
@@ -94,7 +94,7 @@ class ProgramCampaignResponse(ProgramCampaignBase):
 class ProgramEventBase(BaseModel):
     program_type_id: int
     campaign_id: Optional[UUID] = None
-    date: date
+    date: date_type
     path: str
     title: Optional[str] = None
     is_public: bool = False
@@ -119,7 +119,7 @@ class ProgramEventCreate(ProgramEventBase):
 class ProgramEventUpdate(BaseModel):
     program_type_id: Optional[int] = None
     campaign_id: Optional[UUID] = None
-    date: Optional[date] = None
+    date: Optional[date_type] = None
     path: Optional[str] = None
     title: Optional[str] = None
     is_public: Optional[bool] = None
@@ -135,6 +135,11 @@ class ProgramEventUpdate(BaseModel):
 
 class ProgramEventResponse(ProgramEventBase):
     id: UUID
+    approval_status: str = "pending"
+    created_by_id: Optional[UUID] = None
+    approved_by_id: Optional[UUID] = None
+    approved_at: Optional[datetime] = None
+    approval_note: Optional[str] = None
     program_type: Optional[ProgramTypeResponse] = None
     campaign: Optional[ProgramCampaignResponse] = None
     created_at: Optional[datetime] = None
@@ -144,7 +149,7 @@ class ProgramEventResponse(ProgramEventBase):
 class EventAssignmentBase(BaseModel):
     worker_id: UUID
     assignment_label: Optional[str] = None
-    assignment_type: str = Field(default="both", description="count, convert, or both")
+    assignment_type: str = Field(default="both", description="count, convert, attendance, both (count and convert), or all")
     source_role: str = Field(default="alpha", description="alpha, satellite, or regular")
     note: Optional[str] = None
 

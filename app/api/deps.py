@@ -2,9 +2,9 @@
 Dependencies for API routes — authentication, database access, and authorisation.
 
 Authorization is refreshed from the database on each request so role changes
-take effect immediately. Level-8 users receive a broad ltree envelope plus a
-resolved list of nation paths for their continent; route filters must apply
-that nation list wherever data is queried.
+take effect immediately. Reserved enterprise roles retain their nation or
+continent scope behavior for future use; this application assigns pastoral
+roles only through score 5.
 """
 from typing import Optional
 
@@ -96,9 +96,11 @@ async def get_current_user(
         user_id=str(user.user_id),
         nation_paths=tuple(getattr(user, "_authorized_nation_paths", ()) or ()),
     )
+    role_score = highest_role_score(user)
+    nation_paths = tuple(getattr(user, "_authorized_nation_paths", ()) or ())
     set_scope_context(
-        highest_role_score(user),
-        tuple(getattr(user, "_authorized_nation_paths", ()) or ()),
+        role_score,
+        nation_paths,
     )
 
     return user
@@ -178,8 +180,9 @@ def scope_condition(path_column: object, current_user: User, requested_scope_pat
     from app.db.filters import scope_filter
 
     scope_path = resolve_scope_path(current_user, requested_scope_path)
+    score = highest_role_score(current_user)
     conditions = [scope_filter(path_column, scope_path)]
-    if highest_role_score(current_user) == 8:
+    if score == 8:
         raw_column = getattr(getattr(path_column, "property", None), "columns", [path_column])[0]
         nation_prefix = func.subpath(cast(raw_column, _LTREE()), literal(0), literal(2))
         conditions.append(cast(nation_prefix, String).in_(_continental_nation_paths(current_user)))
@@ -210,7 +213,7 @@ def nation_scope_condition(path_column: object, current_user: User):
     from app.models.core import _LTREE
 
     score = highest_role_score(current_user)
-    if score >= 9:
+    if score == 9:
         return literal(True)
     if score != 8:
         return literal(True)
@@ -268,7 +271,7 @@ def resolve_scope_path(
     if highest_role_score(current_user) == 8:
         if not any(path_in_scope(nation_path, requested_scope) for nation_path in _continental_nation_paths(current_user)):
             raise HTTPException(status_code=403, detail="Requested scope is outside your continental jurisdiction")
-    elif not path_in_scope(current_scope, requested_scope):
+    elif highest_role_score(current_user) != 9 and not path_in_scope(current_scope, requested_scope):
         raise HTTPException(
             status_code=403,
             detail="Requested scope is outside your allowed scope",
@@ -287,6 +290,8 @@ def ensure_path_in_scope(
     if normalized_target and highest_role_score(current_user) == 8:
         target_nation_path = ".".join(normalized_target.split(".")[:2])
         in_scope = target_nation_path in _continental_nation_paths(current_user)
+    elif normalized_target and highest_role_score(current_user) == 9:
+        in_scope = True
     if not in_scope:
         raise HTTPException(status_code=403, detail=detail)
     return normalized_target
@@ -322,9 +327,10 @@ class PermissionChecker:
     """
     FastAPI dependency that enforces a named permission on the current user.
 
-    Superadmin (score >= 9) is granted unconditional access.
-    All other users must have the required permission string on at least one
-    of their assigned roles.
+    Scores 6-9 are reserved for higher-tier clients but retain their
+    permission-based authority on the shared backend. Every user must have
+    the required permission string on at least one assigned role; hierarchy
+    scope is enforced separately by the relevant route and database filters.
 
     Usage:
         @router.get("/resource", dependencies=[Depends(PermissionChecker("resource:read"))])
@@ -338,11 +344,6 @@ class PermissionChecker:
         current_user: User = Depends(get_current_active_user),
     ) -> User:
         if current_user.roles:
-            # Superadmin bypass — role.score_value is a @property on the Role
-            # model that safely returns role.score.score (or 0 if not loaded).
-            if any(role.score_value >= 9 for role in current_user.roles):
-                return current_user
-
             # Permission check across all assigned roles
             for role in current_user.roles:
                 for perm in role.permissions:

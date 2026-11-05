@@ -79,10 +79,17 @@ class ProgramEvent(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     collection_window_start = Column(DateTime(timezone=True), nullable=True)
     collection_window_end = Column(DateTime(timezone=True), nullable=True)
     audience_segment = Column(String, nullable=True, index=True)
+    approval_status = Column(String, nullable=False, default="pending", server_default="pending", index=True)
+    created_by_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True, index=True)
+    approved_by_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True, index=True)
+    approved_at = Column(DateTime(timezone=True), nullable=True)
+    approval_note = Column(Text, nullable=True)
 
     program_type = relationship("ProgramType")
     campaign = relationship("ProgramCampaign", back_populates="events")
     assignments = relationship("EventAssignment", back_populates="event")
+    created_by = relationship("User", foreign_keys=[created_by_id])
+    approved_by = relationship("User", foreign_keys=[approved_by_id])
 
     def __repr__(self):
         return f"<ProgramEvent(date='{self.date}', type_id={self.program_type_id}, mode='{self.event_mode}')>"

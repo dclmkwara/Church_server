@@ -10,10 +10,10 @@ Production changes:
   into one join condition.
 - _scope_filter imported from shared app.db.filters (was duplicated locally).
 """
-from datetime import date
+from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import and_, cast, extract, func, select, Integer
+from sqlalchemy import and_, case, cast, extract, func, select, Integer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.filters import scope_filter as _scope_filter
@@ -45,34 +45,34 @@ class StatisticsService:
         if location_id:
             filters.append(Count.location_id == location_id)
         if date_filter:
-            filters.append(Count.created_at >= date_filter)
+            filters.append(Count.date >= date_filter)
         if start_year:
-            filters.append(extract("year", Count.created_at) >= start_year)
+            filters.append(extract("year", Count.date) >= start_year)
         if end_year:
-            filters.append(extract("year", Count.created_at) <= end_year)
+            filters.append(extract("year", Count.date) <= end_year)
         if start_month:
-            filters.append(extract("month", Count.created_at) >= start_month)
+            filters.append(extract("month", Count.date) >= start_month)
         if end_month:
-            filters.append(extract("month", Count.created_at) <= end_month)
+            filters.append(extract("month", Count.date) <= end_month)
 
-        stmt = select(
-            func.coalesce(func.sum(Count.adult_male), 0).label("adult_male"),
-            func.coalesce(func.sum(Count.adult_female), 0).label("adult_female"),
-            func.coalesce(func.sum(Count.youth_male), 0).label("youth_male"),
-            func.coalesce(func.sum(Count.youth_female), 0).label("youth_female"),
-            func.coalesce(func.sum(Count.boys), 0).label("boys"),
-            func.coalesce(func.sum(Count.girls), 0).label("girls"),
-            func.coalesce(func.sum(Count.total), 0).label("total"),
-            func.count().label("program_count"),
-        )
+        # Roll up location submissions into a program occurrence first. Without
+        # this layer, a parent scope's average is divided by its number of
+        # reporting locations, understating attendance whenever multiple
+        # locations report for the same service/date.
+        occurrence_stmt = select(
+            func.sum(Count.adult_male).label("adult_male"),
+            func.sum(Count.adult_female).label("adult_female"),
+            func.sum(Count.youth_male).label("youth_male"),
+            func.sum(Count.youth_female).label("youth_female"),
+            func.sum(Count.boys).label("boys"),
+            func.sum(Count.girls).label("girls"),
+            func.sum(Count.total).label("total"),
+        ).select_from(Count)
 
         if join_programs:
-            stmt = (
-                stmt.select_from(Count)
-                .join(ProgramEvent, Count.event_id == ProgramEvent.id)
-                .join(ProgramType, ProgramEvent.program_type_id == ProgramType.id)
-                .join(ProgramDomain, ProgramType.domain_id == ProgramDomain.id)
-            )
+            occurrence_stmt = occurrence_stmt.join(ProgramEvent, Count.event_id == ProgramEvent.id)
+            occurrence_stmt = occurrence_stmt.join(ProgramType, ProgramEvent.program_type_id == ProgramType.id)
+            occurrence_stmt = occurrence_stmt.join(ProgramDomain, ProgramType.domain_id == ProgramDomain.id)
             if program_domain:
                 filters.append(
                     (ProgramDomain.slug == program_domain) | (ProgramDomain.name == program_domain)
@@ -82,7 +82,39 @@ class StatisticsService:
                     (ProgramType.slug == program_type) | (ProgramType.name == program_type)
                 )
 
-        stmt = stmt.where(and_(*filters))
+        legacy_unclassified_record = case(
+            (
+                and_(
+                    Count.event_id.is_(None),
+                    Count.program_domain_id.is_(None),
+                    Count.program_type_id.is_(None),
+                    Count.program_domain.is_(None),
+                    Count.program_type.is_(None),
+                ),
+                Count.id,
+            ),
+            else_=None,
+        )
+        occurrence_stmt = occurrence_stmt.where(and_(*filters)).group_by(
+            func.date(Count.date),
+            Count.event_id,
+            Count.program_domain_id,
+            Count.program_type_id,
+            Count.program_domain,
+            Count.program_type,
+            Count.program_level,
+            legacy_unclassified_record,
+        ).subquery()
+        stmt = select(
+            func.coalesce(func.sum(occurrence_stmt.c.adult_male), 0).label("adult_male"),
+            func.coalesce(func.sum(occurrence_stmt.c.adult_female), 0).label("adult_female"),
+            func.coalesce(func.sum(occurrence_stmt.c.youth_male), 0).label("youth_male"),
+            func.coalesce(func.sum(occurrence_stmt.c.youth_female), 0).label("youth_female"),
+            func.coalesce(func.sum(occurrence_stmt.c.boys), 0).label("boys"),
+            func.coalesce(func.sum(occurrence_stmt.c.girls), 0).label("girls"),
+            func.coalesce(func.sum(occurrence_stmt.c.total), 0).label("total"),
+            func.count().label("program_count"),
+        ).select_from(occurrence_stmt)
         result = await db.execute(stmt)
         row = result.one_or_none()
 
@@ -180,7 +212,11 @@ class StatisticsService:
             "boys": last.boys if last else 0,
             "girls": last.girls if last else 0,
             "total": last.total if last else 0,
-            "date": last.created_at if last else None,
+            "date": (
+                last.created_at.date()
+                if last and isinstance(last.created_at, datetime)
+                else last.created_at if last else None
+            ),
         }
 
     @staticmethod

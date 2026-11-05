@@ -161,7 +161,9 @@ from app.api.v1.routes import reports
 app.include_router(reports.router, prefix=f"{settings.API_V1_PREFIX}/reports", tags=["Reports"])
 
 from app.api.v1.routes import announcements
+from app.api.v1.routes import broadcasts
 app.include_router(announcements.router, prefix=f"{settings.API_V1_PREFIX}/announcements", tags=["Announcements"])
+app.include_router(broadcasts.router, prefix=f"{settings.API_V1_PREFIX}/broadcasts", tags=["Broadcasts"])
 
 from app.api.v1.routes import information
 app.include_router(information.router, prefix=f"{settings.API_V1_PREFIX}/information", tags=["Information"])

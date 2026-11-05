@@ -43,6 +43,8 @@ class WorkerTransferResponse(BaseModel):
     transfer_reason: str
     effective_date: date
     status: str
+    current_level: int = 3
+    workflow_stage: str = "origin_group"
     reference_number: Optional[str] = None
     letter_generated: bool
     letter_url: Optional[str] = None
@@ -50,9 +52,22 @@ class WorkerTransferResponse(BaseModel):
     origin_approved_by: Optional[UUID] = None
     origin_approved_at: Optional[datetime] = None
     origin_note: Optional[str] = None
+    group_approved_by: Optional[UUID] = None
+    group_approved_at: Optional[datetime] = None
+    group_note: Optional[str] = None
     destination_approved_by: Optional[UUID] = None
     destination_approved_at: Optional[datetime] = None
     destination_note: Optional[str] = None
+    region_approved_by: Optional[UUID] = None
+    region_approved_at: Optional[datetime] = None
+    region_note: Optional[str] = None
+    receiving_location_approved_by: Optional[UUID] = None
+    receiving_location_approved_at: Optional[datetime] = None
+    receiving_location_note: Optional[str] = None
+    receiving_group_approved_by: Optional[UUID] = None
+    receiving_group_approved_at: Optional[datetime] = None
+    receiving_group_note: Optional[str] = None
+    reviews: list[dict] = Field(default_factory=list)
     rejected_by: Optional[UUID] = None
     rejected_at: Optional[datetime] = None
     rejection_reason: Optional[str] = None

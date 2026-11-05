@@ -617,7 +617,10 @@ class SystemService:
             ),
         )
         rows = [_normalize_rbac_role(row) for row in rows]
-        return sorted(rows, key=lambda row: (-row["level"], row["name"].lower()))
+        return sorted(
+            [row for row in rows if row["level"] in range(1, 10)],
+            key=lambda row: (-row["level"], row["name"].lower()),
+        )
 
     @staticmethod
     async def list_rbac_permissions(request, *, family: str = "all", search: str = "") -> list[dict[str, Any]]:
@@ -667,21 +670,7 @@ class SystemService:
 
     @staticmethod
     async def update_rbac_role(request, role_id: str, *, description: str, permission_ids: list[int]) -> dict[str, Any] | None:
-        if not await SystemService.live_enabled(request):
-            return None
-        client = async_client(get_api_client())
-        access_token = AuthService.get_access_token(request)
-        current = await SystemService.get_rbac_role(request, role_id)
-        if current is None:
-            return None
-        payload = {
-            "role_name": current["name"],
-            "description": description,
-            "score_id": current["score_id"],
-            "permission_ids": permission_ids,
-        }
-        updated = await client.update_rbac_role(access_token, role_id, payload)
-        return _normalize_rbac_role(updated)
+        return None
 
 async def _system_health_snapshot(request) -> dict[str, Any]:
     if await SystemService.use_mock(request):

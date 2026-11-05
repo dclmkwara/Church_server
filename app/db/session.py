@@ -178,7 +178,7 @@ async def inject_scope(
         continent=(continent or "").strip(),
         user_id=str(user_id or ""),
         # `|` cannot occur in an ltree label; the policy migration splits
-        # this value and fails closed when it is empty for level 8.
+        # this value and fails closed when it is empty for enterprise scope.
         nation_paths="|".join(nation_paths),
         auth_email="",
         reset_token="",

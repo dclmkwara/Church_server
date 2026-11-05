@@ -14,8 +14,8 @@ router = APIRouter()
 
 
 def _require_release_admin(current_user: User) -> None:
-    if not current_user.roles or max(role.score_value for role in current_user.roles) < 7:
-        raise HTTPException(status_code=403, detail="National admin access required")
+    if not current_user.roles or max(role.score_value for role in current_user.roles) < 5:
+        raise HTTPException(status_code=403, detail="State-level administration or higher required")
 
 
 @router.post("/", response_model=AppVersionResponse, status_code=status.HTTP_201_CREATED)

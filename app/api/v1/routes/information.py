@@ -11,7 +11,9 @@ from app.api import deps
 from app.crud.crud_announcement import announcement as crud_announcement
 from app.schemas.announcement import AnnouncementCreate, AnnouncementUpdate, AnnouncementResponse
 from app.models.user import User
-from app.models.location import Region
+from app.models.location import State, Region
+from app.models.announcement import Announcement
+from sqlalchemy import select
 
 router = APIRouter()
 
@@ -26,6 +28,13 @@ async def _get_information_in_scope(
     return entry
 
 
+def _require_information_manager(current_user: User) -> int:
+    score = deps.highest_role_score(current_user)
+    if score < 4:
+        raise HTTPException(status_code=403, detail="Regional-level access is required to manage weekly information")
+    return score
+
+
 @router.post(
     "/",
     response_model=AnnouncementResponse,
@@ -37,17 +46,18 @@ async def create_information(
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ):
-    """Create a new weekly information entry."""
-    try:
-        region_id = int(information_in.region_id)
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=422, detail="A valid region_id is required")
-    region = await db.get(Region, region_id)
-    if region is None:
-        raise HTTPException(status_code=404, detail="Region not found")
-    deps.ensure_path_in_scope(current_user, region.path, detail="Region outside your scope")
-    payload = information_in.model_copy(update={"region_name": region.region_name})
-    return await crud_announcement.create(db, payload, str(region.path))
+    """Create a weekly information sheet for the caller's region or state."""
+    score = _require_information_manager(current_user)
+    model = State if score == 5 else Region
+    result = await db.execute(select(model).where(model.path == deps.effective_scope_path(current_user)))
+    node = result.scalars().first()
+    if node is None:
+        raise HTTPException(status_code=403, detail="Weekly information can only be managed from the caller's own region or state scope")
+    payload = information_in.model_copy(update={
+        "region_id": str(node.state_id if score == 5 else node.region_id),
+        "region_name": getattr(node, "state_name", None) or getattr(node, "region_name", None) or "Church scope",
+    })
+    return await crud_announcement.create(db, payload, str(node.path))
 
 
 @router.get(
@@ -69,6 +79,10 @@ async def list_information(
 ):
     """List weekly information entries within scope."""
     scope_path = deps.effective_scope_path(current_user)
+    if deps.highest_role_score(current_user) == 4:
+        region_result = await db.execute(select(Region).where(Region.path == scope_path))
+        region = region_result.scalars().first()
+        region_id = str(region.region_id) if region else None
     entries = await crud_announcement.get_list(
         db,
         scope_path,
@@ -82,6 +96,33 @@ async def list_information(
         limit,
     )
     return deps.filter_rows_in_scope(entries, current_user)
+
+
+@router.get(
+    "/latest",
+    response_model=AnnouncementResponse,
+    dependencies=[Depends(deps.PermissionChecker("announcements:read"))],
+)
+async def latest_information(
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+):
+    """Return the latest published sheet whose region/state contains this user."""
+    from app.db.filters import scope_or_ancestor_filter
+    result = await db.execute(
+        select(Announcement)
+        .where(
+            scope_or_ancestor_filter(Announcement.path, deps.effective_scope_path(current_user)),
+            Announcement.is_active.is_(True),
+            Announcement.published_at.is_not(None),
+        )
+        .order_by(Announcement.date.desc(), Announcement.published_at.desc())
+        .limit(1)
+    )
+    entry = result.scalars().first()
+    if not entry:
+        raise HTTPException(status_code=404, detail="No published information sheet is available for your scope")
+    return entry
 
 
 @router.get(
@@ -110,19 +151,26 @@ async def update_information(
     current_user: User = Depends(deps.get_current_active_user),
 ):
     """Update a weekly information entry."""
+    _require_information_manager(current_user)
     entry = await _get_information_in_scope(db, information_id, current_user)
-    if information_in.region_id is not None:
-        try:
-            region_id = int(information_in.region_id)
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=422, detail="A valid region_id is required")
-        region = await db.get(Region, region_id)
-        if region is None:
-            raise HTTPException(status_code=404, detail="Region not found")
-        deps.ensure_path_in_scope(current_user, region.path, detail="Region outside your scope")
-        information_in = information_in.model_copy(update={"region_name": region.region_name})
     entry = await crud_announcement.update(db, information_id, information_in)
     return entry
+
+
+@router.post(
+    "/{information_id}/publish",
+    response_model=AnnouncementResponse,
+    dependencies=[Depends(deps.PermissionChecker("announcements:manage"))],
+)
+async def publish_information(
+    information_id: UUID,
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+):
+    """Publish the prepared sheet within the caller's jurisdiction."""
+    _require_information_manager(current_user)
+    await _get_information_in_scope(db, information_id, current_user)
+    return await crud_announcement.publish(db, information_id)
 
 
 @router.delete(
@@ -136,6 +184,7 @@ async def delete_information(
     current_user: User = Depends(deps.get_current_active_user),
 ):
     """Delete weekly information entry."""
+    _require_information_manager(current_user)
     entry = await _get_information_in_scope(db, information_id, current_user)
     await db.delete(entry)
     await db.commit()

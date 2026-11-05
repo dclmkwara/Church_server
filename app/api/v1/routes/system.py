@@ -209,9 +209,9 @@ async def get_system_metrics(
     Returns database statistics, API performance, and system health indicators.
     Requires admin access.
     """
-    # Check if user has admin privileges (score >= 7)
-    if not current_user.roles or max(r.score_value for r in current_user.roles) < 7:
-        raise HTTPException(status_code=403, detail="Admin access required")
+    # System metrics are limited to state-level administrators and above.
+    if not current_user.roles or max(r.score_value for r in current_user.roles) < 5:
+        raise HTTPException(status_code=403, detail="State-level administration or higher required")
     
     from sqlalchemy import text, func
     from app.models.counts import Count
@@ -253,51 +253,6 @@ async def seed_database(
     current_user: User = Depends(deps.get_current_active_user),
     confirm: bool = Query(False, description="Confirm seed operation")
 ):
-    """
-    Seed database with initial data (Development only).
-    
-    WARNING: This should only be used in development environments.
-    Requires global admin access (score 9).
-    """
-    # Check if user has global admin privileges
-    if not current_user.roles or max(r.score_value for r in current_user.roles) < 9:
-        raise HTTPException(status_code=403, detail="Global admin access required")
-    
-    if not confirm:
-        return {
-            "message": "Seed operation requires confirmation",
-            "warning": "This will add initial data to the database",
-            "instructions": "Add ?confirm=true to proceed"
-        }
-    
-    # Seed role scores (1-9)
-    from app.models.user import RoleScore
-    
-    role_scores_data = [
-        (1, "Worker", "Location level worker/usher"),
-        (2, "Usher", "Location level usher"),
-        (3, "LocationPastor", "Location pastor"),
-        (4, "GroupPastor", "Group level pastor"),
-        (5, "RegionalPastor", "Regional level pastor"),
-        (6, "StatePastor", "State level pastor"),
-        (7, "NationalAdmin", "National level administrator"),
-        (8, "ContinentalLeader", "Continental level leader"),
-        (9, "GlobalAdmin", "Global administrator")
-    ]
-    
-    seeded_count = 0
-    for score, name, desc in role_scores_data:
-        existing = await db.execute(select(RoleScore).where(RoleScore.score == score))
-        if not existing.scalars().first():
-            role_score = RoleScore(score=score, score_name=name, description=desc)
-            db.add(role_score)
-            seeded_count += 1
-    
-    await db.commit()
-    
-    return {
-        "status": "success",
-        "message": f"Database seeded successfully. Added {seeded_count} role scores.",
-        "warning": "This endpoint should be disabled in production"
-    }
+    """The runtime API intentionally cannot mutate seed catalogs."""
+    raise HTTPException(status_code=410, detail="Runtime seeding is disabled. Use reviewed Alembic migrations and seed scripts.")
 

@@ -8,15 +8,17 @@ from uuid import UUID, uuid5
 
 from fastapi import APIRouter, Depends, HTTPException, Body, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import and_, or_, select, func, tuple_
+from sqlalchemy import and_, or_, select, func, tuple_, cast, String
+from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timezone
 import logging
+from types import SimpleNamespace
 
 from app.api import deps
 from app.models.location import Fellowship
 from app.models.user import User, Worker
 from app.models.attendance import WorkerAttendance, WorkerAttendanceSubmission
-from app.models.location import Location
+from app.models.location import Location, Group, Region, State
 from app.models.programs import ProgramEvent
 from app.schemas.sync import SyncBatchRequest, SyncBatchResponse, SyncResult
 from app.db.filters import scope_filter
@@ -26,7 +28,19 @@ from app.crud.crud_counts import count as crud_count
 from app.crud.crud_offerings import offering as crud_offering
 from app.crud.crud_records import record as crud_record
 from app.crud.crud_attendance import attendance as crud_worker_attendance
-from app.crud.workflow_rules import ensure_collection_open, load_event_campaign, require_approved_worker_user
+from app.crud.workflow_rules import (
+    ensure_collection_open,
+    load_event_campaign,
+    require_approved_worker_user,
+    require_event_assignment,
+    resolve_program_context,
+    resolve_program_level,
+    widen_scope_for_approved_event_submission,
+)
+from app.schemas.counts import CountCreate
+from app.schemas.records import RecordCreate
+from app.schemas.user import WorkerCreate
+from app.crud.crud_worker import worker as crud_worker
 from app.crud.crud_fellowship_activities import (
     member as crud_fellowship_member,
     attendance as crud_fellowship_attendance,
@@ -36,6 +50,19 @@ from app.crud.crud_fellowship_activities import (
 router = APIRouter()
 logger = logging.getLogger(__name__)
 MAX_SYNC_BATCH_RECORDS = 500
+
+
+def _snapshot_sync_actor(current_user: User) -> SimpleNamespace:
+    """Copy request actor data before any shared-session rollback can expire it."""
+    return SimpleNamespace(
+        user_id=current_user.user_id,
+        worker_id=current_user.worker_id,
+        location_id=current_user.location_id,
+        name=current_user.name,
+        path=current_user.path,
+        roles=[SimpleNamespace(score_value=deps.highest_role_score(current_user))],
+        _authorized_nation_paths=tuple(getattr(current_user, "_authorized_nation_paths", ()) or ()),
+    )
 
 
 def _parse_iso_datetime(value: str) -> datetime:
@@ -52,6 +79,7 @@ def _sync_batch_size(batch: SyncBatchRequest) -> int:
         + len(batch.records)
         + len(batch.worker_attendance)
         + len(batch.worker_attendance_submissions)
+        + len(batch.worker_candidates)
         + len(batch.fellowship_members)
         + len(batch.fellowship_attendance)
         + len(batch.fellowship_offerings)
@@ -63,7 +91,28 @@ async def _ensure_sync_item_in_scope(
     current_user: User,
     item: Any,
     scope_cache: Dict[str, bool],
-) -> None:
+) -> bool:
+    assignment_id = getattr(item, "assignment_id", None)
+    is_person_count = isinstance(item, (CountCreate, RecordCreate))
+    event_id = getattr(item, "event_id", None)
+    field_user = deps.highest_role_score(current_user) == 1
+    if is_person_count and (assignment_id or (field_user and event_id)):
+        event = await db.get(ProgramEvent, event_id) if event_id else None
+        if event is None:
+            raise HTTPException(status_code=400, detail="Assigned field submission requires a scheduled event")
+        assignment = await require_event_assignment(
+            db,
+            user=current_user,
+            event=event,
+            assignment_id=assignment_id,
+            location_id=getattr(item, "location_id", None),
+            submission_kind="count" if isinstance(item, CountCreate) else "record",
+            required=field_user,
+        )
+        if assignment:
+            await widen_scope_for_approved_event_submission(db, event)
+            return True
+
     location_id = getattr(item, "location_id", None)
     if location_id:
         cache_key = f"location:{location_id}"
@@ -75,7 +124,7 @@ async def _ensure_sync_item_in_scope(
                 detail="Sync item location outside your scope",
             )
             scope_cache[cache_key] = True
-        return
+        return False
 
     fellowship_id = getattr(item, "fellowship_id", None)
     if fellowship_id:
@@ -90,6 +139,8 @@ async def _ensure_sync_item_in_scope(
                 detail="Sync item fellowship outside your scope",
             )
             scope_cache[cache_key] = True
+        return False
+    return False
 
 
 def _scope_filter(model: Any, scope_path: str):
@@ -182,6 +233,26 @@ async def _client_id_conflicts(
     return conflicts
 
 
+async def _recover_attendance_submission_duplicate(
+    db: AsyncSession,
+    current_user: User,
+    client_id: UUID,
+) -> Any:
+    """Return the canonical capture after a concurrent unique-key race, if present."""
+    existing = (await db.execute(
+        select(WorkerAttendanceSubmission).where(
+            WorkerAttendanceSubmission.client_id == client_id
+        )
+    )).scalars().first()
+    if existing is not None:
+        deps.ensure_path_in_scope(
+            current_user,
+            existing.path,
+            detail="Existing attendance submission is outside your scope",
+        )
+    return existing
+
+
 async def _offerings_key_conflicts(
     db: AsyncSession,
     scope_path: str,
@@ -258,7 +329,7 @@ async def process_sync_list(
     
     for item in items:
         try:
-            await _ensure_sync_item_in_scope(db, current_user, item, scope_cache)
+            assignment_scope = await _ensure_sync_item_in_scope(db, current_user, item, scope_cache)
 
             client_id = getattr(item, "client_id", None)
             if client_id is not None:
@@ -266,10 +337,11 @@ async def process_sync_list(
                     select(crud_module.model).where(crud_module.model.client_id == client_id)
                 )).scalars().first()
                 if existing is not None:
-                    deps.ensure_path_in_scope(
-                        current_user, getattr(existing, "path", None),
-                        detail="Existing sync record is outside your scope",
-                    )
+                    if not assignment_scope:
+                        deps.ensure_path_in_scope(
+                            current_user, getattr(existing, "path", None),
+                            detail="Existing sync record is outside your scope",
+                        )
                     result.duplicates += 1
                     results_list.append({
                         "client_id": str(client_id),
@@ -278,9 +350,10 @@ async def process_sync_list(
                     })
                     continue
 
-            db_obj = await crud_module.create(
-                db, obj_in=item, user_id=current_user.user_id
-            )
+            create_kwargs = {"obj_in": item, "user_id": current_user.user_id}
+            if crud_module in {crud_count, crud_record}:
+                create_kwargs["require_assignment"] = deps.highest_role_score(current_user) == 1
+            db_obj = await crud_module.create(db, **create_kwargs)
             
             # How do we know if it was a duplicate?
             # Our CRUD returns the object. If created_at is old, it's a duplicate.
@@ -290,10 +363,11 @@ async def process_sync_list(
             
             is_duplicate = bool(getattr(db_obj, "_was_duplicate_submission", False))
             if is_duplicate:
-                deps.ensure_path_in_scope(
-                    current_user, getattr(db_obj, "path", None),
-                    detail="Existing sync record is outside your scope",
-                )
+                if not assignment_scope:
+                    deps.ensure_path_in_scope(
+                        current_user, getattr(db_obj, "path", None),
+                        detail="Existing sync record is outside your scope",
+                    )
                 result.duplicates += 1
             else:
                 result.synced += 1
@@ -371,21 +445,44 @@ async def process_attendance_submissions(
                     raise HTTPException(status_code=400, detail="Location must fall within the selected program scope")
                 if event.date != item.date.date():
                     raise HTTPException(status_code=400, detail="Attendance date must match the scheduled program date")
+            broad_event = bool(event and event.reporting_scope in {"group", "region", "state"})
+            assignment = None
+            if item.assignment_id or broad_event:
+                if broad_event:
+                    await widen_scope_for_approved_event_submission(db, event)
+                assignment = await require_event_assignment(
+                    db,
+                    user=current_user,
+                    event=event,
+                    assignment_id=item.assignment_id,
+                    location_id=item.location_id,
+                    submission_kind="attendance",
+                    required=broad_event,
+                )
+            if broad_event and (not assignment or assignment.assignment_type not in {"attendance", "all"}):
+                raise HTTPException(status_code=403, detail="An approved attendance assignment is required for this combined meeting")
+            program_domain_id, program_type_id = await resolve_program_context(
+                db, event=event, program_domain=item.program_domain, program_type=item.program_type
+            )
+            program_level = resolve_program_level(event=event, program_level=item.program_level)
+            reporting_path = str(event.path) if event else str(location.path)
+            roster_path = reporting_path if broad_event else str(location.path)
 
             worker_ids = [worker.worker_id for worker in item.present_workers]
             worker_result = await db.execute(select(Worker).where(
                 Worker.worker_id.in_(worker_ids),
-                Worker.location_id == item.location_id,
+                scope_filter(Worker.path, roster_path),
                 Worker.is_deleted.is_(False),
                 Worker.approval_status == "approved",
             ))
             workers = {worker.worker_id: worker for worker in worker_result.scalars().all()}
             missing_ids = set(worker_ids) - set(workers)
             if missing_ids:
-                raise HTTPException(status_code=422, detail="One or more selected workers are no longer approved at this location. Refresh the roster and try again.")
+                detail = "One or more selected workers are no longer approved within this meeting scope. Refresh the roster and try again." if broad_event else "One or more selected workers are no longer approved at this location. Refresh the roster and try again."
+                raise HTTPException(status_code=422, detail=detail)
 
             roster_count_result = await db.execute(select(func.count(Worker.worker_id)).where(
-                Worker.location_id == item.location_id,
+                scope_filter(Worker.path, roster_path),
                 Worker.is_deleted.is_(False),
                 Worker.approval_status == "approved",
             ))
@@ -394,9 +491,14 @@ async def process_attendance_submissions(
                 raise HTTPException(status_code=409, detail="The approved worker roster changed. Refresh the roster before submitting attendance.")
 
             duplicate_query = select(WorkerAttendance.worker_id).where(
-                WorkerAttendance.location_id == item.location_id,
                 WorkerAttendance.worker_id.in_(worker_ids),
                 WorkerAttendance.is_deleted.is_(False),
+                *(([]) if broad_event else [WorkerAttendance.location_id == item.location_id]),
+                # LtreeType intentionally stores paths as VARCHAR and casts bind
+                # parameters to LTREE for hierarchy operators. Equality here is
+                # against the exact persisted reporting path, so compare text on
+                # both sides; VARCHAR = LTREE is invalid on PostgreSQL.
+                (cast(WorkerAttendance.program_scope_path, String) == str(reporting_path)) if broad_event else text("TRUE"),
                 WorkerAttendance.event_id == item.event_id if item.event_id else (
                     WorkerAttendance.event_id.is_(None) & (WorkerAttendance.date == item.date)
                 ),
@@ -404,11 +506,14 @@ async def process_attendance_submissions(
             if (await db.execute(duplicate_query)).scalar_one_or_none() is not None:
                 raise HTTPException(status_code=409, detail="At least one selected worker is already recorded for this service. Refresh attendance to avoid duplicate counts.")
 
-            path = str(location.path)
+            path = reporting_path
             submission = WorkerAttendanceSubmission(
-                client_id=item.client_id, path=path, location_id=item.location_id,
-                event_id=item.event_id, date=item.date,
+                client_id=item.client_id, path=path, program_scope_path=reporting_path, location_id=item.location_id,
+                event_id=item.event_id, assignment_id=assignment.id if assignment else None, date=item.date,
                 church_type=item.church_type or location.church_type,
+                program_level=program_level,
+                program_domain_id=program_domain_id,
+                program_type_id=program_type_id,
                 program_domain=item.program_domain, program_type=item.program_type,
                 expected_workers_count=actual_roster_count,
                 present_count=len(workers),
@@ -428,9 +533,13 @@ async def process_attendance_submissions(
                 db.add(WorkerAttendance(
                     submission_id=submission.id,
                     client_id=uuid5(item.client_id, str(worker_id)),
-                    path=path, location_id=item.location_id, event_id=item.event_id,
+                    path=str(worker.path), program_scope_path=reporting_path, location_id=worker.location_id, event_id=item.event_id,
+                    assignment_id=assignment.id if assignment else None,
                     date=item.date,
-                    church_type=item.church_type or location.church_type,
+                    church_type=worker.church_type,
+                    program_level=program_level,
+                    program_domain_id=program_domain_id,
+                    program_type_id=program_type_id,
                     program_domain=item.program_domain, program_type=item.program_type,
                     worker_id=worker.worker_id, worker_name=worker.name,
                     worker_phone=worker.phone, worker_unit=worker.unit,
@@ -441,6 +550,29 @@ async def process_attendance_submissions(
             details.append({"client_id": str(item.client_id), "id": str(submission.id), "status": "synced", "present_count": len(workers)})
         except Exception as exc:
             await db.rollback()
+            if isinstance(exc, IntegrityError):
+                try:
+                    existing = await _recover_attendance_submission_duplicate(
+                        db, current_user, item.client_id
+                    )
+                except HTTPException as scope_exc:
+                    result.errors += 1
+                    details.append({
+                        "client_id": str(item.client_id),
+                        "status": "error",
+                        "error": str(scope_exc.detail),
+                    })
+                    continue
+                except Exception:
+                    existing = None
+                if existing is not None:
+                    result.duplicates += 1
+                    details.append({
+                        "client_id": str(item.client_id),
+                        "id": str(existing.id),
+                        "status": "duplicate",
+                    })
+                    continue
             result.errors += 1
             message = str(exc.detail) if isinstance(exc, HTTPException) else "Unable to process this attendance submission"
             if not isinstance(exc, HTTPException):
@@ -448,6 +580,176 @@ async def process_attendance_submissions(
             details.append({"client_id": str(item.client_id), "status": "error", "error": message})
     result.details = details
     return result
+
+
+async def process_worker_candidates(
+    db: AsyncSession,
+    items: list[Any],
+    current_user: User,
+) -> SyncResult:
+    """Accept offline worker candidates from an approved Level 1 field worker."""
+    from fastapi import HTTPException
+
+    result = SyncResult()
+    details = []
+    # CRUD commits expire ORM instances in the shared AsyncSession. Cache the
+    # authenticated actor's values before processing the first item so later
+    # records never trigger an implicit async lazy-load of current_user.
+    actor_role_score = deps.highest_role_score(current_user)
+    actor_user_id = current_user.user_id
+    actor_worker_id = current_user.worker_id
+    actor_location_id = current_user.location_id
+
+    actor_error: HTTPException | None = None
+    hierarchy = None
+    if actor_role_score != 1:
+        actor_error = HTTPException(status_code=403, detail="Worker candidates may only be submitted by a Level 1 field worker")
+    elif not actor_worker_id or not actor_location_id:
+        actor_error = HTTPException(status_code=403, detail="The signed-in field worker has no assigned church location")
+    else:
+        try:
+            await require_approved_worker_user(db, actor_user_id)
+            submitter_result = await db.execute(
+                select(Worker).where(Worker.worker_id == actor_worker_id)
+            )
+            submitter = submitter_result.scalars().first()
+            if not submitter or str(submitter.location_id) != str(actor_location_id):
+                raise HTTPException(status_code=403, detail="The signed-in worker's assigned location could not be verified")
+
+            hierarchy_result = await db.execute(
+                select(Location, Group, Region, State)
+                .join(Group, Location.group_id == Group.group_id)
+                .join(Region, Group.region_id == Region.region_id)
+                .join(State, Region.state_id == State.state_id)
+                .where(Location.location_id == actor_location_id)
+            )
+            hierarchy = hierarchy_result.first()
+            if not hierarchy:
+                raise HTTPException(status_code=404, detail="The assigned church location could not be found")
+        except HTTPException as exc:
+            actor_error = exc
+
+    existing_by_client_id: dict[UUID, Worker] = {}
+    client_ids = list({item.client_id for item in items})
+    if client_ids:
+        existing_result = await db.execute(
+            select(Worker).where(Worker.client_id.in_(client_ids))
+        )
+        existing_by_client_id = {
+            worker.client_id: worker for worker in existing_result.scalars().all()
+        }
+
+    for item in items:
+        try:
+            if actor_error:
+                raise actor_error
+
+            existing = existing_by_client_id.get(item.client_id)
+            if existing:
+                if str(existing.location_id) != str(actor_location_id):
+                    raise HTTPException(status_code=403, detail="This registration ID is already used outside your location")
+                same_payload = (
+                    existing.name == item.name.strip()
+                    and existing.gender == item.gender
+                    and existing.phone == item.phone.strip()
+                    and existing.email == str(item.email).strip().lower()
+                    and existing.unit == item.unit.strip()
+                    and (existing.address or None) == item.address
+                    and (existing.occupation or None) == item.occupation
+                    and (existing.marital_status or None) == item.marital_status
+                )
+                if not same_payload:
+                    raise HTTPException(status_code=409, detail="Registration ID was already used for different worker details")
+                result.duplicates += 1
+                details.append({"client_id": str(item.client_id), "id": str(existing.worker_id), "status": "duplicate"})
+                continue
+
+            location, group, region, state = hierarchy
+            worker_in = WorkerCreate(
+                location_id=str(location.location_id),
+                location_name=location.location_name,
+                church_type=location.church_type,
+                state=state.state_name,
+                region=region.region_name,
+                group=group.group_name,
+                name=item.name.strip(),
+                gender=item.gender,
+                phone=item.phone.strip(),
+                email=str(item.email).strip().lower(),
+                address=item.address,
+                occupation=item.occupation,
+                marital_status=item.marital_status,
+                unit=item.unit.strip(),
+                status="Active",
+            )
+            try:
+                async with db.begin_nested():
+                    worker = await crud_worker.create(
+                        db,
+                        obj_in=worker_in,
+                        client_id=item.client_id,
+                        created_by_id=actor_user_id,
+                        commit=False,
+                        location_path=str(location.path),
+                    )
+            except IntegrityError as integrity_error:
+                canonical = (await db.execute(
+                    select(Worker).where(Worker.client_id == item.client_id)
+                )).scalars().first()
+                if canonical and str(canonical.location_id) == str(actor_location_id):
+                    result.duplicates += 1
+                    details.append({"client_id": str(item.client_id), "id": str(canonical.worker_id), "status": "duplicate"})
+                    continue
+                constraint_name = _worker_integrity_constraint_name(integrity_error)
+                if constraint_name in {"uq_worker_phone", "uq_worker_email", "workers_phone_key", "workers_email_key"}:
+                    raise HTTPException(status_code=409, detail="A worker with this phone number or email already exists")
+                raise
+            result.synced += 1
+            existing_by_client_id[item.client_id] = worker
+            details.append({
+                "client_id": str(item.client_id),
+                "id": str(worker.worker_id),
+                "status": "synced",
+                "approval_status": worker.approval_status,
+            })
+        except Exception as exc:
+            result.errors += 1
+            message = str(exc.detail) if isinstance(exc, HTTPException) else "Unable to process this worker candidate"
+            if not isinstance(exc, HTTPException):
+                logger.exception("Worker candidate sync failed")
+            details.append({"client_id": str(getattr(item, "client_id", "")), "status": "error", "error": message})
+    if result.synced:
+        try:
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            logger.exception("Worker candidate batch commit failed")
+            for detail in details:
+                if detail.get("status") == "synced":
+                    detail.update(status="error", error="Unable to commit this worker candidate")
+            result.errors += result.synced
+            result.synced = 0
+    result.details = details
+    return result
+
+
+def _worker_integrity_constraint_name(error: IntegrityError) -> str | None:
+    """Extract PostgreSQL constraint names across psycopg and asyncpg drivers."""
+    original = error.orig
+    constraint_name = (
+        getattr(getattr(original, "diag", None), "constraint_name", None)
+        or getattr(original, "constraint_name", None)
+        or getattr(getattr(original, "__cause__", None), "constraint_name", None)
+    )
+    if constraint_name:
+        return str(constraint_name)
+    message = str(original)
+    return next(
+        (name for name in (
+            "uq_worker_phone", "uq_worker_email", "workers_phone_key", "workers_email_key"
+        ) if name in message),
+        None,
+    )
 
 
 @router.post(
@@ -471,20 +773,25 @@ async def batch_sync(
             status_code=413,
             detail=f"Batch contains {total_records} records; maximum is {MAX_SYNC_BATCH_RECORDS}.",
         )
+    # Several processors share this AsyncSession, and a per-item rollback can
+    # expire ORM-backed user relationships. All authorization helpers below
+    # need only this immutable request snapshot after the permission check.
+    actor = _snapshot_sync_actor(current_user)
     scope_cache: Dict[str, bool] = {}
     
     # Process each list
-    counts_res = await process_sync_list(db, batch.counts, crud_count, current_user, scope_cache)
-    offerings_res = await process_sync_list(db, batch.offerings, crud_offering, current_user, scope_cache)
-    records_res = await process_sync_list(db, batch.records, crud_record, current_user, scope_cache)
-    worker_att_res = await process_sync_list(db, batch.worker_attendance, crud_worker_attendance, current_user, scope_cache)
+    counts_res = await process_sync_list(db, batch.counts, crud_count, actor, scope_cache)
+    offerings_res = await process_sync_list(db, batch.offerings, crud_offering, actor, scope_cache)
+    records_res = await process_sync_list(db, batch.records, crud_record, actor, scope_cache)
+    worker_att_res = await process_sync_list(db, batch.worker_attendance, crud_worker_attendance, actor, scope_cache)
     worker_att_submissions_res = await process_attendance_submissions(
-        db, batch.worker_attendance_submissions, current_user, scope_cache
+        db, batch.worker_attendance_submissions, actor, scope_cache
     )
+    worker_candidates_res = await process_worker_candidates(db, batch.worker_candidates, actor)
     
-    fel_mem_res = await process_sync_list(db, batch.fellowship_members, crud_fellowship_member, current_user, scope_cache)
-    fel_att_res = await process_sync_list(db, batch.fellowship_attendance, crud_fellowship_attendance, current_user, scope_cache)
-    fel_off_res = await process_sync_list(db, batch.fellowship_offerings, crud_fellowship_offering, current_user, scope_cache)
+    fel_mem_res = await process_sync_list(db, batch.fellowship_members, crud_fellowship_member, actor, scope_cache)
+    fel_att_res = await process_sync_list(db, batch.fellowship_attendance, crud_fellowship_attendance, actor, scope_cache)
+    fel_off_res = await process_sync_list(db, batch.fellowship_offerings, crud_fellowship_offering, actor, scope_cache)
     
     return SyncBatchResponse(
         counts=counts_res,
@@ -492,6 +799,7 @@ async def batch_sync(
         records=records_res,
         worker_attendance=worker_att_res,
         worker_attendance_submissions=worker_att_submissions_res,
+        worker_candidates=worker_candidates_res,
         fellowship_members=fel_mem_res,
         fellowship_attendance=fel_att_res,
         fellowship_offerings=fel_off_res
@@ -522,6 +830,7 @@ async def get_incremental_changes(
     from app.models.offerings import Offering
     from app.models.records import Record
     from app.models.attendance import WorkerAttendance
+    from app.models.attendance import WorkerAttendanceSubmission
     from app.models.fellowship_activities import FellowshipMember, FellowshipAttendance, FellowshipOffering
     
     import json
@@ -665,6 +974,8 @@ async def get_sync_conflicts(
     conflicts.extend(await _client_id_conflicts(db, Offering, "offerings", scope_path))
     conflicts.extend(await _client_id_conflicts(db, Record, "records", scope_path))
     conflicts.extend(await _client_id_conflicts(db, WorkerAttendance, "worker_attendance", scope_path))
+    conflicts.extend(await _client_id_conflicts(db, WorkerAttendanceSubmission, "worker_attendance_submissions", scope_path))
+    conflicts.extend(await _client_id_conflicts(db, Worker, "worker_candidates", scope_path))
     conflicts.extend(await _client_id_conflicts(db, FellowshipMember, "fellowship_members", scope_path))
     conflicts.extend(await _client_id_conflicts(db, FellowshipAttendance, "fellowship_attendance", scope_path))
     conflicts.extend(await _client_id_conflicts(db, FellowshipOffering, "fellowship_offerings", scope_path))

@@ -28,7 +28,7 @@ class RemovalRequestResponse(BaseModel):
     id: UUID
     worker_id: UUID
     status: str                          # pending | approved | rejected | escalated
-    current_level: int                   # 3, 4, 5, or 6
+    current_level: int                   # 3=Group, 4=Region, 5=State
     reason: str
     reviews: List[Dict[str, Any]] = Field(default_factory=list)   # Full escalation audit trail
     requested_by: UUID
@@ -55,10 +55,26 @@ class TransferRequestResponse(BaseModel):
     from_location_id: str
     to_location_id: str
     status: str
+    current_level: int = 3
+    workflow_stage: str = "origin_group"
     reason: Optional[str] = None
+    rejection_reason: Optional[str] = None
     requested_by: Optional[UUID] = None
     approved_by: Optional[UUID] = None
     approved_at: Optional[datetime] = None
+    group_approved_by: Optional[UUID] = None
+    group_approved_at: Optional[datetime] = None
+    group_note: Optional[str] = None
+    region_approved_by: Optional[UUID] = None
+    region_approved_at: Optional[datetime] = None
+    region_note: Optional[str] = None
+    receiving_location_approved_by: Optional[UUID] = None
+    receiving_location_approved_at: Optional[datetime] = None
+    receiving_location_note: Optional[str] = None
+    receiving_group_approved_by: Optional[UUID] = None
+    receiving_group_approved_at: Optional[datetime] = None
+    receiving_group_note: Optional[str] = None
+    reviews: List[Dict[str, Any]] = Field(default_factory=list)
     created_at: Optional[datetime] = None
 
 

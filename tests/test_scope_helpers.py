@@ -26,6 +26,8 @@ from app.db.filters import (
 from app.models.attendance import WorkerAttendance
 from app.models.programs import ProgramEvent
 from app.schemas.user import UserResponse
+from app.core.security import can_assign_role, create_admin_access_id
+from app.frontend.dclm_admin.backend.mappers import profile_key_for_score
 
 
 def test_path_in_scope_allows_descendants():
@@ -35,6 +37,30 @@ def test_path_in_scope_allows_descendants():
 
 def test_path_in_scope_rejects_siblings():
     assert not deps.path_in_scope("org.234.KW", "org.234.LA")
+
+
+def test_canonical_role_score_scope_mapping():
+    home = "org.234.KW.ILR.ILE.003"
+    assert create_admin_access_id(home, 2) == home
+    assert create_admin_access_id(home, 3) == "org.234.KW.ILR.ILE"
+    assert create_admin_access_id(home, 4) == "org.234.KW.ILR"
+    assert create_admin_access_id(home, 5) == "org.234.KW"
+    assert profile_key_for_score(2) == "location_pastor"
+    assert profile_key_for_score(3) == "group_pastor"
+    assert profile_key_for_score(4) == "region_pastor"
+    assert profile_key_for_score(5) == "state_overseer"
+
+
+def test_role_assignment_is_limited_to_levels_managed_by_this_app():
+    assert can_assign_role(3, 2)
+    assert can_assign_role(4, 3)
+    assert can_assign_role(5, 4)
+    assert can_assign_role(2, 1)
+    assert can_assign_role(9, 8)
+    assert can_assign_role(8, 7)
+    assert can_assign_role(7, 5)
+    assert not can_assign_role(5, 6)
+    assert not can_assign_role(6, 6)
 
 
 def test_resolve_scope_path_rejects_escalation():
@@ -56,10 +82,11 @@ def test_resolve_scope_path_accepts_descendant_scope():
     ("score", "expected"),
     [
         (1, "org.234.KW.ILR.ILE.003"),
-        (3, "org.234.KW.ILR.ILE.003"),
-        (4, "org.234.KW.ILR.ILE"),
-        (5, "org.234.KW.ILR"),
-        (6, "org.234.KW"),
+        (2, "org.234.KW.ILR.ILE.003"),
+        (3, "org.234.KW.ILR.ILE"),
+        (4, "org.234.KW.ILR"),
+        (5, "org.234.KW"),
+        (6, "org.234.KW.ILR.ILE.003"),
         (7, "org.234"),
         (8, "org"),  # Current schema has no continent node; remains a known limitation.
         (9, "org"),
@@ -86,7 +113,7 @@ def test_effective_scope_rejects_invalid_home_path():
 def test_ensure_path_in_scope_uses_role_scope_not_home_path():
     current_user = SimpleNamespace(
         path="org.234.KW.ILR.ILE.003",
-        roles=[SimpleNamespace(score_value=4)],
+            roles=[SimpleNamespace(score_value=3)],
     )
 
     deps.ensure_path_in_scope(current_user, "org.234.KW.ILR.ILE.009")

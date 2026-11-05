@@ -70,6 +70,16 @@ def _normalize_announcement(row: dict[str, Any]) -> dict[str, Any]:
         "path": str(row.get("path") or ""),
         "region_id": str(row.get("region_id") or ""),
         "region_name": str(row.get("region_name") or ""),
+        "sws_bible_reading": str(row.get("sws_bible_reading") or ""),
+        "sws_hymn": str(row.get("sws_hymn") or ""),
+        "sws_topic": str(row.get("sws_topic") or ""),
+        "mbs_bible_reading": str(row.get("mbs_bible_reading") or ""),
+        "mbs_topic": str(row.get("mbs_topic") or ""),
+        "sts_study": str(row.get("sts_study") or ""),
+        "revival_topic": str(row.get("revival_topic") or ""),
+        "revival_info": str(row.get("revival_info") or ""),
+        "wedding_announcements": str(row.get("wedding_announcements") or ""),
+        "general_announcements": str(row.get("general_announcements") or ""),
         "can_return_to_draft": False,
     }
 
@@ -219,6 +229,16 @@ class CommunicationService:
             "meeting": payload.get("meeting") or "special_notice",
             "date": meeting_date,
             "items": _build_announcement_items(payload),
+            "sws_bible_reading": payload.get("sws_bible_reading") or None,
+            "sws_hymn": payload.get("sws_hymn") or None,
+            "sws_topic": payload.get("sws_topic") or None,
+            "mbs_bible_reading": payload.get("mbs_bible_reading") or None,
+            "mbs_topic": payload.get("mbs_topic") or None,
+            "sts_study": payload.get("sts_study") or None,
+            "revival_topic": payload.get("revival_topic") or None,
+            "revival_info": payload.get("revival_info") or None,
+            "wedding_announcements": payload.get("wedding_announcements") or None,
+            "general_announcements": payload.get("general_announcements") or None,
             "is_active": payload.get("submit_action") != "archive",
         }
         created = await client.create_announcement(await CommunicationService.use_mock(request), backend_payload)
@@ -228,6 +248,16 @@ class CommunicationService:
         return _normalize_announcement(created)
 
     @staticmethod
+    async def list_broadcasts(request) -> list[dict[str, Any]]:
+        client = async_client(get_api_client())
+        return await client.list_broadcasts(await CommunicationService.use_mock(request), limit=100)
+
+    @staticmethod
+    async def create_broadcast(request, payload: dict[str, Any]) -> dict[str, Any]:
+        client = async_client(get_api_client())
+        return await client.create_broadcast(await CommunicationService.use_mock(request), payload)
+
+    @staticmethod
     async def update_announcement_legacy(request, ctx, announcement_id: str, payload: dict[str, str]) -> dict[str, Any]:
         client = async_client(get_api_client())
         backend_payload = {
@@ -235,6 +265,16 @@ class CommunicationService:
             "meeting": payload.get("meeting") or None,
             "date": payload.get("meeting_date") or None,
             "items": _build_announcement_items(payload),
+            "sws_bible_reading": payload.get("sws_bible_reading") or None,
+            "sws_hymn": payload.get("sws_hymn") or None,
+            "sws_topic": payload.get("sws_topic") or None,
+            "mbs_bible_reading": payload.get("mbs_bible_reading") or None,
+            "mbs_topic": payload.get("mbs_topic") or None,
+            "sts_study": payload.get("sts_study") or None,
+            "revival_topic": payload.get("revival_topic") or None,
+            "revival_info": payload.get("revival_info") or None,
+            "wedding_announcements": payload.get("wedding_announcements") or None,
+            "general_announcements": payload.get("general_announcements") or None,
             "is_active": True,
         }
         updated = await client.update_announcement(await CommunicationService.use_mock(request), announcement_id, backend_payload)

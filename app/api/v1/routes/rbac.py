@@ -11,7 +11,7 @@ from app.schemas.rbac import (
     PermissionCreate, PermissionUpdate, PermissionResponse,
     RoleScoreCreate, RoleScoreUpdate, RoleScoreResponse
 )
-from app.models.user import Role as RoleModel, User
+from app.models.user import Role as RoleModel, RoleScore, User
 
 router = APIRouter()
 
@@ -60,7 +60,7 @@ async def create_permission(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Create new permission."""
-    return await permission.create(db, obj_in=permission_in)
+    raise HTTPException(status_code=403, detail="Permission catalog is migration-managed")
 
 @router.put(
     "/permissions/{permission_id}",
@@ -78,7 +78,7 @@ async def update_permission(
     perm = await permission.get(db, id=permission_id)
     if not perm:
         raise HTTPException(status_code=404, detail="Permission not found")
-    return await permission.update(db, db_obj=perm, obj_in=permission_in)
+    raise HTTPException(status_code=403, detail="Permission catalog is migration-managed")
 
 @router.delete(
     "/permissions/{permission_id}",
@@ -95,8 +95,7 @@ async def delete_permission(
     perm = await permission.get(db, id=permission_id)
     if not perm:
         raise HTTPException(status_code=404, detail="Permission not found")
-    await permission.remove(db, id=permission_id)
-    return None
+    raise HTTPException(status_code=403, detail="Permission catalog is migration-managed")
 
 # ==========================================
 # Roles Endpoints
@@ -113,7 +112,9 @@ async def read_roles(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """List all roles."""
-    return await role.get_multi(db, skip=skip, limit=limit)
+    stmt = select(RoleModel).options(selectinload(RoleModel.score), selectinload(RoleModel.permissions))
+    result = await db.execute(stmt.order_by(RoleModel.id).offset(skip).limit(limit))
+    return result.scalars().all()
 
 
 @router.get("/roles/available", response_model=List[RoleResponse])
@@ -135,12 +136,19 @@ async def read_available_roles(
     max_score = max([r.score.score for r in current_user.roles if r.score]) if current_user.roles else None
     if max_score is None:
         return []
+    if max_score < 2:
+        return []
 
+    # Pastoral users may assign worker-level roles in their scope as part of
+    # registering an approved worker; pastoral roles remain strictly lower.
     stmt = (
         select(RoleModel)
         .options(selectinload(RoleModel.score))
         .join(RoleScore, RoleScore.id == RoleModel.score_id)
-        .where(RoleScore.score < max_score)
+        .where(
+            (RoleScore.score == 1)
+            | ((RoleScore.score < max_score) & (RoleScore.score >= 2))
+        )
         .order_by(RoleScore.score.desc())
     )
     result = await db.execute(stmt)
@@ -176,6 +184,9 @@ async def create_role(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Create new role with permissions."""
+    score = await db.get(RoleScore, role_in.score_id)
+    if score is None or not 2 <= score.score <= 5:
+        raise HTTPException(status_code=403, detail="This application only manages roles at levels 2 through 5")
     return await role.create_with_permissions(db, obj_in=role_in)
 
 @router.put(
@@ -194,6 +205,15 @@ async def update_role(
     db_role = await role.get(db, id=role_id)
     if not db_role:
         raise HTTPException(status_code=404, detail="Role not found")
+    if db_role.role_name in {"Zonal Coordinator", "National Admin", "National Overseer", "Continental Admin", "Continental Overseer", "Global Admin"}:
+        raise HTTPException(status_code=403, detail="Reserved enterprise roles cannot be managed in this application")
+    score = await db.get(RoleScore, role_in.score_id) if role_in.score_id is not None else None
+    if role_in.score_id is not None and (score is None or not 2 <= score.score <= 5):
+        raise HTTPException(status_code=403, detail="This application only manages roles at levels 2 through 5")
+    if role_in.permission_ids is not None:
+        raise HTTPException(status_code=403, detail="Role permission changes require an approved governance workflow")
+    if set(role_in.model_dump(exclude_unset=True)) - {"role_name"}:
+        raise HTTPException(status_code=403, detail="Role definitions are fixed; permission changes require an approved governance workflow")
     return await role.update_with_permissions(db, db_obj=db_role, obj_in=role_in)
 
 @router.delete(
@@ -211,6 +231,10 @@ async def delete_role(
     db_role = await role.get(db, id=role_id)
     if not db_role:
         raise HTTPException(status_code=404, detail="Role not found")
+    if db_role.score_value < 2 or db_role.score_value > 5:
+        raise HTTPException(status_code=403, detail="This application only manages role definitions at levels 2 through 5")
+    if db_role.role_name in {"House Fellowship Leader", "Location Worker", "Location Usher", "Group Usher", "Region Usher", "State Usher", "Zonal Coordinator", "National Admin", "National Overseer", "Continental Admin", "Continental Overseer", "Global Admin"}:
+        raise HTTPException(status_code=403, detail="System, worker, and reserved enterprise roles cannot be deleted here")
     await role.remove(db, id=role_id)
     return None
 
@@ -230,6 +254,10 @@ async def set_role_permissions(
     db_role = await role.get(db, id=role_id)
     if not db_role:
         raise HTTPException(status_code=404, detail="Role not found")
+    if db_role.role_name in {"Zonal Coordinator", "National Admin", "National Overseer", "Continental Admin", "Continental Overseer", "Global Admin"}:
+        raise HTTPException(status_code=403, detail="This role is reserved or event-scoped and cannot be edited here")
+    if db_role.score_value < 2 or db_role.score_value > 5:
+        raise HTTPException(status_code=403, detail="This application only manages role definitions at levels 2 through 5")
     return await role.update_with_permissions(db, db_obj=db_role, obj_in={"permission_ids": permission_ids})
 
 @router.delete(
@@ -250,6 +278,8 @@ async def remove_role_permission(
     db_role = result.scalars().first()
     if not db_role:
         raise HTTPException(status_code=404, detail="Role not found")
+    if db_role.role_name in {"House Fellowship Leader", "Location Worker", "Location Usher", "Group Usher", "Region Usher", "State Usher", "Zonal Coordinator", "National Admin", "National Overseer", "Continental Admin", "Continental Overseer", "Global Admin"}:
+        raise HTTPException(status_code=403, detail="System, worker, and reserved enterprise roles cannot be edited here")
     db_role.permissions = [p for p in db_role.permissions if p.id != permission_id]
     await db.commit()
     role_with_permissions = await role.get_with_permissions(db, role_id)
@@ -300,7 +330,7 @@ async def create_score(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Create role score."""
-    return await role_score.create(db, obj_in=score_in)
+    raise HTTPException(status_code=403, detail="Role scores are fixed by the canonical church hierarchy")
 
 @router.put(
     "/scores/{score_id}",
@@ -318,7 +348,7 @@ async def update_score(
     db_score = await role_score.get(db, id=score_id)
     if not db_score:
         raise HTTPException(status_code=404, detail="Role score not found")
-    return await role_score.update(db, db_obj=db_score, obj_in=score_in)
+    raise HTTPException(status_code=403, detail="Role scores are fixed by the canonical church hierarchy")
 
 @router.delete(
     "/scores/{score_id}",
@@ -335,5 +365,4 @@ async def delete_score(
     db_score = await role_score.get(db, id=score_id)
     if not db_score:
         raise HTTPException(status_code=404, detail="Role score not found")
-    await role_score.remove(db, id=score_id)
-    return None
+    raise HTTPException(status_code=403, detail="Role scores are fixed by the canonical church hierarchy")

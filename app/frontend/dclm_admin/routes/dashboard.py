@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from fasthtml.common import Div, H2, H4, P, Span
-from faststrap import Button, PlaceholderCard, Spinner, ToggleGroup
+from fasthtml.common import Div, Form, H2, H4, P, Span
+from faststrap import Button, PlaceholderCard, Select as FsSelect, Spinner, ToggleGroup
 from starlette.requests import Request
 
 from ..auth_context import build_context
@@ -22,7 +22,7 @@ PANEL_COPY = {
     ),
     "population": (
         "Attendance mix",
-        "Recent count records grouped by gender and age band.",
+        "Average attendance per dated program occurrence in the selected reporting period.",
     ),
     "workers": (
         "Workers and attendance",
@@ -48,12 +48,12 @@ PANEL_COPY = {
 
 PROFILE_SECTIONS = {
     "local": {
-        "autoload": ("congregation", "workers"),
+        "autoload": ("congregation", "population", "workers"),
         "deferred": ("newcomers", "programs", "meetings"),
     },
     "state": {
-        "autoload": ("governance", "workers"),
-        "deferred": ("population", "programs", "newcomers"),
+        "autoload": ("governance", "population", "workers"),
+        "deferred": ("programs", "newcomers"),
     },
     "governance": {
         "autoload": ("governance",),
@@ -73,7 +73,7 @@ SECTION_BOOTSTRAP_KEYS = {
 
 
 def _bootstrap_keys_for_profile(profile: str) -> tuple[str, ...]:
-    keys = ["summary"]
+    keys = ["summary", "scope_children"]
     for section_key in PROFILE_SECTIONS[profile]["autoload"]:
         keys.extend(SECTION_BOOTSTRAP_KEYS.get(section_key, ()))
     return tuple(dict.fromkeys(keys))
@@ -319,11 +319,11 @@ async def _dashboard_snapshot(request: Request, ctx) -> dict[str, Any]:
 
 
 def _dashboard_profile(ctx) -> str:
-    if ctx.level <= 5:
+    if ctx.level >= 9:
+        return "governance"
+    if ctx.level <= 4:
         return "local"
-    if ctx.level == 6:
-        return "state"
-    return "governance"
+    return "state"
 
 
 async def _summary_snapshot(request: Request, ctx) -> dict[str, Any]:
@@ -408,12 +408,11 @@ async def _congregation_panel(snapshot: dict[str, Any], *, view: str) -> Any:
 
 
 async def _population_panel(snapshot: dict[str, Any], *, view: str) -> Any:
-    summary = snapshot["summary"]
     population_mix = snapshot["population_mix"]
     if view == "summary":
         return _mix_rows(
             [
-                ("Latest population total", str(population_mix.get("total") or summary["latest_total"]), "Drawn from recorded count statistics."),
+                ("Average attendance", str(_safe_int(population_mix.get("total"))), "Location counts with matching program metadata and date are combined before averaging."),
                 ("Men to women", f"{population_mix.get('percentage_men', 0)}% / {population_mix.get('percentage_women', 0)}%", "Recorded attendance mix across count records."),
                 ("Adults to youths to children", f"{population_mix.get('percentage_adults', 0)}% / {population_mix.get('percentage_youths', 0)}% / {population_mix.get('percentage_children', 0)}%", "Age-group balance in service attendance."),
             ]
@@ -421,13 +420,13 @@ async def _population_panel(snapshot: dict[str, Any], *, view: str) -> Any:
 
     gender_rows = _service_gender_rows(population_mix)
     age_rows = _service_age_rows(population_mix)
-    total_label = f"{population_mix.get('total') or summary['latest_total']}"
+    total_label = str(_safe_int(population_mix.get("total")))
     return _chart_grid(
         _chart_tile(
             "Service gender mix",
             _donut_chart(gender_rows, label="Service population gender mix", total_label="Attendance"),
             _chart_legend(gender_rows),
-            f"The latest population total is {total_label} people across recorded counts.",
+            f"Average attendance is {total_label} people per dated program occurrence.",
         ),
         _chart_tile(
             "Age-group turnout",
@@ -941,6 +940,32 @@ async def _dashboard_content(request: Request, ctx) -> Any:
     profile = _dashboard_profile(ctx)
     DashboardService.configure_bootstrap_sections(request, _bootstrap_keys_for_profile(profile))
     summary = (await _summary_snapshot(request, ctx))["summary"]
+    payload = await DashboardService.bootstrap_payload(request, ctx) or {}
+    current_scope = str(payload.get("scope_path") or await DashboardService.scope_path(request, ctx))
+    selected_scope_values = request.query_params.getlist("scope_path")
+    selected_scope = str((selected_scope_values[-1] if selected_scope_values else None) or current_scope)
+    children = payload.get("scope_children") if isinstance(payload.get("scope_children"), list) else []
+    period = str(request.query_params.get("period") or "recent")
+    if period not in {"recent", "month", "quarter", "year"}:
+        period = "recent"
+    scope_options = [(current_scope, f"Current level ({current_scope.split('.')[-1]})", selected_scope == current_scope)]
+    scope_options.extend(
+        (str(row.get("path") or ""), f"{row.get('name') or row.get('code') or 'Child scope'} ({row.get('code') or ''})", selected_scope == row.get("path"))
+        for row in children if row.get("path")
+    )
+    period_options = [(key, label, period == key) for key, label in (
+        ("recent", "Last 30 days"), ("month", "This month"), ("quarter", "This quarter"), ("year", "This year")
+    )]
+    dashboard_filters = Form(
+        FsSelect("scope_path", *scope_options, label="Dashboard level", cls="mb-0"),
+        FsSelect("period", *period_options, label="Population reporting period", cls="mb-0"),
+        P("The level selector shows this jurisdiction and its direct children. The period applies to the population average and child comparison.", cls="small text-muted mb-0"),
+        hx_get=ctx.url_for("/dashboard/content"),
+        hx_trigger="change",
+        hx_target="#dashboard-content",
+        hx_swap="innerHTML",
+        cls="dashboard-filter-bar d-grid gap-3 mb-3",
+    )
 
     if profile == "local":
         metrics = [
@@ -983,6 +1008,7 @@ async def _dashboard_content(request: Request, ctx) -> Any:
 
     return page_stack(
         _dashboard_intro(),
+        dashboard_filters,
         Div(*metrics, cls="metrics-grid"),
         section_card("Quick actions", "Go straight to a common task.", quick_actions(actions)),
         *section_blocks,

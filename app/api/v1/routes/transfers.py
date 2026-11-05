@@ -5,8 +5,8 @@ Worker Transfers:
   POST   /api/v1/transfers                              — Request transfer
   GET    /api/v1/transfers                              — List transfers in scope
   GET    /api/v1/transfers/{transfer_id}                — Get single transfer
-  POST   /api/v1/transfers/{transfer_id}/approve-origin — Origin pastor approves
-  POST   /api/v1/transfers/{transfer_id}/approve-dest   — Destination pastor approves
+  POST   /api/v1/transfers/{transfer_id}/approve-origin — Advances origin/group review
+  POST   /api/v1/transfers/{transfer_id}/approve-dest   — Advances receiving/regional review
   POST   /api/v1/transfers/{transfer_id}/reject         — Reject transfer
   GET    /api/v1/transfers/{transfer_id}/letter         — Download PDF letter
 
@@ -37,6 +37,11 @@ from app.schemas.transfers import (
 )
 
 router = APIRouter()
+
+
+def _require_location_pastor(current_user: User) -> None:
+    if deps.highest_role_score(current_user) not in {2, 3, 4, 5}:
+        raise HTTPException(status_code=403, detail="Only church leadership levels 2 through 5 may review transfers")
 
 
 async def _ensure_transfer_access(db: AsyncSession, current_user: User, transfer) -> None:
@@ -75,6 +80,10 @@ async def request_transfer(
     Request a formal worker transfer from one location to another.
     Creates a pending transfer with a unique reference number (TRF-YYYY-NNNN).
     """
+    if deps.highest_role_score(current_user) != 2 or not any(
+        role.role_name == "Location Pastor" for role in (current_user.roles or [])
+    ):
+        raise HTTPException(status_code=403, detail="Only the originating Location Pastor may initiate a transfer")
     deps.effective_scope_path(current_user)
     await deps.get_location_in_scope(
         db,
@@ -103,7 +112,15 @@ async def list_transfers(
 ) -> Any:
     """List worker transfers filtered by worker or location."""
     if worker_id:
-        return await crud_transfers.get_transfers_for_worker(db, worker_id=worker_id)
+        rows = await crud_transfers.get_transfers_for_worker(db, worker_id=worker_id)
+        visible = []
+        for row in rows:
+            try:
+                await _ensure_transfer_access(db, current_user, row)
+                visible.append(row)
+            except HTTPException:
+                continue
+        return visible
     if location_id:
         await deps.get_location_in_scope(
             db,
@@ -134,8 +151,37 @@ async def get_transfer(
     transfer = await crud_transfers.get_transfer(db, transfer_id=transfer_id)
     if not transfer:
         raise HTTPException(status_code=404, detail="Transfer not found")
+    _require_location_pastor(current_user)
     await _ensure_transfer_access(db, current_user, transfer)
     return transfer
+
+
+@router.post(
+    "/{transfer_id}/approve",
+    response_model=WorkerTransferResponse,
+    tags=["Workers"],
+    dependencies=[Depends(deps.PermissionChecker("workers:update"))],
+)
+async def approve_transfer_stage(
+    transfer_id: UUID,
+    payload: WorkerTransferApproveOrigin,
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Approve the current recorded stage in the transfer chain."""
+    transfer = await crud_transfers.get_transfer(db, transfer_id=transfer_id)
+    if not transfer:
+        raise HTTPException(status_code=404, detail="Transfer not found")
+    _require_location_pastor(current_user)
+    await _ensure_transfer_access(db, current_user, transfer)
+    return await crud_transfers.approve_origin(
+        db,
+        transfer=transfer,
+        approved_by_id=current_user.user_id,
+        approver_score=deps.highest_role_score(current_user),
+        approver_path=current_user.path,
+        note=payload.note,
+    )
 
 
 @router.post(
@@ -152,18 +198,16 @@ async def approve_origin(
 ) -> Any:
     """
     Origin pastor approves and releases the worker for transfer.
-    Transfer status moves to 'approved_by_origin'.
+    Advances the current hierarchy stage; location changes only at final regional approval.
     """
     transfer = await crud_transfers.get_transfer(db, transfer_id=transfer_id)
     if not transfer:
         raise HTTPException(status_code=404, detail="Transfer not found")
+    _require_location_pastor(current_user)
     await _ensure_transfer_access(db, current_user, transfer)
-    if current_user.location_id != transfer.from_location_id:
-        raise HTTPException(status_code=403, detail="Only the origin location can approve this transfer")
-    if transfer.status != "pending":
-        raise HTTPException(status_code=400, detail=f"Transfer cannot be approved in status '{transfer.status}'")
     return await crud_transfers.approve_origin(
-        db, transfer=transfer, approved_by_id=current_user.user_id, note=payload.note
+        db, transfer=transfer, approved_by_id=current_user.user_id,
+        approver_score=deps.highest_role_score(current_user), approver_path=current_user.path, note=payload.note
     )
 
 
@@ -180,22 +224,16 @@ async def approve_destination(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """
-    Destination pastor accepts the worker.
-    Automatically updates the worker's location and marks transfer 'completed'.
+    Compatibility route for the receiving Location Pastor stage; does not complete by itself.
     """
     transfer = await crud_transfers.get_transfer(db, transfer_id=transfer_id)
     if not transfer:
         raise HTTPException(status_code=404, detail="Transfer not found")
+    _require_location_pastor(current_user)
     await _ensure_transfer_access(db, current_user, transfer)
-    if current_user.location_id != transfer.to_location_id:
-        raise HTTPException(status_code=403, detail="Only the destination location can approve this transfer")
-    if transfer.status != "approved_by_origin":
-        raise HTTPException(
-            status_code=400,
-            detail=f"Transfer must be approved by origin first. Current status: '{transfer.status}'"
-        )
-    return await crud_transfers.approve_destination(
-        db, transfer=transfer, approved_by_id=current_user.user_id, note=payload.note
+    return await crud_transfers.approve_origin(
+        db, transfer=transfer, approved_by_id=current_user.user_id,
+        approver_score=deps.highest_role_score(current_user), approver_path=current_user.path, note=payload.note
     )
 
 
@@ -215,6 +253,7 @@ async def reject_transfer(
     transfer = await crud_transfers.get_transfer(db, transfer_id=transfer_id)
     if not transfer:
         raise HTTPException(status_code=404, detail="Transfer not found")
+    _require_location_pastor(current_user)
     await _ensure_transfer_access(db, current_user, transfer)
     if transfer.status in ("completed", "rejected"):
         raise HTTPException(status_code=400, detail=f"Cannot reject a transfer with status '{transfer.status}'")
@@ -222,6 +261,8 @@ async def reject_transfer(
         db,
         transfer=transfer,
         rejected_by_id=current_user.user_id,
+        approver_score=deps.highest_role_score(current_user),
+        approver_path=current_user.path,
         rejection_reason=payload.rejection_reason,
     )
 

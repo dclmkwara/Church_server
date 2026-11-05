@@ -13,7 +13,7 @@ from app.models.attendance import WorkerAttendance
 from app.schemas.attendance import WorkerAttendanceCreate, WorkerAttendanceUpdate
 from app.crud.idempotency import commit_idempotent, mark_existing_submission
 from app.db.filters import scope_filter
-from app.crud.workflow_rules import ensure_collection_open, load_event_campaign, require_approved_worker_user
+from app.crud.workflow_rules import ensure_collection_open, load_event_campaign, require_approved_worker_user, resolve_program_context, resolve_program_level
 
 
 class CRUDWorkerAttendance(CRUDBase[WorkerAttendance, WorkerAttendanceCreate, WorkerAttendanceUpdate]):
@@ -33,6 +33,8 @@ class CRUDWorkerAttendance(CRUDBase[WorkerAttendance, WorkerAttendanceCreate, Wo
         event = await program_event.get(db, id=obj_in.event_id) if obj_in.event_id else None
         if obj_in.event_id and not event:
             raise HTTPException(status_code=404, detail="Event not found")
+        program_domain_id, program_type_id = await resolve_program_context(db, event=event, program_domain=obj_in.program_domain, program_type=obj_in.program_type)
+        program_level = resolve_program_level(event=event, program_level=obj_in.program_level)
         if event:
             campaign = await load_event_campaign(db, event)
             ensure_collection_open(event, campaign, kind="attendance")
@@ -76,10 +78,14 @@ class CRUDWorkerAttendance(CRUDBase[WorkerAttendance, WorkerAttendanceCreate, Wo
             event_id=obj_in.event_id,
             date=event.date if event else obj_in.date,
             church_type=obj_in.church_type,
+            program_level=program_level,
+            program_domain_id=program_domain_id,
+            program_type_id=program_type_id,
             program_domain=obj_in.program_domain if not event else None,
             program_type=obj_in.program_type if not event else None,
             location_id=obj_in.location_id,
             path=location_path,
+            program_scope_path=str(event.path) if event else location_path,
             client_id=obj_in.client_id,
             worker_id=obj_in.worker_id,
             worker_name=worker.name,

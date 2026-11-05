@@ -39,7 +39,10 @@ router = APIRouter()
 def _ensure_hierarchy_visible(current_user: User, node: Any, *, detail: str = "Hierarchy node outside your scope") -> None:
     node_path = getattr(node, "path", None)
     scope_path = deps.effective_scope_path(current_user)
-    if deps.highest_role_score(current_user) == 8:
+    score = deps.highest_role_score(current_user)
+    if score == 9:
+        return
+    if score == 8:
         deps.ensure_path_in_scope(current_user, node_path, detail=detail)
         return
     if not (
@@ -55,7 +58,10 @@ def _ensure_hierarchy_mutable(current_user: User, node: Any, *, detail: str = "H
 
 def _hierarchy_visible_filter(path_column: Any, current_user: User):
     scope = deps.effective_scope_path(current_user)
-    if deps.highest_role_score(current_user) == 8:
+    score = deps.highest_role_score(current_user)
+    if score == 9:
+        return path_column.op("<@")(scope)
+    if score == 8:
         return and_(
             path_column.op("<@")(scope),
             deps.nation_scope_condition(path_column, current_user),

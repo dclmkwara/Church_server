@@ -29,6 +29,7 @@ FULL_BOOTSTRAP_SECTIONS = (
     "attendance_summary",
     "trend_series",
     "scope_snapshot",
+    "scope_children",
 )
 
 
@@ -113,6 +114,11 @@ class DashboardService:
 
     @staticmethod
     async def scope_path(request, ctx) -> str:
+        query_params = getattr(request, "query_params", {})
+        values = query_params.getlist("scope_path") if hasattr(query_params, "getlist") else []
+        requested = str((values[-1] if values else query_params.get("scope_path")) or "").strip()
+        if requested:
+            return requested
         identity = AuthService.get_identity(request)
         if identity and identity.scope_path:
             return identity.scope_path
@@ -128,8 +134,11 @@ class DashboardService:
             return None
 
         scope_path = await DashboardService.scope_path(request, ctx)
+        period = str(getattr(request, "query_params", {}).get("period") or "recent")
+        if period not in {"recent", "month", "quarter", "year"}:
+            period = "recent"
         requested_sections = DashboardService.requested_bootstrap_sections(request)
-        cache_key = ("dashboard", "bootstrap", scope_path, requested_sections)
+        cache_key = ("dashboard", "bootstrap", scope_path, period, requested_sections)
 
         # Layer 1 — request-scoped: free for repeated calls within one request lifecycle.
         # Layer 2 — 60-second TTL: reuse result across multiple HTMX requests
@@ -145,6 +154,7 @@ class DashboardService:
                     access_token,
                     scope_path=scope_path,
                     months=12,
+                    period=period,
                     sections=list(requested_sections),
                 )
             except (AttributeError, BackendClientError):
@@ -689,7 +699,7 @@ class DashboardService:
                 )
             return rows
         if await DashboardService.use_mock(request):
-            group_by = "location" if ctx.level <= 4 else ("group" if ctx.level <= 6 else "state")
+            group_by = "location" if ctx.level <= 2 else ("group" if ctx.level == 3 else ("region" if ctx.level == 4 else "state"))
             rows = []
             for row in STORE.scope_breakdown(ctx.current_scope_path, group_by=group_by)[:5]:
                 rows.append(

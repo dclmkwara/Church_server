@@ -35,7 +35,7 @@ def test_announcement_lookup_rejects_resource_outside_effective_scope(monkeypatc
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(
             announcements._get_announcement_in_scope(
-                object(), announcement_id, _user(score=5)
+                object(), announcement_id, _user(score=4)
             )
         )
 

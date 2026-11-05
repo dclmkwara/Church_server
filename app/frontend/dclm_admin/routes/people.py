@@ -903,7 +903,10 @@ def register_people_routes(app) -> None:
     @app.get("/people/workers/{worker_id}/suspend")
     async def suspend_worker_confirm(request: Request, worker_id: str):
         ctx = build_context(request)
-        worker = STORE.get_worker(worker_id)
+        try:
+            worker = await PeopleService.get_worker(request, worker_id) if await PeopleService.live_enabled(request) else STORE.get_worker(worker_id)
+        except BackendClientError as exc:
+            return P(f"Could not load worker right now: {exc}", cls="text-muted")
         if worker is None:
             return P("Worker not found.", cls="text-muted")
         return Form(
@@ -922,7 +925,14 @@ def register_people_routes(app) -> None:
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
         ctx = build_context(data)
-        worker = STORE.suspend_worker(worker_id, actor_name=ctx.profile.user_name, note=data.get("note", ""))
+        try:
+            worker = (
+                await PeopleService.suspend_worker(request, worker_id, data.get("note", "").strip())
+                if await PeopleService.live_enabled(request)
+                else STORE.suspend_worker(worker_id, actor_name=ctx.profile.user_name, note=data.get("note", ""))
+            )
+        except BackendClientError as exc:
+            return P(f"Could not suspend this worker right now: {exc}", cls="text-muted")
         if worker is None:
             return P("Worker not found.", cls="text-muted")
         refreshed = await _workers_table(request, ctx, oob=True)
@@ -1211,10 +1221,10 @@ def register_people_routes(app) -> None:
     @app.get("/people/officials")
     async def officials_page(request: Request, search: str = "", status: str = "", appointed_role: str = ""):
         ctx = build_context(request)
-        if ctx.level < 4:
+        if ctx.level < 3:
             body = section_card(
                 "Officials",
-                "Officials and appointments open from Level 4 upward.",
+                "Officials and appointments open from Group level upward.",
                 empty_state("person-check", "Officials unavailable", "This role cannot appoint or revoke officials."),
             )
             return shell_layout(
@@ -1329,7 +1339,7 @@ def register_people_routes(app) -> None:
     @app.get("/people/officials/new")
     async def new_official_drawer(request: Request):
         ctx = build_context(request)
-        if ctx.level < 4:
+        if ctx.level < 3:
             return P("This form is not available at the current level.", cls="text-muted")
         workers = await PeopleService.list_workers(request, ctx, approval="approved")
         scope_options = await _scope_assignment_options(request, ctx)
@@ -1388,7 +1398,7 @@ def register_people_routes(app) -> None:
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
         ctx = build_context(data)
-        if ctx.level < 4:
+        if ctx.level < 3:
             return P("This action is not available at the current level.", cls="text-muted")
         appointment = (
             await PeopleService.create_official_appointment(

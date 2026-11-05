@@ -11,6 +11,7 @@ Workers are the base entity for all church members serving in any capacity.
 They must belong to a valid location.
 """
 from typing import List, Optional, Any
+from uuid import UUID
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import HTTPException
@@ -27,7 +28,16 @@ class CRUDWorker(CRUDBase[Worker, WorkerCreate, WorkerUpdate]):
     CRUD operations for Worker model.
     """
     
-    async def create(self, db: AsyncSession, *, obj_in: WorkerCreate) -> Worker:
+    async def create(
+        self,
+        db: AsyncSession,
+        *,
+        obj_in: WorkerCreate,
+        client_id: UUID | None = None,
+        created_by_id: UUID | None = None,
+        commit: bool = True,
+        location_path: str | None = None,
+    ) -> Worker:
         """
         Create a new worker with auto-generated ID and ltree path.
         
@@ -67,14 +77,17 @@ class CRUDWorker(CRUDBase[Worker, WorkerCreate, WorkerUpdate]):
         # But 'parse_display_id' was used in previous code. Let's keep existing logic request but improve safety.
         
         # IMPROVEMENT: Fetch location to ensure we inherit correct path
-        from app.crud.crud_location import location
-        loc = await location.get(db, obj_in.location_id)
-        if not loc:
-            raise HTTPException(status_code=404, detail="Invalid Location ID")
-            
-        path_str = str(loc.path)
+        if location_path is None:
+            from app.crud.crud_location import location
+            loc = await location.get(db, obj_in.location_id)
+            if not loc:
+                raise HTTPException(status_code=404, detail="Invalid Location ID")
+            path_str = str(loc.path)
+        else:
+            path_str = location_path
         
         db_obj = Worker(
+            client_id=client_id,
             # Standard fields
             location_id=obj_in.location_id,
             location_name=obj_in.location_name,
@@ -90,16 +103,21 @@ class CRUDWorker(CRUDBase[Worker, WorkerCreate, WorkerUpdate]):
             occupation=obj_in.occupation,
             marital_status=obj_in.marital_status,
             unit=obj_in.unit,
-            status=obj_in.status,
+            status="Pending Approval",
+            approval_status="pending_verification",
             
             # Generated fields
             user_id=generated_user_id,
             path=path_str,
+            created_by=created_by_id,
         )
         
         db.add(db_obj)
-        await db.commit()
-        await db.refresh(db_obj)
+        if commit:
+            await db.commit()
+            await db.refresh(db_obj)
+        else:
+            await db.flush()
         return db_obj
 
     async def get_by_phone(self, db: AsyncSession, *, phone: str) -> Optional[Worker]:

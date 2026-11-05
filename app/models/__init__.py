@@ -19,6 +19,7 @@ from app.models.attendance import WorkerAttendance, WorkerAttendanceSubmission
 from app.models.fellowship_activities import FellowshipMember, FellowshipAttendance, FellowshipOffering
 from app.models.audit import IdempotencyKey, AuditLog, NotificationReadState
 from app.models.announcement import Announcement, AnnouncementItem
+from app.models.broadcast import BroadcastMessage
 from app.models.media import MediaGallery, MediaItem
 from app.models.app_version import AppVersion
 from app.models.approvals import TransferRequest, StatusChangeRequest, WorkerRemovalRequest

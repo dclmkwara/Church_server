@@ -5,11 +5,11 @@ from html import escape
 from typing import Any
 from urllib.parse import quote
 
-from fasthtml.common import A, Div, Form, H3, H4, Input, Option, P, Select, Span, Textarea
+from fasthtml.common import A, Div, Form, H3, H4, Input as HtmlInput, Option, P, Select as HtmlSelect, Span, Textarea as HtmlTextarea
 from starlette.requests import Request
 from starlette.responses import RedirectResponse
 
-from faststrap import Accordion, AccordionItem, Button, Card, FilterBar, Image, PlaceholderCard, Spinner, TabPane, Tabs, ToggleGroup
+from faststrap import Accordion, AccordionItem, Button, Card, FilterBar, Image, Input as FsInput, Select as FsSelect, PlaceholderCard, Spinner, TabPane, Tabs, ToggleGroup
 
 from ..auth_context import build_context
 from ..backend import BackendClientError
@@ -159,6 +159,15 @@ def _communication_section_nav(ctx, active_key: str) -> Div:
             cls="admin-inline-btn",
             **({"aria_current": "page"} if active_key == "media" else {}),
         ),
+        Button(
+            "Downward Broadcasts",
+            href=ctx.url_for("/communication/broadcasts"),
+            variant="primary" if active_key == "broadcasts" else "outline-primary",
+            size="md",
+            pill=True,
+            cls="admin-inline-btn",
+            **({"aria_current": "page"} if active_key == "broadcasts" else {}),
+        ),
         cls="workspace-tab-strip section-nav-strip mb-3",
     )
 
@@ -306,10 +315,10 @@ async def _communication_workspace(request: Request, ctx, *, search: str = "", s
 
     filter_form = Form(
         *hidden_context_inputs(ctx),
-        Input(type="hidden", name="status", value=status),
+        HtmlInput(type="hidden", name="status", value=status),
         filter_field(
             "Search communication",
-            Input(
+            HtmlInput(
                 type="search",
                 name="search",
                 value=search,
@@ -320,7 +329,7 @@ async def _communication_workspace(request: Request, ctx, *, search: str = "", s
         ),
         filter_field(
             "Meeting",
-            Select(
+            HtmlSelect(
                 Option("All meetings", value=""),
                 *[Option(label, value=key, selected=meeting == key) for key, label in MEETING_OPTIONS],
                 name="meeting",
@@ -464,7 +473,7 @@ def _items_values(source: dict[str, str], item_count: int) -> list[str]:
 def _editor_items_block(ctx, item_count: int, values: list[str]) -> Div:
     limited_count = max(2, min(item_count, 8))
     fields = [
-        Input(
+        HtmlInput(
             type="text",
             name=f"item_{index}",
             value=values[index - 1] if index - 1 < len(values) else "",
@@ -514,10 +523,10 @@ def _editor_help(row: dict[str, Any] | None) -> Div:
 
 async def _communication_editor_page(request: Request, row: dict[str, Any] | None = None):
     ctx = build_context(request)
-    if ctx.level < 5:
+    if ctx.level < 4:
         body = page_stack(section_card(
                 "Communication",
-                "Weekly communication opens from Level 5 upward.",
+                "Weekly information management opens from Regional leadership upward.",
                 empty_state("megaphone", "Communication unavailable", "This role cannot manage communication records."),
         ))
         return shell_layout(
@@ -543,8 +552,8 @@ async def _communication_editor_page(request: Request, row: dict[str, Any] | Non
             "Basic details",
             "Begin with the meeting, date, and who needs to receive this note.",
             Div(
-                Input(type="text", name="title", value=row["title"] if row else "", placeholder="Communication title", cls="form-control", required=True),
-                Select(
+                HtmlInput(type="text", name="title", value=row["title"] if row else "", placeholder="Communication title", cls="form-control", required=True),
+                HtmlSelect(
                     Option("Select meeting", value=""),
                     *[Option(label, value=key, selected=row is not None and row["meeting"] == key) for key, label in MEETING_OPTIONS],
                     name="meeting",
@@ -554,15 +563,32 @@ async def _communication_editor_page(request: Request, row: dict[str, Any] | Non
                 cls="drawer-two-up mb-3",
             ),
             Div(
-                Input(type="date", name="meeting_date", value=row["meeting_date"] if row else "", cls="form-control", required=True),
-                Input(type="text", name="audience", value=row["audience"] if row else "", placeholder="Audience", cls="form-control", required=True),
+                HtmlInput(type="date", name="meeting_date", value=row["meeting_date"] if row else "", cls="form-control", required=True),
+                HtmlInput(type="text", name="audience", value=row["audience"] if row else "", placeholder="Audience", cls="form-control", required=True),
                 cls="drawer-two-up",
+            ),
+        ),
+        section_card(
+            "Weekly information sheet",
+            "Add the readings, hymn, topics, and notices that workers need for the coming week.",
+            Div(
+                FsInput("sws_bible_reading", input_type="text", label="Sunday Bible reading", value=row["sws_bible_reading"] if row else "", placeholder="Book and passage", cls="mb-3"),
+                FsInput("sws_hymn", input_type="text", label="Sunday hymn", value=row["sws_hymn"] if row else "", placeholder="Hymn number or title", cls="mb-3"),
+                FsInput("sws_topic", input_type="text", label="Sunday service topic", value=row["sws_topic"] if row else "", placeholder="Service topic", cls="mb-3"),
+                FsInput("mbs_bible_reading", input_type="text", label="Monday Bible study reading", value=row["mbs_bible_reading"] if row else "", placeholder="Book and passage", cls="mb-3"),
+                FsInput("mbs_topic", input_type="text", label="Monday Bible study topic", value=row["mbs_topic"] if row else "", placeholder="Study topic", cls="mb-3"),
+                FsInput("revival_topic", input_type="text", label="Thursday revival topic", value=row["revival_topic"] if row else "", placeholder="Revival topic", cls="mb-3"),
+                FsInput("sts_study", input_type="text", label="Thursday study or training", value=row["sts_study"] if row else "", placeholder="Study or training information", cls="mb-3"),
+                HtmlTextarea(row["revival_info"] if row else "", name="revival_info", placeholder="Additional revival hour details", cls="form-control mb-3", rows="3"),
+                HtmlTextarea(row["wedding_announcements"] if row else "", name="wedding_announcements", placeholder="Wedding announcements", cls="form-control mb-3", rows="3"),
+                HtmlTextarea(row["general_announcements"] if row else "", name="general_announcements", placeholder="General announcements", cls="form-control", rows="4"),
+                cls="d-grid gap-2",
             ),
         ),
         section_card(
             "Main message",
             "Lead with the action people should take, then give only the details needed to act.",
-            Textarea(
+            HtmlTextarea(
                 row["summary"] if row else "",
                 name="summary",
                 placeholder="Short summary",
@@ -570,7 +596,7 @@ async def _communication_editor_page(request: Request, row: dict[str, Any] | Non
                 rows="3",
                 required=True,
             ),
-            Textarea(
+            HtmlTextarea(
                 row["body"] if row else "",
                 name="body",
                 placeholder="Full message body",
@@ -711,7 +737,7 @@ async def _media_gallery_workspace(request: Request, ctx, *, search: str = "", v
         Div(
             filter_field(
                 "Search galleries",
-                Input(type="search", name="search", value=search, placeholder="Search title, event, or scope", cls="form-control"),
+                HtmlInput(type="search", name="search", value=search, placeholder="Search title, event, or scope", cls="form-control"),
                 field_id="media-gallery-search",
             ),
             cls="media-filter-field",
@@ -719,7 +745,7 @@ async def _media_gallery_workspace(request: Request, ctx, *, search: str = "", v
         Div(
             filter_field(
                 "Visibility",
-                Select(
+                HtmlSelect(
                     *[Option(label, value=value, selected=visibility == value) for value, label in MEDIA_VISIBILITY_OPTIONS],
                     name="visibility",
                     cls="form-select",
@@ -796,12 +822,12 @@ async def _media_items_workspace(request: Request, ctx, *, search: str = "", med
         *hidden_context_inputs(ctx),
         Div(
             P("Search", cls="small text-muted mb-1"),
-            Input(type="search", name="search", value=search, placeholder="Search title, caption, or file label", cls="form-control"),
+            HtmlInput(type="search", name="search", value=search, placeholder="Search title, caption, or file label", cls="form-control"),
             cls="media-filter-field",
         ),
         Div(
             P("Item type", cls="small text-muted mb-1"),
-            Select(
+            HtmlSelect(
                 *[Option(label, value=value, selected=media_type == value) for value, label in MEDIA_TYPE_OPTIONS],
                 name="media_type",
                 cls="form-select",
@@ -917,10 +943,70 @@ async def _gallery_detail_items(request: Request, ctx, gallery_id: str, *, oob: 
 
 
 def register_communication_routes(app) -> None:
+    @app.get("/communication/broadcasts")
+    async def communication_broadcasts_page(request: Request):
+        ctx = build_context(request)
+        if ctx.level < 3:
+            return RedirectResponse(ctx.url_for("/communication"), status_code=303)
+        rows = []
+        error = ""
+        try:
+            rows = await CommunicationService.list_broadcasts(request)
+        except BackendClientError as exc:
+            error = str(exc)
+        current_level = {3: "group", 4: "region", 5: "state"}.get(ctx.level, "state")
+        form = Form(
+            *hidden_context_inputs(ctx),
+            FsInput("title", input_type="text", label="Message title", required=True, placeholder="Message title"),
+            Div(
+                FsSelect("target_level", ("state", "State", current_level == "state"), ("region", "Region", current_level == "region"), ("group", "Group", current_level == "group"), ("location", "Location"), label="Target level", required=True),
+                FsSelect("audience", ("all_users", "All app users", True), ("pastors", "Pastors and administrators"), label="Audience", required=True),
+                cls="drawer-two-up my-3",
+            ),
+            FsInput("target_path", input_type="text", label="Target hierarchy path", value=ctx.current_scope_path, required=True, help_text="Use the canonical path for the state, region, group, or location. Your role can target only within its jurisdiction."),
+            HtmlTextarea("", name="content", placeholder="Write the message", cls="form-control my-3", rows="5", required=True),
+            FsSelect("priority", ("normal", "Normal priority", True), ("high", "High priority"), ("low", "Low priority"), label="Priority", required=True),
+            Button("Send broadcast", variant="primary", type="submit"),
+            method="post", action=ctx.url_for("/communication/broadcasts/create"), cls="d-grid gap-2",
+        )
+        cards = [Card(
+            H4(row["title"], cls="h6 fw-semibold mb-1"),
+            P(row["content"], cls="mb-2"),
+            P(f"{row['target_level'].title()} · {row['audience'].replace('_', ' ').title()} · {row['recipient_count'] or 0} recipients · {row['sent_at']}", cls="small text-muted mb-0"),
+            cls="p-3",
+        ) for row in rows]
+        content = page_stack(
+            _communication_section_nav(ctx, "broadcasts"),
+            page_intro("Downward Broadcasts", "Send a scoped message to app users or church pastors under your jurisdiction.", scope_label=ctx.current_scope_label, scope_kind=ctx.current_scope_kind),
+            section_card("Compose a broadcast", "Targets are checked against your live hierarchy permissions before sending.", form),
+            section_card("Recent broadcasts", error or "Messages appear only to recipients in the target hierarchy.", *(cards or [empty_state("megaphone", "No broadcasts yet", "Sent messages will appear here." )])),
+        )
+        return shell_layout(ctx, request_path=request.url.path, active_key="communication", title="Downward Broadcasts", subtitle="Scoped leadership messages.", primary_action=None, content=content)
+
+    @app.post("/communication/broadcasts/create")
+    async def create_communication_broadcast(request: Request):
+        form_data = await request.form()
+        data = {key: str(value) for key, value in form_data.items()}
+        ctx = build_context(data)
+        if ctx.level < 3:
+            return RedirectResponse(ctx.url_for("/communication"), status_code=303)
+        try:
+            await CommunicationService.create_broadcast(request, {
+                "target_level": data.get("target_level", "group"),
+                "target_path": data.get("target_path", ""),
+                "audience": data.get("audience", "all_users"),
+                "title": data.get("title", ""),
+                "content": data.get("content", ""),
+                "priority": data.get("priority", "normal"),
+            })
+        except BackendClientError as exc:
+            return P(f"Could not send broadcast: {exc}", cls="text-danger")
+        return RedirectResponse(ctx.url_for("/communication/broadcasts"), status_code=303)
+
     @app.get("/communication")
     async def communication_page(request: Request, search: str = "", status: str = "all", meeting: str = ""):
         ctx = build_context(request)
-        if ctx.level < 5:
+        if ctx.level < 4:
             body = page_stack(section_card(
                 "Communication",
                 "Weekly communication opens from Level 5 upward.",
@@ -1010,7 +1096,7 @@ def register_communication_routes(app) -> None:
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
         ctx = build_context(data)
-        if ctx.level < 5:
+        if ctx.level < 4:
             return RedirectResponse(ctx.url_for("/communication"), status_code=303)
         try:
             created = (
@@ -1030,7 +1116,7 @@ def register_communication_routes(app) -> None:
         data = {key: str(value) for key, value in form.items()}
         ctx = build_context(data)
         row = await _announcement_row(request, ctx, announcement_id)
-        if ctx.level < 5 or row is None:
+        if ctx.level < 4 or row is None:
             return RedirectResponse(ctx.url_for("/communication"), status_code=303)
         try:
             updated = (
@@ -1063,14 +1149,14 @@ def register_communication_routes(app) -> None:
         }.get(action, "Confirm the update for this note.")
         return Form(
             *hidden_context_inputs(ctx),
-            Input(type="hidden", name="action", value=action),
-            Input(type="hidden", name="search_filter", value=str(request.query_params.get("search_filter", ""))),
-            Input(type="hidden", name="status_filter", value=str(request.query_params.get("status_filter", "all"))),
-            Input(type="hidden", name="meeting_filter", value=str(request.query_params.get("meeting_filter", ""))),
+            HtmlInput(type="hidden", name="action", value=action),
+            HtmlInput(type="hidden", name="search_filter", value=str(request.query_params.get("search_filter", ""))),
+            HtmlInput(type="hidden", name="status_filter", value=str(request.query_params.get("status_filter", "all"))),
+            HtmlInput(type="hidden", name="meeting_filter", value=str(request.query_params.get("meeting_filter", ""))),
             H3(title, cls="h5 fw-semibold"),
             P(row["title"], cls="text-muted"),
             P(help_text, cls="small text-muted mb-3"),
-            Textarea(name="note", placeholder="Add a short record note if needed", cls="form-control mb-3", rows="4"),
+            HtmlTextarea(name="note", placeholder="Add a short record note if needed", cls="form-control mb-3", rows="4"),
             Button(title, variant=button_variant, type="submit", cls="w-100"),
             hx_post=ctx.url_for(f"/communication/{announcement_id}/status"),
             hx_target="#confirm-modal-body",
@@ -1235,20 +1321,20 @@ def register_communication_routes(app) -> None:
             *hidden_context_inputs(ctx),
             H3("Create gallery", cls="h5 fw-semibold"),
             P("Enter the gallery name and event details.", cls="text-muted"),
-            Input(type="text", name="title", placeholder="Gallery title", cls="form-control mb-3", required=True),
+            HtmlInput(type="text", name="title", placeholder="Gallery title", cls="form-control mb-3", required=True),
             Div(
-                Input(type="text", name="event_name", placeholder="Event or meeting name", cls="form-control", required=True),
-                Input(type="date", name="event_date", cls="form-control", required=True),
+                HtmlInput(type="text", name="event_name", placeholder="Event or meeting name", cls="form-control", required=True),
+                HtmlInput(type="date", name="event_date", cls="form-control", required=True),
                 cls="drawer-two-up mb-3",
             ),
-            Select(
+            HtmlSelect(
                 Option("Select visibility", value=""),
                 *[Option(label, value=value) for value, label in MEDIA_VISIBILITY_OPTIONS if value != "all"],
                 name="visibility",
                 cls="form-select mb-3",
                 required=True,
             ),
-            Textarea("", name="description", placeholder="Short description of what this gallery contains", cls="form-control mb-3", rows="4"),
+            HtmlTextarea("", name="description", placeholder="Short description of what this gallery contains", cls="form-control mb-3", rows="4"),
             Button("Create gallery", variant="primary", type="submit", cls="w-100"),
             hx_post=ctx.url_for("/communication/media/galleries/create"),
             hx_target="#form-drawer-body",
@@ -1344,20 +1430,20 @@ def register_communication_routes(app) -> None:
             *hidden_context_inputs(ctx),
             H3("Upload media item", cls="h5 fw-semibold"),
             P(f"{gallery['title']} - {gallery['event_name']}", cls="text-muted"),
-            Input(type="text", name="title", placeholder="Item title", cls="form-control mb-3", required=True),
+            HtmlInput(type="text", name="title", placeholder="Item title", cls="form-control mb-3", required=True),
             Div(
-                Select(
+                HtmlSelect(
                     Option("Select type", value=""),
                     *[Option(label, value=value) for value, label in MEDIA_TYPE_OPTIONS if value != "all"],
                     name="media_type",
                     cls="form-select",
                     required=True,
                 ),
-                Input(type="text", name="file_label", placeholder="File label or storage note", cls="form-control", required=True),
+                HtmlInput(type="text", name="file_label", placeholder="File label or storage note", cls="form-control", required=True),
                 cls="drawer-two-up mb-3",
             ),
-            Input(type="text", name="duration", placeholder="Video duration, if any", cls="form-control mb-3"),
-            Textarea("", name="caption", placeholder="Short caption", cls="form-control mb-3", rows="4"),
+            HtmlInput(type="text", name="duration", placeholder="Video duration, if any", cls="form-control mb-3"),
+            HtmlTextarea("", name="caption", placeholder="Short caption", cls="form-control mb-3", rows="4"),
             Button("Save item", variant="primary", type="submit", cls="w-100"),
             hx_post=ctx.url_for(f"/communication/media/galleries/{gallery_id}/items/create"),
             hx_target="#form-drawer-body",

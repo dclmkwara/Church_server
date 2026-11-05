@@ -7,7 +7,7 @@ from uuid import UUID
 
 from app.models.announcement import Announcement, AnnouncementItem
 from app.schemas.announcement import AnnouncementCreate, AnnouncementUpdate
-from app.db.filters import scope_filter
+from app.db.filters import scope_filter, scope_or_ancestor_filter
 
 class CRUDAnnouncement:
     @staticmethod
@@ -22,8 +22,14 @@ class CRUDAnnouncement:
             trets_date=announcement_in.trets_date,
             sws_topic=announcement_in.sws_topic,
             sws_bible_reading=announcement_in.sws_bible_reading,
+            sws_hymn=announcement_in.sws_hymn,
             mbs_bible_reading=announcement_in.mbs_bible_reading,
+            mbs_topic=announcement_in.mbs_topic,
             sts_study=announcement_in.sts_study,
+            revival_topic=announcement_in.revival_topic,
+            revival_info=announcement_in.revival_info,
+            wedding_announcements=announcement_in.wedding_announcements,
+            general_announcements=announcement_in.general_announcements,
             adult_hcf_lesson=announcement_in.adult_hcf_lesson,
             adult_hcf_volume=announcement_in.adult_hcf_volume,
             youth_hcf_lesson=announcement_in.youth_hcf_lesson,
@@ -76,7 +82,7 @@ class CRUDAnnouncement:
         # Scope filtering using ltree — explicit casts required because the
         # ORM maps 'path' as String (VARCHAR), so we must cast both sides to
         # ltree ourselves to satisfy the <@ operator's type requirements.
-        stmt = stmt.where(scope_filter(Announcement.path, scope_path))
+        stmt = stmt.where(scope_or_ancestor_filter(Announcement.path, scope_path))
 
         if is_active is not None:
             stmt = stmt.where(Announcement.is_active == is_active)

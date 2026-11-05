@@ -306,6 +306,15 @@ class APIClient:
     async def create_program_event(self, access_token: str, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._backend_client.create_program_event(access_token, payload)
 
+    async def approve_program_event(self, access_token: str, event_id: str) -> dict[str, Any]:
+        return await self._backend_client.approve_program_event(access_token, event_id)
+
+    async def reject_program_event(self, access_token: str, event_id: str, note: str) -> dict[str, Any]:
+        return await self._backend_client.reject_program_event(access_token, event_id, note)
+
+    async def close_event_collection(self, access_token: str, event_id: str) -> dict[str, Any]:
+        return await self._backend_client.close_event_collection(access_token, event_id)
+
     async def list_program_campaigns(
         self,
         access_token: str,
@@ -395,6 +404,12 @@ class APIClient:
 
     async def delete_announcement(self, access_token: str, announcement_id: str) -> Any:
         return await self._backend_client.delete_announcement(access_token, announcement_id)
+
+    async def list_broadcasts(self, access_token: str, *, limit: int = 100) -> list[dict[str, Any]]:
+        return await self._backend_client.list_broadcasts(access_token, limit=limit)
+
+    async def create_broadcast(self, access_token: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return await self._backend_client.create_broadcast(access_token, payload)
 
     async def list_media_galleries(
         self,
@@ -502,6 +517,7 @@ class APIClient:
         scope_path: str | None = None,
         location_id: str | None = None,
         months: int = 12,
+        period: str = "recent",
         sections: list[str] | None = None,
     ) -> dict[str, Any]:
         return await self._backend_client.get_dashboard_bootstrap(
@@ -509,6 +525,7 @@ class APIClient:
             scope_path=scope_path,
             location_id=location_id,
             months=months,
+            period=period,
             sections=sections,
         )
 

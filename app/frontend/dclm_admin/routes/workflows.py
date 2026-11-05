@@ -181,14 +181,14 @@ async def _request_card(ctx, row, *, review_mode: bool):
 
 
 async def _requests_list(request: Request, ctx, *, view: str, request_type: str = "all", status: str = "all", oob: bool = False):
-    if view == "review" and ctx.level < 4:
+    if view == "review" and ctx.level < 3:
         attrs = {"id": "review-queue-results"}
         if oob:
             attrs["hx_swap_oob"] = "outerHTML:#review-queue-results"
         return Div(
             empty_state(
                 "shield-lock",
-                "Review queue opens from Level 4",
+                "Review queue opens from Group level",
                 "Create and review worker requests.",
             ),
             **attrs,

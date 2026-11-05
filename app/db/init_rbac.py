@@ -30,6 +30,7 @@ DEFAULT_PERMISSIONS = [
     # Programs
     _perm("programs:read", "Read Programs", "Can view program domains, types, and events"),
     _perm("programs:manage", "Manage Programs", "Can create, update, and delete program domains, types, and events"),
+    _perm("programs:create_event", "Create Program Events", "Can schedule program events within the assigned jurisdiction"),
     _perm("programs:assign_workers", "Assign Event Workers", "Can assign officiating workers to special program events"),
     _perm("programs:approve_assignments", "Approve Event Assignments", "Can approve or reject officiating worker assignments for special program events"),
 
@@ -189,7 +190,13 @@ PASTOR_PERMS = ADMIN_PERMS + DATA_DELETE_PERMS + REPORTING_READ + [
     "workers:delete",
     "announcements:manage",
     "reports:refresh",
+    "rbac:read",
 ]
+
+# A Location Pastor can suspend a worker and request removal, but cannot
+# permanently remove the worker directly. Group leadership and above retain
+# the workers:delete action through the approved removal flow.
+LOCATION_PASTOR_PERMS = [p for p in PASTOR_PERMS if p != "workers:delete"]
 
 REGION_HIERARCHY_PERMS = [
     "hierarchy:create_group",
@@ -215,81 +222,89 @@ NATIONAL_HIERARCHY_PERMS = STATE_HIERARCHY_PERMS + [
     "hierarchy:delete_state",
 ]
 
-# Define default roles across the 9 levels
+# Higher leadership uses the same shared backend. These grants preserve the
+# operational authority above state level; request and RLS scope still limits
+# each action to the user's national or continental jurisdiction. RBAC catalog
+# mutation and seed utilities remain reserved to score 9.
+HIGHER_ADMIN_PERMS = [
+    p["permission"] for p in DEFAULT_PERMISSIONS
+    if p["permission"] not in {"rbac:manage", "system:seed"}
+]
+
+# Define in-scope roles plus read-only placeholders for reserved enterprise levels.
 DEFAULT_ROLES = {
-    # Level 1: Fellowship
+    # House Caring Fellowship is location-scoped and separate from the main program spine.
     "House Fellowship Leader": {
         "score_id": 1,
         "permissions": ["fellowship:create", "fellowship:read", "fellowship:update", "sync:batch"]
     },
 
-    # Level 2: Location Worker
+    # Level 1: Field worker / usher (field data capture only).
     # A location worker is the designated field data collector in the Utility App.
     # Batch uploads remain constrained by the worker's assigned location scope.
-    "Location Worker": {"score_id": 2, "permissions": BASE_READ + ["sync:batch"]},
-    "Location Usher": {"score_id": 2, "permissions": USHER_PERMS},
+    "Location Worker": {"score_id": 1, "permissions": BASE_READ + ["sync:batch"]},
+    "Location Usher": {"score_id": 1, "permissions": USHER_PERMS},
 
-    # Level 3: Location Governance
-    "Location Admin": {"score_id": 3, "permissions": ADMIN_PERMS + ["users:assign_roles"]},
-    "Location Pastor": {"score_id": 3, "permissions": PASTOR_PERMS + ["users:assign_roles"]},
+    # Level 2: Location governance
+    "Location Admin": {"score_id": 2, "permissions": ADMIN_PERMS + ["users:assign_roles", "programs:create_event"]},
+    "Location Pastor": {"score_id": 2, "permissions": LOCATION_PASTOR_PERMS + ["users:assign_roles", "programs:create_event"]},
 
-    # Level 4: Group Governance
-    "Group Usher": {"score_id": 4, "permissions": USHER_PERMS},
-    "Group Admin": {"score_id": 4, "permissions": ADMIN_PERMS + ["users:assign_roles"] + OFFICIAL_PERMS},
-    "Group Pastor": {"score_id": 4, "permissions": PASTOR_PERMS + ["users:assign_roles"] + OFFICIAL_PERMS},
+    # Level 1: collection role at the group scope; not group governance.
+    "Group Usher": {"score_id": 1, "permissions": USHER_PERMS},
 
-    # Level 5: Region Governance
-    "Region Usher": {"score_id": 5, "permissions": USHER_PERMS},
+    # Level 3: group governance
+    "Group Admin": {"score_id": 3, "permissions": ADMIN_PERMS + ["users:assign_roles", "programs:create_event", "programs:assign_workers", "programs:approve_assignments"] + OFFICIAL_PERMS},
+    "Group Pastor": {"score_id": 3, "permissions": PASTOR_PERMS + ["users:assign_roles", "programs:create_event", "programs:assign_workers", "programs:approve_assignments"] + OFFICIAL_PERMS},
+
+    # Level 1: collection role at the region scope; not region governance.
+    "Region Usher": {"score_id": 1, "permissions": USHER_PERMS},
+
+    # Level 4: region governance
     "Region Admin": {
-        "score_id": 5,
-        "permissions": ADMIN_PERMS + ["users:assign_roles"] + OFFICIAL_PERMS + REGION_HIERARCHY_PERMS
+        "score_id": 4,
+        "permissions": ADMIN_PERMS + ["users:assign_roles", "programs:create_event", "programs:assign_workers", "programs:approve_assignments"] + OFFICIAL_PERMS + REGION_HIERARCHY_PERMS
     },
     "Region Pastor": {
-        "score_id": 5,
-        "permissions": PASTOR_PERMS + ["users:assign_roles"] + OFFICIAL_PERMS + REGION_HIERARCHY_PERMS
+        "score_id": 4,
+        "permissions": PASTOR_PERMS + ["users:assign_roles", "programs:create_event", "programs:assign_workers", "programs:approve_assignments"] + OFFICIAL_PERMS + REGION_HIERARCHY_PERMS
     },
 
-    # Level 6: State Governance
-    "State Usher": {"score_id": 6, "permissions": USHER_PERMS + ["programs:assign_workers"]},
+    # Level 1: event capture role. Event-specific Alpha access must be granted
+    # through an approved event assignment rather than a high global score.
+    "State Usher": {"score_id": 1, "permissions": USHER_PERMS},
+
+    # Level 5: state governance
     "State Admin": {
-        "score_id": 6,
-        "permissions": ADMIN_PERMS + REPORTING_READ + ["users:assign_roles", "programs:assign_workers"] + OFFICIAL_PERMS + STATE_HIERARCHY_PERMS
+        "score_id": 5,
+        "permissions": ADMIN_PERMS + REPORTING_READ + ["users:assign_roles", "programs:create_event", "programs:assign_workers", "programs:approve_assignments"] + OFFICIAL_PERMS + STATE_HIERARCHY_PERMS
     },
     "State Overseer": {
-        "score_id": 6,
-        "permissions": PASTOR_PERMS + ["users:assign_roles", "programs:assign_workers", "programs:approve_assignments"] + OFFICIAL_PERMS + STATE_HIERARCHY_PERMS
+        "score_id": 5,
+        "permissions": PASTOR_PERMS + ["users:assign_roles", "programs:create_event", "programs:assign_workers", "programs:approve_assignments"] + OFFICIAL_PERMS + STATE_HIERARCHY_PERMS
     },
+
+    # Enterprise roles are seeded for the separate higher-level client, which
+    # shares this backend. Their authority remains explicitly scoped by score.
+    "Zonal Coordinator": {"score_id": 6, "permissions": HIGHER_ADMIN_PERMS},
 
     # Level 7: National Governance
     "National Admin": {
         "score_id": 7,
-        "permissions": PASTOR_PERMS + ["users:assign_roles", "system:read_audit_logs", "system:read_public_intake", "system:manage_public_intake"] + OFFICIAL_PERMS + NATIONAL_HIERARCHY_PERMS + MEDIA_PERMS
+        "permissions": HIGHER_ADMIN_PERMS
     },
     "National Overseer": {
         "score_id": 7,
-        "permissions": PASTOR_PERMS + ["users:assign_roles", "system:read_audit_logs", "system:read_public_intake", "system:manage_public_intake"] + OFFICIAL_PERMS + NATIONAL_HIERARCHY_PERMS + MEDIA_PERMS
+        "permissions": HIGHER_ADMIN_PERMS
     },
 
     # Level 8: Continental Governance
     "Continental Admin": {
         "score_id": 8,
-        "permissions": (
-            PASTOR_PERMS
-            + ["users:assign_roles", "system:read_audit_logs", "system:read_public_intake", "system:manage_public_intake", "rbac:read", "programs:assign_workers", "programs:approve_assignments"]
-            + OFFICIAL_PERMS
-            + NATIONAL_HIERARCHY_PERMS
-            + MEDIA_PERMS
-        ),
+        "permissions": HIGHER_ADMIN_PERMS,
     },
     "Continental Overseer": {
         "score_id": 8,
-        "permissions": (
-            PASTOR_PERMS
-            + ["users:assign_roles", "system:read_audit_logs", "system:read_public_intake", "system:manage_public_intake", "rbac:read", "programs:assign_workers", "programs:approve_assignments"]
-            + OFFICIAL_PERMS
-            + NATIONAL_HIERARCHY_PERMS
-            + MEDIA_PERMS
-        ),
+        "permissions": HIGHER_ADMIN_PERMS,
     },
 
     # Level 9: Global Governance
@@ -300,15 +315,15 @@ DEFAULT_ROLES = {
 }
 
 SCORE_NAMES = {
-    1: "Fellowship Level",
-    2: "Worker Level",
-    3: "Location Level",
-    4: "Group Level",
-    5: "Region Level",
-    6: "State Level",
-    7: "National Level",
-    8: "Continental Level",
-    9: "Global System Level"
+    1: "Church Worker / Usher",
+    2: "Location Pastor",
+    3: "Group Pastor",
+    4: "Regional Pastor",
+    5: "State Pastor / Overseer",
+    6: "Zonal Coordinator",
+    7: "National Overseer",
+    8: "Continental Leader",
+    9: "General Overseer / Global Admin"
 }
 
 async def init_rbac(db: AsyncSession):
@@ -355,6 +370,11 @@ async def init_rbac(db: AsyncSession):
              db.add(new_score)
              await db.commit()
              await db.refresh(new_score)
+        elif existing.score_name != name:
+            existing.score_name = name
+            db.add(existing)
+
+    await db.commit()
 
     # 3. Seed Roles
     for role_name, data in DEFAULT_ROLES.items():

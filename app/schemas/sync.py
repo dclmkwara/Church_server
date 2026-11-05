@@ -11,6 +11,7 @@ from app.schemas.counts import CountCreate, CountResponse
 from app.schemas.offerings import OfferingCreate, OfferingResponse
 from app.schemas.records import RecordCreate, RecordResponse
 from app.schemas.attendance import WorkerAttendanceCreate, WorkerAttendanceResponse, WorkerAttendanceSubmissionCreate
+from app.schemas.user import WorkerCandidateCreate
 from app.schemas.fellowship_activities import (
     FellowshipMemberCreate, FellowshipMemberResponse,
     FellowshipAttendanceCreate, FellowshipAttendanceResponse,
@@ -27,6 +28,7 @@ class SyncBatchRequest(BaseModel):
     records: List[RecordCreate] = Field(default_factory=list)
     worker_attendance: List[WorkerAttendanceCreate] = Field(default_factory=list)
     worker_attendance_submissions: List[WorkerAttendanceSubmissionCreate] = Field(default_factory=list)
+    worker_candidates: List[WorkerCandidateCreate] = Field(default_factory=list)
     
     # Fellowship items
     fellowship_members: List[FellowshipMemberCreate] = Field(default_factory=list)
@@ -37,7 +39,7 @@ class SyncBatchRequest(BaseModel):
     def require_stable_client_ids(self):
         """Offline retries must carry stable IDs to be safely idempotent."""
         for resource_name in (
-            "counts", "offerings", "records", "worker_attendance", "worker_attendance_submissions",
+            "counts", "offerings", "records", "worker_attendance", "worker_attendance_submissions", "worker_candidates",
             "fellowship_members", "fellowship_attendance", "fellowship_offerings",
         ):
             missing = [index for index, item in enumerate(getattr(self, resource_name)) if item.client_id is None]
@@ -60,6 +62,7 @@ class SyncBatchResponse(BaseModel):
     records: SyncResult
     worker_attendance: SyncResult
     worker_attendance_submissions: SyncResult = Field(default_factory=SyncResult)
+    worker_candidates: SyncResult = Field(default_factory=SyncResult)
     
     fellowship_members: SyncResult
     fellowship_attendance: SyncResult

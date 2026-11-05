@@ -95,42 +95,53 @@ NIGERIA_STATES = [
 ]
 
 CANONICAL_PROGRAM_DOMAINS = {
-    "regular_services": {
-        "name": "Regular Services",
-        "description": "Weekly and routine worship, study, workers, and leaders services.",
+    "global_crusade": {
+        "name": "Global Crusade",
+        "description": "Global Crusade with Kumuyi and its sessions.",
         "types": [
-            ("sunday_worship_service", "Sunday Worship Service"),
-            ("monday_bible_study", "Monday Bible Study"),
-            ("thursday_revival_and_evangelical_training", "Thursday Revival and Evangelical Training"),
-            ("workers_training", "Workers Training"),
-            ("leaders_meeting", "Leaders Meeting"),
+            ("crusade_evening", "Crusade Evening"),
+            ("leadership_development", "Leadership Development Meeting"),
+            ("impact_academy", "Impact Academy"),
+            ("global_sunday", "Global Sunday Service"),
         ],
     },
     "retreat": {
         "name": "Retreat",
-        "description": "Regional or occasional retreat-focused programs.",
+        "description": "Easter and December retreat programs and sessions.",
         "types": [
-            ("easter_retreat", "Easter Retreat"),
-            ("december_retreat", "December Retreat"),
             ("faith_clinic", "Faith Clinic"),
+            ("retreat_bible_study", "Retreat Bible Study"),
+            ("revival_session", "Revival Session"),
             ("seminar", "Seminar"),
         ],
     },
-    "open_crusade": {
-        "name": "Open Crusade",
-        "description": "Monthly crusade and outreach program family.",
+    "weekly_programs": {
+        "name": "Weekly Programs",
+        "description": "Weekly and routine worship, study, workers, and leaders services.",
         "types": [
-            ("impact_academy", "Impact Academy"),
-            ("global_sunday", "Global Sunday"),
-            ("evening_crusade", "Evening Crusade"),
+            ("sunday_worship_service", "Sunday Worship Service"),
+            ("monday_bible_study", "Monday Bible Study"),
+            ("tuesday_leaders_meeting", "Tuesday Leaders Meeting"),
+            ("thursday_revival_hour", "Thursday Revival Hour"),
+            ("saturday_workers_meeting", "Saturday Workers Meeting"),
+        ],
+    },
+    "conferences": {
+        "name": "Conferences",
+        "description": "Church, workers, ministers, leaders, youth, and campus conferences.",
+        "types": [
+            ("workers_conference", "Workers Conference"),
+            ("leaders_strategic_conference", "Ministers and Leaders Strategic Conference"),
+            ("youth_campus_conference", "Youth and Campus Conference"),
         ],
     },
     "special_programs": {
         "name": "Special Programs",
-        "description": "Special programs that do not fit routine service, retreat, or crusade cycles.",
+        "description": "Special rallies, solemn assemblies, anniversaries, and other occasional programs.",
         "types": [
-            ("workers_conference", "Workers Conference"),
-            ("leaders_strategic_conference", "Leaders Strategic Conference"),
+            ("special_rally", "Special Rally"),
+            ("solemn_assembly", "Solemn Assembly"),
+            ("anniversary_celebration", "Anniversary Celebration"),
         ],
     },
 }
@@ -555,7 +566,7 @@ async def ensure_program_metadata(db) -> None:
                 await db.commit()
 
     admin_user = (await db.execute(select(User).order_by(User.created_at.asc()))).scalars().first()
-    regular_domain = (await db.execute(select(ProgramDomain).where(ProgramDomain.slug == "regular_services"))).scalars().first()
+    regular_domain = (await db.execute(select(ProgramDomain).where(ProgramDomain.slug == "weekly_programs"))).scalars().first()
     if admin_user and regular_domain:
         campaign_stmt = select(ProgramCampaign).where(ProgramCampaign.campaign_code == "REG-SERVICES")
         campaign = (await db.execute(campaign_stmt)).scalars().first()
@@ -580,7 +591,7 @@ async def ensure_program_metadata(db) -> None:
         canonical_services = [
             ("sunday_worship_service", "Sunday Worship Service"),
             ("monday_bible_study", "Monday Bible Study"),
-            ("thursday_revival_and_evangelical_training", "Thursday Revival and Evangelical Training"),
+            ("thursday_revival_hour", "Thursday Revival Hour"),
         ]
         for type_slug, event_title in canonical_services:
             type_obj = (await db.execute(select(ProgramType).where(ProgramType.slug == type_slug))).scalars().first()
@@ -763,17 +774,23 @@ async def run(password: str, reset_passwords: bool, metadata_only: bool = False)
         for account in all_accounts:
             # Determine ecclesiastical scope path based on role tier
             role_obj = role_map[account.role_name]
-            score = role_obj.score.score if role_obj.score else 3
+            score = role_obj.score.score if role_obj.score else 2
             
             target_path = str(location.path)
             target_loc_id = location.location_id
-            if score >= 9:  # Global Admin — org root scope
+            if score >= 9:  # Global super-administrator scope
                 target_path = "org"
-            elif score == 6:  # State tier
+            elif score == 8:  # Continental scope is resolved through Nation.continent
+                target_path = str(nations[NIGERIA_NATION_ID].path)
+            elif score == 7:  # National scope
+                target_path = str(nations[NIGERIA_NATION_ID].path)
+            elif score == 6:  # Zone mapping is not configured; keep the assigned home path
+                target_path = str(location.path)
+            elif score == 5:  # State tier
                 target_path = str(states[KWARA_STATE_ID].path)
-            elif score == 5:  # Region tier
+            elif score == 4:  # Region tier
                 target_path = str(region.path)
-            elif score == 4:  # Group tier
+            elif score == 3:  # Group tier
                 target_path = str(group.path)
             
             worker = await ensure_worker(db, account, location)

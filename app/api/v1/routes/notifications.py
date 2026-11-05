@@ -72,6 +72,7 @@ async def list_notification_history(
         since=effective_since,
         kind=kind,
         limit=limit,
+        role_score=deps.highest_role_score(current_user),
     )
 
 

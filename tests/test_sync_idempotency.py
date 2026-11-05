@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.crud.idempotency import commit_idempotent
 from app.schemas.counts import CountCreate
 from app.schemas.sync import SyncBatchRequest
+from app.schemas.user import WorkerCandidateCreate
 
 
 def _count_submission(client_id):
@@ -49,6 +50,19 @@ def test_distinct_usher_submissions_for_same_location_are_valid():
     assert batch.counts[0].client_id != batch.counts[1].client_id
     assert batch.counts[0].event_id == batch.counts[1].event_id
     assert batch.counts[0].location_id == batch.counts[1].location_id
+
+
+def test_worker_candidate_payload_requires_stable_client_id_and_candidate_details():
+    candidate = WorkerCandidateCreate(
+        client_id=uuid4(), name="Test Candidate", gender="Female", phone="+2348012345678",
+        email="candidate@example.org", unit="Ushering",
+    )
+    batch = SyncBatchRequest(worker_candidates=[candidate])
+    assert batch.worker_candidates[0].client_id == candidate.client_id
+
+    with pytest.raises(ValidationError):
+        WorkerCandidateCreate(name="Missing ID", gender="Male", phone="+2348012345678",
+                              email="missing@example.org", unit="Choir")
 
 
 def test_concurrent_duplicate_insert_returns_canonical_record():

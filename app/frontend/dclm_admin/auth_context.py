@@ -112,7 +112,7 @@ class ProfileConfig:
 PROFILE_CONFIGS = {
     "location_worker": ProfileConfig(
         key="location_worker",
-        level=2,
+        level=1,
         user_name="Sister Mary Ojo",
         role_label="Location Worker",
         mode_label="Action Mode",
@@ -123,7 +123,7 @@ PROFILE_CONFIGS = {
     ),
     "location_admin": ProfileConfig(
         key="location_admin",
-        level=3,
+        level=2,
         user_name="Brother Daniel Olanrewaju",
         role_label="Location Admin",
         mode_label="Action Mode",
@@ -134,7 +134,7 @@ PROFILE_CONFIGS = {
     ),
     "location_pastor": ProfileConfig(
         key="location_pastor",
-        level=3,
+        level=2,
         user_name="Pastor Samuel Adebayo",
         role_label="Location Pastor",
         mode_label="Action Mode",
@@ -145,7 +145,7 @@ PROFILE_CONFIGS = {
     ),
     "group_admin": ProfileConfig(
         key="group_admin",
-        level=4,
+        level=3,
         user_name="Brother Joshua Ige",
         role_label="Group Admin",
         mode_label="Oversight Mode",
@@ -156,7 +156,7 @@ PROFILE_CONFIGS = {
     ),
     "group_pastor": ProfileConfig(
         key="group_pastor",
-        level=4,
+        level=3,
         user_name="Pastor Deborah Yusuf",
         role_label="Group Pastor",
         mode_label="Oversight Mode",
@@ -167,7 +167,7 @@ PROFILE_CONFIGS = {
     ),
     "region_admin": ProfileConfig(
         key="region_admin",
-        level=5,
+        level=4,
         user_name="Brother Samuel Kayode",
         role_label="Region Admin",
         mode_label="Oversight Mode",
@@ -178,7 +178,7 @@ PROFILE_CONFIGS = {
     ),
     "region_pastor": ProfileConfig(
         key="region_pastor",
-        level=5,
+        level=4,
         user_name="Pastor David Akinwale",
         role_label="Region Pastor",
         mode_label="Oversight Mode",
@@ -189,7 +189,7 @@ PROFILE_CONFIGS = {
     ),
     "state_admin": ProfileConfig(
         key="state_admin",
-        level=6,
+        level=5,
         user_name="Brother Peter Alabi",
         role_label="State Admin",
         mode_label="Oversight Mode",
@@ -200,7 +200,7 @@ PROFILE_CONFIGS = {
     ),
     "state_overseer": ProfileConfig(
         key="state_overseer",
-        level=6,
+        level=5,
         user_name="Pastor Grace Omoniyi",
         role_label="State Overseer",
         mode_label="Oversight Mode",
@@ -214,54 +214,14 @@ PROFILE_CONFIGS = {
 
 VISIBLE_MODULES = {
     1: ["dashboard", "inbox", "church-data"],
-    2: ["dashboard", "inbox", "church-data", "fellowship"],
-    3: ["dashboard", "inbox", "people", "workflows", "church-data", "fellowship", "organization", "reports"],
-    4: ["dashboard", "inbox", "people", "workflows", "church-data", "fellowship", "organization", "reports"],
-    5: ["dashboard", "inbox", "people", "workflows", "church-data", "fellowship", "organization", "communication", "reports"],
-    6: [
-        "dashboard",
-        "inbox",
-        "people",
-        "workflows",
-        "church-data",
-        "fellowship",
-        "organization",
-        "communication",
-        "reports",
-    ],
-    7: [
-        "dashboard",
-        "inbox",
-        "people",
-        "workflows",
-        "church-data",
-        "fellowship",
-        "organization",
-        "communication",
-        "reports",
-    ],
-    8: [
-        "dashboard",
-        "inbox",
-        "people",
-        "workflows",
-        "church-data",
-        "fellowship",
-        "organization",
-        "communication",
-        "reports",
-    ],
-    9: [
-        "dashboard",
-        "inbox",
-        "people",
-        "workflows",
-        "church-data",
-        "fellowship",
-        "organization",
-        "communication",
-        "reports",
-    ],
+    2: ["dashboard", "inbox", "people", "workflows", "church-data", "fellowship", "reports", "system"],
+    3: ["dashboard", "inbox", "people", "workflows", "church-data", "fellowship", "organization", "reports", "system"],
+    4: ["dashboard", "inbox", "people", "workflows", "church-data", "fellowship", "organization", "communication", "reports", "system"],
+    5: ["dashboard", "inbox", "people", "workflows", "church-data", "fellowship", "organization", "communication", "reports", "system"],
+    6: ["dashboard", "inbox", "people", "workflows", "church-data", "fellowship", "organization", "communication", "reports"],
+    7: ["dashboard", "inbox", "people", "workflows", "church-data", "fellowship", "organization", "communication", "reports"],
+    8: ["dashboard", "inbox", "people", "workflows", "church-data", "fellowship", "organization", "communication", "reports"],
+    9: ["dashboard", "inbox", "people", "workflows", "church-data", "fellowship", "organization", "communication", "reports"],
 }
 
 DEMO_ROLE_PERMISSIONS = {
@@ -277,7 +237,7 @@ DEMO_ROLE_PERMISSIONS = {
 
 
 def _mode_label_for_level(level: int) -> str:
-    if level <= 3:
+    if level <= 2:
         return "Action Mode"
     return "Oversight Mode"
 
@@ -320,13 +280,17 @@ class AdminContext:
 
     @property
     def visible_modules(self) -> list[str]:
+        # Levels 6-9 authenticate against the shared backend from their own
+        # client; this administrative console is intentionally for levels 2-5.
+        if self.level > 5:
+            return []
         if self.level in VISIBLE_MODULES:
             modules = list(VISIBLE_MODULES[self.level])
-        elif self.level >= 6:
-            modules = list(VISIBLE_MODULES[6])
         else:
-            modules = list(VISIBLE_MODULES.get(self.level, VISIBLE_MODULES[3]))
-        if self.has_permission("reports:read") and self.level >= 3 and "reports" not in modules:
+            modules = list(VISIBLE_MODULES[5])
+        if self.level > 5:
+            modules = [module for module in modules if module != "system"]
+        if self.has_permission("reports:read") and self.level >= 2 and "reports" not in modules:
             modules.append("reports")
         if not self.has_permission("reports:read"):
             modules = [module for module in modules if module != "reports"]
@@ -384,7 +348,7 @@ def _backend_context(source: Request | Mapping[str, Any]) -> AdminContext | None
     if not scope_path:
         return None
     profile_key = str((identity.profile_key if identity else "") or mapping.get("profile") or "").strip()
-    role_score = int((identity.role_score if identity else 0) or mapping.get("role_score") or 3)
+    role_score = int((identity.role_score if identity else 0) or mapping.get("role_score") or 2)
     if not profile_key:
         profile_key = profile_key_for_score(role_score)
     role_label = str((identity.role_name if identity else "") or mapping.get("role_label") or "Worker")
@@ -395,10 +359,10 @@ def _backend_context(source: Request | Mapping[str, Any]) -> AdminContext | None
     current_scope_label = format_scope_display_id(scope_path) or role_label
     profile = ProfileConfig(
         key=profile_key,
-        level=max(3, min(role_score or 3, 9)),
+        level=max(1, min(role_score or 1, 9)),
         user_name=user_name,
         role_label=role_label,
-        mode_label=_mode_label_for_level(max(3, min(role_score or 3, 9))),
+        mode_label=_mode_label_for_level(max(1, min(role_score or 1, 9))),
         root_kind=current_scope_kind,
         root_label=current_scope_label,
         root_path=scope_path,

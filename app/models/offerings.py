@@ -37,6 +37,10 @@ class Offering(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     # Event Link (Source of Truth for Date, Program Type, Domain)
     event_id = Column(UUID(as_uuid=True), ForeignKey("program_events.id"), nullable=True, index=True)
     church_type = Column(String(40), nullable=True, index=True)
+    program_level = Column(String(20), nullable=True, index=True)
+    program_domain_id = Column(Integer, ForeignKey("program_domains.id", ondelete="RESTRICT"), nullable=True, index=True)
+    program_type_id = Column(Integer, ForeignKey("program_types.id", ondelete="RESTRICT"), nullable=True, index=True)
+    program_scope_path = Column(LtreeType, nullable=True, index=True)
     program_domain = Column(String(80), nullable=True, index=True)
     program_type = Column(String(120), nullable=True, index=True)
     
