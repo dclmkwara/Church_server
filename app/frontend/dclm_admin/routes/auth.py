@@ -46,7 +46,7 @@ def _auth_layout(
         Div(
             Div(
                 Div(header, content, cls="admin-auth-panel mx-auto"),
-                Footer(P("Powered Kwara State ICT Unit", cls="small text-secondary text-center mb-0 mt-4"), role="contentinfo"),
+                Footer(P("Powered by: Kwara State ICT Unit", cls="small text-secondary text-center mb-0 mt-4"), role="contentinfo"),
                 cls="w-100",
             ),
             toast_stack(toast_message, variant=toast_variant, title=toast_title),

@@ -424,7 +424,7 @@ def shell_layout(
                             cls="admin-page-body",
                         ),
                         Footer(
-                            P("Powered Kwara State ICT Unit", cls="small text-secondary mb-0"),
+                            P("Powered by: Kwara State ICT Unit", cls="small text-secondary mb-0"),
                             role="contentinfo",
                             cls="admin-shell-footer text-center py-3",
                         ),
