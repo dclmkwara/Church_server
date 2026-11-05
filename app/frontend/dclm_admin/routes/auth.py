@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from fasthtml.common import A, Div, Form, H1, Img, Input, Link, P, Script, Title
+from fasthtml.common import A, Div, Footer, Form, H1, Img, Input, Link, P, Script, Title
 from starlette.requests import Request
 from starlette.responses import RedirectResponse
 
@@ -44,7 +44,11 @@ def _auth_layout(
         Link(rel="stylesheet", href="/assets/css/admin.css"),
         Script(src="/assets/js/admin-interactions.js", defer=True),
         Div(
-            Div(header, content, cls="admin-auth-panel mx-auto"),
+            Div(
+                Div(header, content, cls="admin-auth-panel mx-auto"),
+                Footer(P("Powered Kwara State ICT Unit", cls="small text-secondary text-center mb-0 mt-4"), role="contentinfo"),
+                cls="w-100",
+            ),
             toast_stack(toast_message, variant=toast_variant, title=toast_title),
             cls="admin-auth-shell",
         ),

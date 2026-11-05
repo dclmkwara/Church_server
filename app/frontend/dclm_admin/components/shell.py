@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fasthtml.common import A, Button, Div, Form, H1, H2, Img, Input, Link, Main, Option, P, Script, Select, Small, Span, Title
+from fasthtml.common import A, Button, Div, Footer, Form, H1, H2, Img, Input, Link, Main, Option, P, Script, Select, Small, Span, Title
 
 from faststrap import Badge, BottomNav, BottomNavItem, Drawer, Fx, Icon, Modal, ThemeToggle
 
@@ -422,6 +422,11 @@ def shell_layout(
                             ) if (show_shell_intro and title) or primary_action else "",
                             content,
                             cls="admin-page-body",
+                        ),
+                        Footer(
+                            P("Powered Kwara State ICT Unit", cls="small text-secondary mb-0"),
+                            role="contentinfo",
+                            cls="admin-shell-footer text-center py-3",
                         ),
                         cls="container-fluid px-3 px-lg-4 py-3 py-lg-4 admin-page-frame",
                     ),
