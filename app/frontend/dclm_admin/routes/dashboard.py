@@ -1168,7 +1168,7 @@ def register_dashboard_routes(app) -> None:
                 "program_type_id": program_type_id,
                 "occurrence_date": occurrence_date,
             })
-            return Div(P("Reminder sent to active users at this location.", cls="small text-success mb-0"), role="status")
+            return Div(P("Reminder sent to the location's usher(s) and pastor.", cls="small text-success mb-0"), role="status")
         except BackendClientError as exc:
             return Div(P(f"Reminder was not sent: {exc}", cls="small text-danger mb-0"), role="alert")
 

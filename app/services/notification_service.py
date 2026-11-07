@@ -9,8 +9,9 @@ from app.models.approvals import WorkerRemovalRequest
 from app.models.audit import NotificationReadState
 from app.models.broadcast import BroadcastMessage
 from app.models.core import _LTREE
-from app.models.counts import Count
+from app.models.counts import Count, CountReminderRecipient
 from app.models.fellowship_activities import FellowshipAttendance, PrayerRequest, Testimony
+from app.models.location import Location
 from app.models.offerings import Offering
 from app.models.user import User, Worker
 
@@ -122,6 +123,7 @@ class NotificationService:
             "pending_users": "App access request awaiting review",
             "worker_removals": "Worker removal request awaiting governance review",
             "testimonies": "New testimony submitted",
+            "count_reminder": "Sunday attendance report reminder",
         }
         return mapping.get(kind, kind.replace("_", " ").title())
 
@@ -143,6 +145,8 @@ class NotificationService:
             return f"Removal request is at level {row.get('level') or '?'} with status {row.get('status') or 'pending'}."
         if kind == "testimonies":
             return f"Testimony '{row.get('title') or 'Untitled'}' was submitted."
+        if kind == "count_reminder":
+            return f"A Sunday attendance report is still needed for {row.get('location_name') or 'your location'} ({row.get('occurrence_date')})."
         return "A new notification item was received."
 
     @staticmethod
@@ -191,6 +195,34 @@ class NotificationService:
                         "created_at": created_at,
                     }
                 )
+        if not kind or kind in {"all", "count_reminder", "count_reminders"}:
+            # Reminders are addressed records, not scope broadcasts. Filtering by
+            # recipient_user_id prevents parent pastors from inheriting child
+            # reminders through their wider jurisdiction.
+            reminder_rows = (await db.execute(
+                select(CountReminderRecipient, Location.location_name)
+                .join(Location, Location.location_id == CountReminderRecipient.location_id)
+                .where(
+                    CountReminderRecipient.recipient_user_id == user_id,
+                    CountReminderRecipient.sent_at > since,
+                )
+                .order_by(CountReminderRecipient.sent_at.desc())
+                .limit(limit)
+            )).all()
+            for reminder, location_name in reminder_rows:
+                source_id = str(reminder.id)
+                items.append({
+                    "notification_key": NotificationService._notification_key("count_reminder", source_id),
+                    "source_id": source_id,
+                    "kind": "count_reminder",
+                    "title": NotificationService._title_for_kind("count_reminder"),
+                    "body": NotificationService._body_for_kind("count_reminder", {
+                        "location_name": location_name,
+                        "occurrence_date": reminder.occurrence_date.isoformat(),
+                    }),
+                    "priority": "medium",
+                    "created_at": reminder.sent_at,
+                })
         if not kind or kind in {"all", "broadcast", "broadcasts"}:
             broadcast_rows = (await db.execute(
                 select(BroadcastMessage).where(

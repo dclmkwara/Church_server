@@ -1,7 +1,7 @@
 """
 Count models for population tracking.
 """
-from sqlalchemy import Column, String, ForeignKey, Integer, DateTime, Boolean, Text
+from sqlalchemy import Column, String, ForeignKey, Integer, DateTime, Boolean, Text, Date, Index
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 import uuid
@@ -68,3 +68,20 @@ class Count(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
 
     def __repr__(self):
         return f"<Count(total={self.total}, status='{self.status}', source_role='{self.source_role}')>"
+
+
+class CountReminderRecipient(Base):
+    """Auditable direct reminder delivery to a specific location usher/pastor."""
+    __tablename__ = "count_reminder_recipients"
+    __table_args__ = (
+        Index("ix_count_reminder_location_day_sent", "location_id", "occurrence_date", "sent_at"),
+        Index("ix_count_reminder_recipient_sent", "recipient_user_id", "sent_at"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    reminder_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    recipient_user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="RESTRICT"), nullable=False)
+    sent_by_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id", ondelete="RESTRICT"), nullable=False)
+    location_id = Column(UUID(as_uuid=False), ForeignKey("locations.location_id", ondelete="RESTRICT"), nullable=False)
+    occurrence_date = Column(Date, nullable=False)
+    sent_at = Column(DateTime(timezone=True), nullable=False)

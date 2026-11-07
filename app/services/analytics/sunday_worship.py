@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
 from app.db.filters import scope_filter, scope_or_ancestor_filter
-from app.models.counts import Count
+from app.models.counts import Count, CountReminderRecipient
 from app.models.location import Group, Location, Region, State
 from app.models.programs import ProgramEvent, ProgramType
 
@@ -152,6 +152,7 @@ def _build_overview(
     included_rows: list[Any] = []
     received_units: set[str] = set()
     counted_units: set[str] = set()
+    location_totals: dict[str, int] = {}
     included_combined_count_scopes: set[str] = set()
     unreported_location_ids: list[str] = []
 
@@ -181,6 +182,9 @@ def _build_overview(
                 coverage[review] += 1
                 if review == "approved" or (include_pending and review == "pending"):
                     counted_units.add(location_id)
+                    # A combined total cannot be attributed to each covered
+                    # location. Keep it in scope totals but out of per-location
+                    # comparisons to avoid manufacturing location trends.
                     if count_scope is not None:
                         included_combined_count_scopes.add(count_scope)
             else:
@@ -198,6 +202,7 @@ def _build_overview(
             if review == "approved" or (include_pending and review == "pending"):
                 counted_units.add(location_id)
                 included_rows.extend(rows)
+                location_totals[location_id] = _count_values(rows)["total"]
         else:
             state = receipt_state(occurrence_date, now, received=False)
             coverage[state] += 1
@@ -241,6 +246,7 @@ def _build_overview(
         "categories": {key: values_payload[key] for key in _CATEGORIES},
         "coverage": coverage,
         "unreported_location_ids": unreported_location_ids,
+        "location_totals": location_totals,
         "additivity": "additive",
         "status_rule": "approved" if not include_pending else "approved+pending",
         "include_pending": include_pending,
@@ -377,8 +383,18 @@ class SundayWorshipAnalytics:
         )
         type_id = type_result.scalar_one_or_none()
 
+        reminder_time = (
+            select(func.max(CountReminderRecipient.sent_at))
+            .where(
+                CountReminderRecipient.location_id == Location.location_id,
+                CountReminderRecipient.occurrence_date == last_date,
+                CountReminderRecipient.sent_at >= now - timedelta(hours=24),
+            )
+            .correlate(Location)
+            .scalar_subquery()
+        )
         location_result = await db.execute(
-            select(Location).where(
+            select(Location, reminder_time.label("reminded_at")).where(
                 scope_filter(Location.path, scope_path),
                 or_(
                     Location.is_active.is_(True),
@@ -388,7 +404,13 @@ class SundayWorshipAnalytics:
                 or_(Location.closed_on.is_(None), Location.closed_on > first_date),
             ).order_by(Location.location_name)
         )
-        locations = list(location_result.scalars().all())
+        location_rows = list(location_result.all())
+        locations = [row[0] for row in location_rows]
+        reminded_at_by_location = {
+            str(location.location_id): reminded_at
+            for location, reminded_at in location_rows
+            if reminded_at is not None
+        }
 
         depth = max(len([part for part in scope_path.split(".") if part]) - 1, 0)
         child_model = {2: Region, 3: Group, 4: Location}.get(depth)
@@ -493,6 +515,8 @@ class SundayWorshipAnalytics:
             for location_id in scope_history[-1].get("unreported_location_ids", [])
             if location_id in location_by_id
         ]
+        for row in missing_locations:
+            row["reminded_at"] = reminded_at_by_location.get(row["location_id"])
         return {
             "scope": scope_history,
             "ancestors": ancestors,

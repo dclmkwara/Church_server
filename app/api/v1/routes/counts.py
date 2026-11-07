@@ -5,7 +5,7 @@ Handles population count data collection with offline sync support.
 """
 from typing import Any, List, Optional
 from datetime import date, datetime, time, timedelta, timezone
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,12 +20,10 @@ from app.crud.crud_counts import count as crud_count
 from app.schemas.counts import CountCreate, CountResponse, CountUpdate
 from app.schemas.sync import SyncResult
 from app.services.statistics_service import StatisticsService
-from app.models.user import User
-from app.models.counts import Count
+from app.models.user import User, Role, Worker, user_roles
+from app.models.counts import Count, CountReminderRecipient
 from app.models.programs import ProgramEvent, ProgramType, ProgramDomain
 from app.models.location import Location
-from app.models.user import Worker
-from app.models.broadcast import BroadcastMessage
 from app.db.filters import scope_filter
 from app.db.filters import scope_or_ancestor_filter
 from app.services.analytics.program_config import PENDING_ACCEPTOR_ALERT_HOURS, PENDING_NEXT_LEVEL_ALERT_HOURS
@@ -46,6 +44,24 @@ class CountReminder(BaseModel):
     location_id: UUID
     program_type_id: int
     occurrence_date: date
+
+
+def _count_reminder_recipient_query(location: Location):
+    """Only active, approved usher/pastor accounts at this exact location."""
+    return (
+        select(User.user_id)
+        .join(user_roles, user_roles.c.user_id == User.user_id)
+        .join(Role, Role.id == user_roles.c.role_id)
+        .where(
+            User.path == location.path,
+            User.is_active.is_(True),
+            User.approval_status == "approved",
+            User.is_deleted.is_(False),
+            Role.is_deleted.is_(False),
+            Role.role_name.in_(("Location Usher", "Location Pastor")),
+        )
+        .distinct()
+    )
 
 
 def _path_covers(scope_path: str | None, descendant_path: str) -> bool:
@@ -475,7 +491,10 @@ async def remind_unreported_location(
     """Send the existing in-app broadcast to one location with no Sunday report."""
     if deps.highest_role_score(current_user) < 3:
         raise HTTPException(status_code=403, detail="A pastor-level reviewer is required to remind a location")
-    location = await db.get(Location, payload.location_id)
+    location_result = await db.execute(
+        select(Location).where(Location.location_id == str(payload.location_id)).with_for_update()
+    )
+    location = location_result.scalar_one_or_none()
     if not location:
         raise HTTPException(status_code=404, detail="Location not found")
     deps.ensure_path_in_scope(current_user, location.path, detail="Location outside your jurisdiction")
@@ -500,16 +519,44 @@ async def remind_unreported_location(
     if event.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="An approved combined event covers this location")
     now = datetime.now(timezone.utc)
-    message = BroadcastMessage(
-        sender_id=current_user.user_id, sender_role_score=str(deps.highest_role_score(current_user)),
-        target_level="location", path=str(location.path), audience="all_users",
-        title="Sunday Worship count reminder",
-        content=f"The Sunday Worship population report for {payload.occurrence_date.isoformat()} has not been received. Please submit it through the Field Utility app.",
-        priority="normal", sent_at=now,
+    recent_reminder = await db.execute(
+        select(CountReminderRecipient.sent_at)
+        .where(
+            CountReminderRecipient.location_id == str(location.location_id),
+            CountReminderRecipient.occurrence_date == payload.occurrence_date,
+            CountReminderRecipient.sent_at >= now - timedelta(hours=24),
+        )
+        .order_by(CountReminderRecipient.sent_at.desc())
+        .limit(1)
     )
-    db.add(message)
+    previous_sent_at = recent_reminder.scalar_one_or_none()
+    if previous_sent_at is not None:
+        elapsed = max(int((now - previous_sent_at).total_seconds() // 3600), 0)
+        raise HTTPException(status_code=429, detail=f"Reminded {elapsed}h ago")
+
+    recipient_result = await db.execute(_count_reminder_recipient_query(location))
+    recipient_ids = list(recipient_result.scalars().all())
+    if not recipient_ids:
+        raise HTTPException(status_code=409, detail="No usher or pastor on record")
+
+    reminder_id = uuid4()
+    db.add_all([
+        CountReminderRecipient(
+            reminder_id=reminder_id,
+            recipient_user_id=recipient_id,
+            sent_by_id=current_user.user_id,
+            location_id=str(location.location_id),
+            occurrence_date=payload.occurrence_date,
+            sent_at=now,
+        )
+        for recipient_id in recipient_ids
+    ])
     await db.commit()
-    return {"status": "sent", "broadcast_id": str(message.id), "location_id": str(location.location_id), "sent_at": now}
+    return {
+        "status": "sent", "reminder_id": str(reminder_id), "location_id": str(location.location_id),
+        "occurrence_date": payload.occurrence_date.isoformat(), "sent_at": now,
+        "recipient_count": len(recipient_ids),
+    }
 
 
 @router.get("/review/unreported", dependencies=[Depends(deps.PermissionChecker("counts:review"))])

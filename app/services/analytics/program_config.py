@@ -3,6 +3,12 @@
 from dataclasses import dataclass
 
 
+# Shared dashboard attention policy. Values compare pooled totals for the same
+# locations counted in both adjacent reporting periods.
+ATTENTION_DECLINE_PCT = 15
+ATTENTION_MIN_COMPARABLE_LOCATIONS = 5
+
+
 @dataclass(frozen=True)
 class StandingProgram:
     """Describe one recurring program without creating database expectations."""

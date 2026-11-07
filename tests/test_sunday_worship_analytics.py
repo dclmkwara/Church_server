@@ -136,7 +136,7 @@ def test_series_load_count_does_not_grow_with_weeks_or_direct_children():
             self.calls += 1
             result = {
                 1: Result(scalar=17),
-                2: Result(rows=locations),
+                2: Result(rows=[(location, None) for location in locations]),
                 3: Result(rows=[
                     SimpleNamespace(path=row.path, name=row.region_name, location_id="", node_type="child")
                     for row in regions

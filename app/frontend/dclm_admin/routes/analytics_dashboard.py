@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from html import escape
 from typing import Any
 
@@ -19,6 +19,7 @@ from ..communication.active_scope import active_scope_context, scope_link
 from ..communication.church_data_service import ChurchDataService
 from ..backend import BackendClientError
 from app.core import dashboard_perf
+from app.services.analytics.program_config import ATTENTION_DECLINE_PCT, ATTENTION_MIN_COMPARABLE_LOCATIONS
 
 
 def _integer(value: Any) -> int:
@@ -26,6 +27,18 @@ def _integer(value: Any) -> int:
         return int(value or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _pooled_decline(previous: dict[str, Any], current: dict[str, Any]) -> tuple[int, float | None]:
+    """Compare pooled totals only for locations counted in both weeks."""
+    previous_by_location = previous.get("location_totals") or {}
+    current_by_location = current.get("location_totals") or {}
+    common = set(previous_by_location) & set(current_by_location)
+    previous_total = sum(_integer(previous_by_location[key]) for key in common)
+    current_total = sum(_integer(current_by_location[key]) for key in common)
+    if len(common) < ATTENTION_MIN_COMPARABLE_LOCATIONS or previous_total <= 0:
+        return len(common), None
+    return len(common), 100 * (previous_total - current_total) / previous_total
 
 
 def _lagos_sunday(today: date | None = None) -> date:
@@ -275,13 +288,15 @@ def _attention_panel(
             items.append((85, Div(Span(cls="analytics-attention-dot returned"), Div(title, P("Returned for correction · Sunday Worship", cls="analytics-muted"), cls="analytics-attention-copy"), cls="analytics-attention-item")))
         histories = child.get("history") or []
         if len(histories) >= 2:
-            current_total, previous_total = histories[-1].get("total"), histories[-2].get("total")
-            if current_total is not None and previous_total is not None and _integer(previous_total) > 0:
-                drop = round(100 * (_integer(previous_total) - _integer(current_total)) / _integer(previous_total))
-                if drop >= 15:
-                    link, hx_link = _scope_dashboard_link(ctx, child_path), _scope_dashboard_link(ctx, child_path, fragment=True)
-                    title = A(f"{label}: attendance down {drop}%", href=link, hx_get=hx_link, hx_push_url=link, hx_target="#analytics-dashboard-body", hx_swap="outerHTML", cls="analytics-attention-title")
-                    items.append((70, Div(Span(cls="analytics-attention-dot decline"), Div(title, P("Compared with the previous Sunday", cls="analytics-muted"), cls="analytics-attention-copy"), cls="analytics-attention-item")))
+            comparable, drop_pct = _pooled_decline(histories[-2], histories[-1])
+            link, hx_link = _scope_dashboard_link(ctx, child_path), _scope_dashboard_link(ctx, child_path, fragment=True)
+            if drop_pct is None and comparable < ATTENTION_MIN_COMPARABLE_LOCATIONS:
+                title = A(f"{label}: Too few locations to compare", href=link, hx_get=hx_link, hx_push_url=link, hx_target="#analytics-dashboard-body", hx_swap="outerHTML", cls="analytics-attention-title")
+                items.append((10, Div(Span(cls="analytics-attention-dot"), Div(title, P(f"{comparable} comparable locations; at least {ATTENTION_MIN_COMPARABLE_LOCATIONS} required", cls="analytics-muted"), cls="analytics-attention-copy"), cls="analytics-attention-item")))
+            elif drop_pct is not None and drop_pct >= ATTENTION_DECLINE_PCT:
+                drop = round(drop_pct)
+                title = A(f"{label}: Down {drop}%", href=link, hx_get=hx_link, hx_push_url=link, hx_target="#analytics-dashboard-body", hx_swap="outerHTML", cls="analytics-attention-title")
+                items.append((70, Div(Span(cls="analytics-attention-dot decline"), Div(title, P(f"{comparable} locations compared · pooled attendance", cls="analytics-muted"), cls="analytics-attention-copy"), cls="analytics-attention-item")))
 
     for row in queue:
         report_path = str(row.get("program_scope_path") or "")
@@ -304,13 +319,21 @@ def _attention_panel(
                 continue
             href, hx_href = _scope_dashboard_link(ctx, str(row["path"])), _scope_dashboard_link(ctx, str(row["path"]), fragment=True)
             status_id = f"remind-status-{escape(location_id)}"
-            action = Form(
-                Input(type="hidden", name="location_id", value=location_id),
-                Input(type="hidden", name="program_type_id", value=str(program_type_id)),
-                Input(type="hidden", name="occurrence_date", value=occurrence.isoformat()),
-                Button("Remind", type="submit", variant="outline-primary", size="sm"),
-                hx_post=scope_link(ctx, "/dashboard/remind", scope_path=scope_path), hx_target=f"#{status_id}", hx_swap="innerHTML", cls="analytics-remind-form",
-            )
+            reminded_at = row.get("reminded_at")
+            if reminded_at is not None:
+                if reminded_at.tzinfo is None:
+                    reminded_at = reminded_at.replace(tzinfo=timezone.utc)
+                hours_ago = max(int((datetime.now(timezone.utc) - reminded_at).total_seconds() // 3600), 0)
+                elapsed_label = "less than 1h ago" if hours_ago == 0 else f"{hours_ago}h ago"
+                action = P(f"Reminded {elapsed_label}", cls="small text-muted analytics-remind-form")
+            else:
+                action = Form(
+                    Input(type="hidden", name="location_id", value=location_id),
+                    Input(type="hidden", name="program_type_id", value=str(program_type_id)),
+                    Input(type="hidden", name="occurrence_date", value=occurrence.isoformat()),
+                    Button("Remind", type="submit", variant="outline-primary", size="sm"),
+                    hx_post=scope_link(ctx, "/dashboard/remind", scope_path=scope_path), hx_target=f"#{status_id}", hx_swap="innerHTML", cls="analytics-remind-form",
+                )
             title = A(str(row.get("name") or "Location"), href=href, hx_get=hx_href, hx_push_url=href, hx_target="#analytics-dashboard-body", hx_swap="outerHTML", cls="analytics-attention-title")
             items.append((60, Div(Span(cls="analytics-attention-dot missing"), Div(title, P("No Sunday Worship report received", cls="analytics-muted"), action, Div(id=status_id, role="status", cls="analytics-remind-status"), cls="analytics-attention-copy"), cls="analytics-attention-item")))
 
@@ -319,7 +342,7 @@ def _attention_panel(
         rendered = P("No overdue reviews, returned reports, major declines, or missing Sunday reports in this scope.", cls="analytics-muted")
     else:
         rendered = Div(*(item for _rank, item in items), cls="analytics-attention-list")
-    return Div(H2("Needs attention", cls="analytics-panel-title"), P("Missing locations, pending reviews, returned reports, and declines of 15% or more.", cls="analytics-note"), rendered, id="analytics-attention", cls="panel analytics-attention-panel")
+    return Div(H2("Needs attention", cls="analytics-panel-title"), P(f"Missing locations, pending reviews, returned reports, and declines of {ATTENTION_DECLINE_PCT}% or more.", cls="analytics-note"), rendered, id="analytics-attention", cls="panel analytics-attention-panel")
 
 
 async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
