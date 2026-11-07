@@ -153,6 +153,9 @@ app.include_router(hierarchy.router, prefix=f"{settings.API_V1_PREFIX}", tags=["
 from app.api.v1.routes import programs
 app.include_router(programs.router, prefix=f"{settings.API_V1_PREFIX}/programs", tags=["Programs"])
 
+from app.api.v1.routes import analytics
+app.include_router(analytics.router, prefix=f"{settings.API_V1_PREFIX}/analytics", tags=["Analytics"])
+
 from app.api.v1.routes import official_appointments
 app.include_router(official_appointments.router, prefix=f"{settings.API_V1_PREFIX}/official-appointments", tags=["Officials"])
 

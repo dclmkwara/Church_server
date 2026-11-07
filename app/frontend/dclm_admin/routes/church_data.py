@@ -358,8 +358,36 @@ async def _meeting_program_page(request: Request, ctx, *, title: str, subtitle: 
         )
     else:
         trend_table = empty_state("calendar3", "No monthly trend yet", "Monthly rows appear after attendance is submitted for this meeting type.")
+    leaders_panel = Div()
+    if program_type_slug == "tuesday_leaders_meeting":
+        raw_rows = await ChurchDataService.list_attendance(request, ctx)
+        leader_rows = [
+            row for row in raw_rows
+            if "leader" in str(row.get("program_type") or "").casefold()
+            or "leader" in str(row.get("event_title") or "").casefold()
+        ]
+        grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+        for row in leader_rows:
+            key = (row.get("date", ""), row.get("program_level", "unspecified").title(), row.get("location", "Unknown location"))
+            grouped.setdefault(key, []).append(row)
+        show_names = int(getattr(getattr(ctx, "profile", None), "level", 9) or 9) <= 3
+        meeting_table_rows = []
+        for (meeting_date, held_level, home_location), present_rows in sorted(grouped.items(), reverse=True):
+            present = [row for row in present_rows if row.get("status") in {"present", "late"}]
+            names = ", ".join(sorted({row.get("worker_name", "") for row in present if row.get("worker_name")})) if show_names else f"{len(present)} leaders present"
+            meeting_table_rows.append([meeting_date, held_level, home_location, names, len(present)])
+        meeting_table = responsive_table(
+            ["Meeting date", "Level held", "Leader home location", "Leaders present" if show_names else "Reported presence", "Present entries"],
+            meeting_table_rows, [], results_id="leaders-meeting-received",
+        ) if meeting_table_rows else empty_state("people", "No leaders meetings received", "Submitted Tuesday Leaders Meeting attendance will appear here.")
+        leaders_panel = section_card(
+            "Meetings received",
+            "Coverage is not defined. Home location comes from each stored worker attendance row; reported entries are shown without a unique-worker claim.",
+            meeting_table,
+        )
     body = page_stack(
         cards,
+        leaders_panel,
         section_card(
             "Attendance trend",
             f"Monthly records for {title}; this page filters strictly to program type {program_type_slug}.",
@@ -367,7 +395,7 @@ async def _meeting_program_page(request: Request, ctx, *, title: str, subtitle: 
         ),
         section_card(
             "How to read these figures",
-            "These are stored attendance rows. The current system can receive repeated full-roster submissions for one meeting, so a unique-worker faithfulness percentage is withheld until the roster snapshot deduplication fix is implemented.",
+            "These are stored attendance rows. The current system can receive repeated full-roster submissions for one meeting, so a unique-worker attendance rate is withheld until roster snapshot deduplication is completed.",
         ),
     )
     return shell_layout(

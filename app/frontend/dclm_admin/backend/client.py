@@ -921,6 +921,27 @@ class BackendClient:
             params["latest_date"] = latest_date
         return await self._request("GET", "/dashboard/sunday-worship/series", access_token=access_token, params=params)
 
+    async def get_program_occurrences(
+        self,
+        access_token: str,
+        *,
+        scope_path: str,
+        domain: str | None = None,
+        program_type: str | None = None,
+        program_level: str | None = None,
+        event_id: str | None = None,
+        campaign_id: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        include_pending: bool = False,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {"scope_path": scope_path, "include_pending": include_pending}
+        for key, value in (("domain", domain), ("program_type", program_type), ("program_level", program_level),
+                           ("event_id", event_id), ("campaign_id", campaign_id), ("date_from", date_from), ("date_to", date_to)):
+            if value:
+                params[key] = value
+        return await self._request("GET", "/analytics/programs/occurrences", access_token=access_token, params=params)
+
     async def get_sunday_worship_dashboard_payload(
         self, access_token: str, *, scope_path: str, weeks: int,
         include_pending: bool, latest_date: str,

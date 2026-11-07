@@ -4,7 +4,7 @@ import asyncio
 from datetime import date
 from typing import Any
 
-from fasthtml.common import Button as HtmlButton, Div, Form, H3, H4, Input, Label, Li, Option, P, Select, Span, Textarea, Ul
+from fasthtml.common import A, Button as HtmlButton, Div, Form, H3, H4, Input, Label, Li, Option, P, Select, Span, Textarea, Ul
 from starlette.requests import Request
 
 from faststrap import Button, Icon, Input as FsInput, Select as FsSelect, PlaceholderCard, Spinner, TabPane, Tabs, ToggleGroup
@@ -87,6 +87,112 @@ def _campaign_report_toggle(ctx, campaign_id: str, current_view: str) -> Any:
         active_cls="active",
         cls="admin-toggle-group dashboard-view-toggle",
     )
+
+
+def _occurrence_status(row: dict[str, Any], *, metric: str, mode: str, can_view_alpha: bool = False) -> Any:
+    state = (row.get("record_state") or "no_report") if metric == "converts" else (row.get("report_state") or "no_report")
+    if state == "no_report":
+        return Span("No report", cls="small text-muted")
+    if state == "pending":
+        return Span("Pending review", cls="small text-warning-emphasis")
+    if state == "returned":
+        return Span("Returned", cls="small text-danger")
+    if metric == "converts":
+        sources = row.get("record_sources") or {}
+        alpha, satellite = _safe_int(sources.get("alpha")), _safe_int(sources.get("satellite"))
+        total = _safe_int(row.get("converts"))
+        if mode == "crusade" and not can_view_alpha:
+            return Div(P(f"Satellite: {satellite:,} converts", cls="small mb-1"), P(f"Satellite participation: {satellite:,}", cls="fw-semibold mb-0"))
+        return Div(
+            P(f"Alpha: {alpha:,} · Satellites: {satellite:,}", cls="small mb-1"),
+            P(f"Total participation: {total:,} converts", cls="fw-semibold mb-0"),
+        )
+    sources = row.get("sources") or {}
+    if mode == "crusade":
+        alpha, satellite = _safe_int(sources.get("alpha")), _safe_int(sources.get("satellite"))
+        if not can_view_alpha:
+            return Div(P(f"Satellite: {satellite:,}", cls="small mb-1"), P(f"Satellite participation: {satellite:,}", cls="fw-semibold mb-0"))
+        return Div(
+            P(f"Alpha: {alpha:,} · Satellites: {satellite:,}", cls="small mb-1"),
+            P(f"Total participation: {_safe_int(row.get('counted_population')):,}", cls="fw-semibold mb-0"),
+        )
+    return P(f"{_safe_int(row.get('counted_population')):,}", cls="fw-semibold mb-0")
+
+
+async def _event_matrix_page(request: Request, ctx, *, mode: str, campaign_id: str = "", event_id: str = "", metric: str = "attendance", include_pending: bool = False):
+    domain_slug = "retreat" if mode == "retreat" else "global_crusade"
+    campaigns = await ProgramService.list_campaigns(request, ctx, domain_slug=domain_slug, event_mode=mode)
+    campaign_ids = {str(row.get("campaign_id")) for row in campaigns}
+    if campaign_id not in campaign_ids:
+        past = [row for row in campaigns if str(row.get("end_date") or "") <= date.today().isoformat()]
+        selected = past[0] if past else (campaigns[0] if campaigns else None)
+        campaign_id = str(selected.get("campaign_id") or "") if selected else ""
+    selected_campaign = next((row for row in campaigns if str(row.get("campaign_id")) == campaign_id), None)
+    occurrences_result = await ProgramService.occurrences(
+        request, ctx, domain=domain_slug, campaign_id=campaign_id or None,
+        event_id=event_id or None, include_pending=include_pending,
+    ) if campaign_id else {"occurrences": []}
+    occurrences = occurrences_result.get("occurrences") or []
+    by_id = {str(row["event_id"]): row for row in occurrences}
+    can_view_alpha = int(getattr(getattr(ctx, "profile", None), "level", 0) or 0) >= 5
+    detail = by_id.get(event_id)
+    days = sorted({str(row["date"]) for row in occurrences})
+    types = sorted({(str(row["program_type_slug"]), str(row["program_type"])) for row in occurrences}, key=lambda item: item[1].casefold())
+    matrix_rows = []
+    for type_slug, type_name in types:
+        cells = [type_name]
+        for day in days:
+            matches = [row for row in occurrences if row["program_type_slug"] == type_slug and row["date"] == day]
+            if matches:
+                links = [A(_occurrence_status(row, metric=metric, mode=mode, can_view_alpha=can_view_alpha), href=ctx.url_for(
+                    f"/church-data/programs/analytics/{mode}", campaign_id=campaign_id,
+                    event_id=row["event_id"], metric=metric, include_pending=str(include_pending).lower(),
+                ), cls="text-decoration-none") for row in matches]
+                cells.append(Div(*links, cls="d-grid gap-2"))
+            else:
+                cells.append(Span("Session not defined", cls="small text-muted"))
+        matrix_rows.append(cells)
+    headers = ["Program type"] + [
+        (f"Day {next((r.get('day_number') for r in occurrences if r['date'] == day and r.get('day_number')), '—')} · {day}" if mode == "retreat" else day)
+        for day in days
+    ]
+    selector = Form(
+        Select(Option("Select event", value=""), *[
+            Option(f"{row.get('title') or row.get('campaign_code')} · {row.get('start_date')}", value=row.get("campaign_id"), selected=str(row.get("campaign_id")) == campaign_id)
+            for row in campaigns
+        ], name="campaign_id", cls="form-select"),
+        Select(Option("Attendance", value="attendance", selected=metric == "attendance"), Option("Converts", value="converts", selected=metric == "converts"), name="metric", cls="form-select") if mode == "crusade" else Input(type="hidden", name="metric", value=metric),
+        Label(Input(type="checkbox", name="include_pending", value="true", checked=include_pending), " Include pending reports", cls="form-check-label d-flex align-items-center gap-2 px-2"),
+        Button("Load event", variant="primary", size="md", type="submit"),
+        method="get", action=ctx.url_for(f"/church-data/programs/analytics/{mode}"),
+        cls="d-flex flex-wrap gap-2 align-items-end mb-3",
+    )
+    if detail:
+        report_rows = [[r["location"], r["source_role"].title(), f"{_safe_int(r['approved_population']):,}", f"{_safe_int(r['pending_population']):,}"] for r in detail.get("location_reports", [])]
+        detail_panel = section_card(
+            f"{detail['program_type']} · {detail['date']}",
+            f"{detail.get('campaign_title') or mode.title()} report detail. Physical venue and reporting scope are kept separate.",
+            responsive_table(["Location", "Source", "Approved population", "Pending population"], report_rows, [], results_id="program-event-details") if report_rows else empty_state("clipboard-data", "No report rows", "This occurrence has no location level submissions in the selected scope."),
+        )
+    else:
+        detail_panel = Div()
+    table = responsive_table(headers, matrix_rows, [], results_id=f"{mode}-occurrence-matrix") if matrix_rows else empty_state("calendar3", f"No {mode} sessions reported", "No dated program events are recorded for this campaign. Missing events are not represented as zero attendance.")
+    no_campaign = P("No campaign is available in this scope yet.", cls="text-muted") if not campaigns else None
+    content = page_stack(
+        page_intro(
+            "Retreat reporting" if mode == "retreat" else "Global Crusade reporting",
+            "One cell represents one dated program type. Attendance is never added across sessions."
+            if mode == "retreat" else "Alpha and satellite reporting stay separate; the labelled total is for this session only.",
+            scope_label=ctx.current_scope_label, scope_kind=ctx.current_scope_kind,
+        ),
+        selector,
+        section_card("Event summary", "Sessions reported · planned sessions not defined. No expected session list has been configured.",
+            Div(P(f"{len(occurrences)} sessions reported" if occurrences else "No sessions reported", cls="fw-semibold mb-0"), cls="py-2")),
+        section_card("Population by program and day" if mode == "retreat" or metric == "attendance" else "Converts by program and day", "Select a cell to inspect the location reports.", table),
+        detail_panel,
+        no_campaign,
+    )
+    return shell_layout(ctx, request_path=request.url.path, active_key="programs", title="Retreat" if mode == "retreat" else "Crusade", subtitle="Event reporting", primary_action=None, content=content, show_shell_intro=False)
 
 
 async def _scope_locations(request: Request, ctx) -> list[str]:
@@ -1027,6 +1133,11 @@ def register_program_routes(app) -> None:
     ):
         ctx = active_scope_context(request, build_context(request))
         body = page_stack(
+            Div(
+                primary_button("Retreat reporting", href=ctx.url_for("/church-data/programs/analytics/retreat")),
+                primary_button("Crusade reporting", href=ctx.url_for("/church-data/programs/analytics/crusade")),
+                cls="d-flex flex-wrap gap-2 mb-3",
+            ),
             _programs_loading_shell(
                 ctx,
                 event_search=event_search,
@@ -1047,17 +1158,22 @@ def register_program_routes(app) -> None:
             title="Programs",
             subtitle="Domains, types, and event definitions.",
             primary_action=primary_button(
-                "Create Event",
-                href="#",
-                data_bs_toggle="offcanvas",
-                data_bs_target="#form-drawer",
-                hx_get=ctx.url_for("/church-data/programs/campaigns/new"),
-                hx_target="#form-drawer-body",
-                hx_swap="innerHTML",
+                "Create Event", href="#", data_bs_toggle="offcanvas",
+                data_bs_target="#form-drawer", hx_get=ctx.url_for("/church-data/programs/campaigns/new"),
+                hx_target="#form-drawer-body", hx_swap="innerHTML",
             ),
             content=body,
         )
 
+    @app.get("/church-data/programs/analytics/retreat")
+    async def retreat_analytics_page(request: Request, campaign_id: str = "", event_id: str = "", metric: str = "attendance", include_pending: bool = False):
+        ctx = active_scope_context(request, build_context(request))
+        return await _event_matrix_page(request, ctx, mode="retreat", campaign_id=campaign_id, event_id=event_id, metric=metric, include_pending=include_pending)
+
+    @app.get("/church-data/programs/analytics/crusade")
+    async def crusade_analytics_page(request: Request, campaign_id: str = "", event_id: str = "", metric: str = "attendance", include_pending: bool = False):
+        ctx = active_scope_context(request, build_context(request))
+        return await _event_matrix_page(request, ctx, mode="crusade", campaign_id=campaign_id, event_id=event_id, metric=metric, include_pending=include_pending)
     @app.get("/church-data/programs/content")
     async def programs_content(
         request: Request,

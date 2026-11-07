@@ -928,6 +928,29 @@ async def _campaign_activity_public(request, ctx, campaign_id: str) -> dict[str,
     }
 
 
+async def _program_occurrences_public(
+    request, ctx, *, domain: str | None = None, program_type: str | None = None,
+    program_level: str | None = None, event_id: str | None = None,
+    campaign_id: str | None = None,
+    date_from: str | None = None, date_to: str | None = None,
+    include_pending: bool = False,
+) -> dict[str, Any]:
+    if await ProgramService.use_mock(request):
+        return {"scope_path": ctx.current_scope_path, "include_pending": include_pending, "occurrences": []}
+    scope_path = await ProgramService.effective_scope_path(request, ctx)
+    client = async_client(get_api_client())
+    access_token = AuthService.get_access_token(request)
+    return await request_cached(
+        request,
+        ("programs", "occurrences", scope_path, domain, program_type, program_level, event_id, campaign_id, date_from, date_to, include_pending),
+        lambda: client.get_program_occurrences(
+            access_token, scope_path=scope_path, domain=domain, program_type=program_type,
+            program_level=program_level, event_id=event_id, campaign_id=campaign_id, date_from=date_from,
+            date_to=date_to, include_pending=include_pending,
+        ),
+    )
+
+
 ProgramService.list_events = staticmethod(_list_program_events_public)
 ProgramService.list_campaigns = staticmethod(_list_program_campaigns_public)
 ProgramService.list_assignments = staticmethod(ProgramService.list_event_assignments)
@@ -935,6 +958,7 @@ ProgramService.create_assignment = staticmethod(ProgramService.create_event_assi
 ProgramService.approve_assignment = staticmethod(ProgramService.approve_event_assignment)
 ProgramService.reject_assignment = staticmethod(ProgramService.reject_event_assignment)
 ProgramService.campaign_activity = staticmethod(_campaign_activity_public)
+ProgramService.occurrences = staticmethod(_program_occurrences_public)
 ProgramService._mock_campaigns = staticmethod(ProgramService._mock_events)
 
 dual_mode_class(ProgramService)

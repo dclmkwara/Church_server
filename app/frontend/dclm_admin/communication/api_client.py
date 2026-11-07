@@ -583,6 +583,9 @@ class APIClient:
     async def get_sunday_worship_dashboard_panels(self, access_token: str, **params) -> dict[str, Any]:
         return await self._backend_client.get_sunday_worship_dashboard_panels(access_token, **params)
 
+    async def get_program_occurrences(self, access_token: str, **params) -> dict[str, Any]:
+        return await self._backend_client.get_program_occurrences(access_token, **params)
+
     async def get_expected_population(self, access_token: str, *, as_of: str | None = None, include_history: bool = False) -> dict[str, Any]:
         return await self._backend_client.get_expected_population(
             access_token, as_of=as_of, include_history=include_history,
