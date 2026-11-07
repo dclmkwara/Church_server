@@ -176,8 +176,17 @@ class BackendClient:
         request_headers = dict(headers or {})
         if access_token:
             request_headers["Authorization"] = f"Bearer {access_token}"
+        try:
+            from app.core.dashboard_perf import current_trace
+            trace = current_trace()
+            if trace is not None:
+                request_headers.setdefault("X-DCLM-Request-ID", trace.request_id)
+        except Exception:
+            pass
 
         url = self.build_url(path, api_path=api_path)
+        started = __import__("time").perf_counter()
+        response = None
         try:
             response = await _get_async_http_client(self.config).request(
                 method=method.upper(),
@@ -198,6 +207,13 @@ class BackendClient:
             raise BackendClientError(_format_http_error(exc), status_code=exc.response.status_code) from exc
         except httpx.HTTPError as exc:
             raise BackendClientError(_format_network_error(exc)) from exc
+        finally:
+            try:
+                from app.core.dashboard_perf import record_backend_call
+                record_backend_call(f"{method.upper()} {path}", (__import__("time").perf_counter() - started) * 1000,
+                                    getattr(response, "status_code", None))
+            except Exception:
+                pass
 
         content_type = response.headers.get("content-type", "")
         if "application/json" in content_type:

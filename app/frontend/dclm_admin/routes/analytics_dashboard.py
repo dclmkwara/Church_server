@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import date, timedelta
 from html import escape
 from typing import Any
@@ -17,6 +18,7 @@ from ..communication.dashboard_service import DashboardService
 from ..communication.active_scope import active_scope_context, scope_link
 from ..communication.church_data_service import ChurchDataService
 from ..backend import BackendClientError
+from app.core import dashboard_perf
 
 
 def _integer(value: Any) -> int:
@@ -321,6 +323,8 @@ def _attention_panel(
 
 
 async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
+    trace, trace_token = dashboard_perf.start_trace()
+    render_started = time.perf_counter()
     try:
         ctx = active_scope_context(request, ctx)
     except Exception as exc:
@@ -328,11 +332,13 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
 
         if not isinstance(exc, HTTPException):
             raise
-        return Div(
+        result = Div(
             Link(rel="stylesheet", href="/assets/css/analytics-dashboard.css?v=6"),
             Div(P(f"Scope request refused ({exc.status_code})", cls="analytics-error-title"), P(str(exc.detail), cls="analytics-error-message"), id="analytics-dashboard-error", role="alert", cls="analytics-error panel"),
             id="analytics-dashboard-body", cls="prototype-dashboard",
         )
+        dashboard_perf.finish_trace(trace, trace_token, render_ms=(time.perf_counter() - render_started) * 1000, request=request)
+        return result
     DashboardService.configure_bootstrap_sections(request, ("summary", "worker_analytics", "attendance_summary"))
     scope_path = await DashboardService.scope_path(request, ctx)
     scope_label = ctx.current_scope_label
@@ -357,6 +363,7 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
         except Exception:
             return []
 
+    phase_started = time.perf_counter()
     series, payload, queue = await asyncio.gather(
         DashboardService.sunday_worship_series(
             request, ctx, weeks=data_weeks, scope_path=scope_path, latest_date=latest.isoformat(),
@@ -364,13 +371,16 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
         DashboardService.bootstrap_payload(request, ctx),
         load_review_queue(),
     )
+    dashboard_perf.timed_phase(trace, "series_bootstrap_review_queue_concurrent", phase_started)
     if isinstance(series, dict) and series.get("error"):
         message = str(series.get("error") or "The dashboard data service refused the request.")
-        return Div(
+        result = Div(
             Link(rel="stylesheet", href="/assets/css/analytics-dashboard.css?v=6"),
             Div(P("Dashboard data could not be loaded", cls="analytics-error-title"), P(message, cls="analytics-error-message"), id="analytics-dashboard-error", role="alert", cls="analytics-error panel"),
             id="analytics-dashboard-body", cls="prototype-dashboard",
         )
+        dashboard_perf.finish_trace(trace, trace_token, render_ms=(time.perf_counter() - render_started) * 1000, request=request)
+        return result
     history = series.get("scope") if isinstance(series.get("scope"), list) else []
     history = history[-data_weeks:]
     current = history[-1] if history else {}
@@ -379,10 +389,12 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
     children = [row for row in children if row.get("path")]
     child_reports = [{"overview": (row.get("history") or [{}])[-1]} for row in children]
 
+    phase_started = time.perf_counter()
     worker_summary, attendance_summary = await asyncio.gather(
         DashboardService.worker_mix(request, ctx),
         DashboardService.attendance_summary(request, ctx),
     )
+    dashboard_perf.timed_phase(trace, "worker_and_attendance_concurrent", phase_started)
     queue = sorted(queue, key=lambda row: -float(row.get("age_hours") or 0))
 
     trend_points = []
@@ -418,7 +430,7 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
         action="/dashboard", method="get", cls="analytics-toolbar", id="analytics-dashboard-filters",
     )
     # The filter form submits the current jurisdiction path; scope authorization remains enforced by active_scope_context.
-    return Div(
+    result = Div(
         Link(rel="stylesheet", href="/assets/css/analytics-dashboard.css?v=6"),
         Div(
             filters,
@@ -441,3 +453,5 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
         ),
         id="analytics-dashboard-body",
     )
+    dashboard_perf.finish_trace(trace, trace_token, render_ms=(time.perf_counter() - render_started) * 1000, request=request)
+    return result

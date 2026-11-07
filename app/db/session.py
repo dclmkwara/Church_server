@@ -3,6 +3,7 @@ Database session management with async SQLAlchemy.
 """
 import logging
 import ssl
+import time
 from typing import AsyncGenerator
 from urllib.parse import quote
 
@@ -90,6 +91,30 @@ engine = create_async_engine(
         **({"statement_cache_size": 0} if _uses_pooler else {}),
     },
 )
+
+
+@event.listens_for(engine.sync_engine, "before_cursor_execute")
+def _dashboard_query_timer_start(conn, cursor, statement, parameters, context, executemany) -> None:
+    # Do not retain SQL or pay timing overhead outside the explicitly enabled
+    # dashboard trace. SQL text is recorded only for these development timings.
+    try:
+        from app.core.dashboard_perf import current_trace
+        if current_trace() is not None:
+            context._dclm_dashboard_query_started = time.perf_counter()
+    except Exception:
+        return
+
+
+@event.listens_for(engine.sync_engine, "after_cursor_execute")
+def _dashboard_query_timer_finish(conn, cursor, statement, parameters, context, executemany) -> None:
+    started = getattr(context, "_dclm_dashboard_query_started", None)
+    if started is None:
+        return
+    try:
+        from app.core.dashboard_perf import record_database_query
+        record_database_query(statement, (time.perf_counter() - started) * 1000)
+    finally:
+        context._dclm_dashboard_query_started = None
 
 # Session factory
 AsyncSessionLocal = async_sessionmaker(

@@ -92,6 +92,25 @@ async def clear_request_scope_context(request, call_next):
     finally:
         reset_scope_context(context_token)
 
+
+@app.middleware("http")
+async def trace_dashboard_api_request(request, call_next):
+    """Collect per-query details for dashboard API calls across process hops."""
+    request_id = request.headers.get("x-dclm-request-id")
+    if not request_id or not request.url.path.startswith(settings.API_V1_PREFIX):
+        return await call_next(request)
+    from app.core import dashboard_perf
+
+    trace, token = dashboard_perf.begin_correlated_api_trace(request_id)
+    if trace is None:
+        return await call_next(request)
+    started = __import__("time").perf_counter()
+    try:
+        response = await call_next(request)
+        return response
+    finally:
+        dashboard_perf.finish_trace(trace, token, render_ms=(__import__("time").perf_counter() - started) * 1000)
+
 # ── CORS ───────────────────────────────────────────────────────────────────────
 raw_origins = settings.BACKEND_CORS_ORIGINS
 if raw_origins:
@@ -116,7 +135,7 @@ app.add_middleware(
     # Never send credentials with a wildcard origin — browsers reject it anyway
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
+    allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-DCLM-Request-ID"],
 )
 
 # ── Routers ────────────────────────────────────────────────────────────────────

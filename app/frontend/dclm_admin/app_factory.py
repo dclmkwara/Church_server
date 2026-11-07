@@ -30,11 +30,13 @@ from .routes.reports import register_report_routes
 from .routes.system import register_system_routes
 from .routes.workflows import register_workflow_routes
 from .theme import DCLM_THEME, setup_theme_defaults
+from app.core.dashboard_perf import measure_dashboard_response
 
 
 install_async_render_resolution()
 
 app = FastHTML()
+app.add_middleware(BaseHTTPMiddleware, dispatch=measure_dashboard_response)
 add_bootstrap(app, theme=DCLM_THEME, mode="light", font_family="Inter", font_weights=[400, 500, 600, 700], include_favicon=True, favicon_url="/favicon.png", include_modern_toast=True)
 setup_theme_defaults()
 mount_assets(app, str(Path(__file__).resolve().parent / "assets"), url_path="/assets")
