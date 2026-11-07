@@ -577,6 +577,20 @@ class APIClient:
             latest_date=latest_date,
         )
 
+    async def get_expected_population(self, access_token: str, *, as_of: str | None = None, include_history: bool = False) -> dict[str, Any]:
+        return await self._backend_client.get_expected_population(
+            access_token, as_of=as_of, include_history=include_history,
+        )
+
+    async def create_expected_population_version(
+        self, access_token: str, *, location_id: str, expected_value: int,
+        effective_from: str, note: str = "",
+    ) -> dict[str, Any]:
+        return await self._backend_client.create_expected_population_version(
+            access_token, location_id=location_id, expected_value=expected_value,
+            effective_from=effective_from, note=note,
+        )
+
     async def get_dashboard_member_analytics(
         self,
         access_token: str,

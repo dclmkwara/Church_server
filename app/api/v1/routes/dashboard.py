@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy import and_, cast, func, select, Integer, DateTime, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,6 +16,8 @@ from app.db.filters import scope_filter as _scope_filter
 from app.models.core import _LTREE
 from app.models.attendance import WorkerAttendance, WorkerAttendanceSubmission
 from app.models.counts import Count
+from app.models.expected_population import LocationExpectedPopulation
+from app.models.audit import AuditLog
 from app.models.location import Group, Location, Region, State
 from app.models.offerings import Offering
 from app.models.programs import ProgramEvent
@@ -26,6 +29,20 @@ from app.services.analytics.sunday_worship import SundayWorshipAnalytics
 _DASHBOARD_CACHE_TTL = 20.0
 
 router = APIRouter()
+
+
+class ExpectedPopulationVersionCreate(BaseModel):
+    location_id: UUID
+    expected_value: int = Field(ge=0, le=10_000_000)
+    effective_from: date
+    note: str | None = Field(default=None, max_length=2000)
+
+
+def _is_state_overseer(current_user: User) -> bool:
+    return (
+        deps.highest_role_score(current_user) == 5
+        and any(role.role_name == "State Overseer" and role.score_value == 5 for role in (current_user.roles or []))
+    )
 
 DEFAULT_BOOTSTRAP_SECTIONS = (
     'summary',
@@ -415,6 +432,124 @@ async def get_sunday_worship_series(
     return await SundayWorshipAnalytics.series(
         db, effective_scope, occurrence_dates=occurrence_dates, include_pending=include_pending,
     )
+
+
+@router.get(
+    "/expected-population",
+    dependencies=[Depends(deps.PermissionChecker("statistics:read"))],
+)
+async def list_expected_population(
+    as_of: date | None = Query(None),
+    include_history: bool = Query(False),
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+) -> dict[str, Any]:
+    """Return scoped estimates; report calculations resolve the version effective on their date."""
+    effective_scope = deps.effective_scope_path(current_user)
+    date_limit = as_of or date.today()
+    estimate_join = LocationExpectedPopulation.location_id == Location.location_id
+    if not include_history:
+        estimate_join = and_(estimate_join, LocationExpectedPopulation.effective_from <= date_limit)
+    result = await db.execute(
+        select(Location, LocationExpectedPopulation, User.name)
+        .outerjoin(LocationExpectedPopulation, estimate_join)
+        .outerjoin(User, User.user_id == LocationExpectedPopulation.set_by_id)
+        .where(_scope_filter(Location.path, effective_scope))
+        .order_by(
+            Location.location_name,
+            LocationExpectedPopulation.effective_from.desc().nullslast(),
+            LocationExpectedPopulation.created_at.desc().nullslast(),
+        )
+    )
+    grouped: dict[str, dict[str, Any]] = {}
+    for location, version, set_by_name in result.all():
+        location_id = str(location.location_id)
+        item = grouped.setdefault(location_id, {
+            "location_id": location_id,
+            "location_name": location.location_name,
+            "location_code": location.location_code,
+            "path": str(location.path),
+            "is_active": bool(location.is_active),
+            "expected_value": None,
+            "effective_from": None,
+            "history": [],
+        })
+        if version is None:
+            continue
+        encoded = {
+            "id": str(version.id),
+            "expected_value": int(version.expected_value),
+            "effective_from": version.effective_from.isoformat(),
+            "set_by_id": str(version.set_by_id),
+            "set_by": str(set_by_name or version.set_by_id),
+            "note": version.note or "",
+            "created_at": version.created_at.isoformat() if version.created_at else "",
+        }
+        if include_history:
+            item["history"].append(encoded)
+        if version.effective_from <= date_limit and item["effective_from"] is None:
+            item["expected_value"] = int(version.expected_value)
+            item["effective_from"] = version.effective_from.isoformat()
+    return {"as_of": date_limit.isoformat(), "locations": list(grouped.values())}
+
+
+@router.post(
+    "/expected-population",
+    dependencies=[Depends(deps.PermissionChecker("statistics:read"))],
+)
+async def create_expected_population_version(
+    payload: ExpectedPopulationVersionCreate,
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+) -> dict[str, Any]:
+    """Append a version; never overwrite a historical expectation."""
+    if not _is_state_overseer(current_user):
+        raise HTTPException(status_code=403, detail="Only the State Overseer can maintain expected Sunday attendance")
+    scope_path = deps.effective_scope_path(current_user)
+    if len([part for part in scope_path.split(".") if part]) != 3:
+        raise HTTPException(status_code=403, detail="Expected Sunday attendance can only be maintained at State scope")
+    location_result = await db.execute(
+        select(Location).where(
+            Location.location_id == str(payload.location_id),
+            _scope_filter(Location.path, scope_path),
+        )
+    )
+    location = location_result.scalar_one_or_none()
+    if location is None:
+        raise HTTPException(status_code=404, detail="Location not found in this State")
+    if not location.is_active:
+        raise HTTPException(status_code=409, detail="An estimate can only be set for an active location")
+    version = LocationExpectedPopulation(
+        location_id=location.location_id,
+        path=str(location.path),
+        expected_value=payload.expected_value,
+        effective_from=payload.effective_from,
+        set_by_id=current_user.user_id,
+        note=payload.note.strip() if payload.note else None,
+    )
+    audit = AuditLog(
+        user_id=current_user.user_id,
+        action="SET_LOCATION_EXPECTED_POPULATION",
+        resource_type="location_expected_population",
+        resource_id=str(location.location_id),
+        changes={
+            "expected_value": payload.expected_value,
+            "effective_from": payload.effective_from.isoformat(),
+            "note": payload.note or "",
+        },
+    )
+    db.add_all([version, audit])
+    await db.commit()
+    await db.refresh(version)
+    return {
+        "id": str(version.id),
+        "location_id": str(version.location_id),
+        "expected_value": int(version.expected_value),
+        "effective_from": version.effective_from.isoformat(),
+        "set_by_id": str(version.set_by_id),
+        "note": version.note or "",
+        "created_at": version.created_at.isoformat() if version.created_at else "",
+    }
 
 
 @router.get(

@@ -600,6 +600,42 @@ async def _attendance_stats(request: Request, ctx, *, oob: bool = False) -> Div:
     )
 
 
+async def _sunday_population_expectation_panel(request: Request, ctx) -> Div:
+    today = datetime.date.today()
+    latest = today - datetime.timedelta(days=(today.weekday() + 1) % 7)
+    result = await DashboardService.sunday_worship_series(
+        request, ctx, weeks=4, latest_date=latest.isoformat(),
+    )
+    if not isinstance(result, dict):
+        result = {"error": "Sunday population data is unavailable."}
+    history = result.get("scope") or [] if isinstance(result, dict) else []
+    current = history[-1] if history else {}
+    if result.get("error") or result.get("unavailable"):
+        explanation = result.get("error") or result.get("message") or "Sunday population data is unavailable."
+        return section_card("Sunday Worship population attendance", "Congregation population is shown separately from the worker roster below.", P(str(explanation), role="alert", cls="text-danger mb-0"))
+    percent = current.get("expected_population_percent")
+    if not current.get("locations_with_estimate"):
+        expected_label, expected_note = "No estimates yet", "The State Overseer has not entered expected Sunday attendance estimates in this scope."
+    else:
+        expected_label = "No eligible report" if percent is None else f"{float(percent):.1f}%"
+        expected_note = (
+            "No counted location report has both an estimate and a population count."
+            if percent is None else
+            f"Pooled over {int(current.get('expected_population_counted_locations') or 0)} counted locations with estimates; "
+            f"{int(current.get('expected_population_no_estimate_locations') or 0)} counted locations have no estimate."
+        )
+    return section_card(
+        "Sunday Worship population attendance",
+        f"Congregation population for {latest.isoformat()}, separate from worker attendance.",
+        Div(
+            stat_card("% of expected Sunday attendance", expected_label, expected_note, "graph-up", tone="primary"),
+            stat_card("Counted population", "No counted report" if current.get("total") is None else f"{int(current.get('total') or 0):,}", "Location-level reports counted for this Sunday", "people", tone="success"),
+            stat_card("Expected Sunday attendance", "No estimate" if current.get("expected_population_total") is None else f"{int(current.get('expected_population_total') or 0):,}", "Pooled estimate for locations with counted reports", "bullseye", tone="info"),
+            cls="counts-stat-grid",
+        ),
+    )
+
+
 async def _attendance_table(
     request: Request,
     ctx,
@@ -1306,11 +1342,12 @@ def register_church_data_routes(app) -> None:
         event_title: str = "",
     ):
         ctx = active_scope_context(request, build_context(request))
-        events, locations, stats_div, table_div = await asyncio.gather(
+        events, locations, stats_div, table_div, sunday_population_panel = await asyncio.gather(
             _scope_events(request, ctx),
             _scope_locations(request, ctx),
             _attendance_stats(request, ctx),
             _attendance_table(request, ctx, status=status, location=location, unit=unit, event_title=event_title),
+            _sunday_population_expectation_panel(request, ctx),
         )
         filter_form = Form(
             *hidden_context_inputs(ctx),
@@ -1360,13 +1397,16 @@ def register_church_data_routes(app) -> None:
             hx_trigger="change from:select",
             cls="admin-filter-grid",
         )
-        return section_card(
-            "Attendance overview",
-            "Attendance totals, filters, and records.",
-            source_intake_notice("Worker and leader attendance"),
-            stats_div,
-            filter_form,
-            table_div,
+        return Div(
+            sunday_population_panel,
+            section_card(
+                "Worker attendance overview",
+                "Worker roster attendance totals, filters, and records.",
+                source_intake_notice("Worker and leader attendance"),
+                stats_div,
+                filter_form,
+                table_div,
+            ),
         )
 
     @app.get("/church-data/attendance/list")

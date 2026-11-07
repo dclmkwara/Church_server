@@ -170,6 +170,10 @@ def _children_table(children: list[dict[str, Any]], rows: list[dict[str, Any]], 
         total = overview.get("total")
         counted = _integer(overview.get("n_counted"))
         average = round(_integer(total) / counted) if total is not None and counted else None
+        expected_population = overview.get("expected_population_total")
+        expected_pct = overview.get("expected_population_percent")
+        expected_note = f"{_integer(overview.get('expected_population_counted_locations'))} counted" if expected_population is not None else "No estimate for counted reports"
+        no_estimate = _integer(overview.get("expected_population_no_estimate_locations"))
         label = str(child.get("name") or child.get("label") or format_scope_display_id(path) or "Location")
         link = _scope_dashboard_link(ctx, path)
         hx_link = _scope_dashboard_link(ctx, path, fragment=True)
@@ -180,19 +184,21 @@ def _children_table(children: list[dict[str, Any]], rows: list[dict[str, Any]], 
             Td(Div(Div(cls="analytics-mini-track", style=f"--coverage:{100 * received / max(expected, 1):.2f}%"), Span(report_state, cls="analytics-muted"), cls="analytics-mini-coverage")),
             Td(latest, cls="text-end analytics-numeric"),
             Td("â€”" if average is None else _number(average), cls="text-end analytics-numeric"),
+            Td("â€”" if expected_population is None else f"{_number(expected_population)} expected", cls="text-end analytics-numeric", title=expected_note),
+            Td("â€”" if expected_pct is None else f"{float(expected_pct):.1f}%", cls="text-end analytics-numeric", title=f"{expected_note}; {no_estimate} locations without an estimate"),
             Td(f"{coverage['pending']} pending" if coverage["pending"] else "", cls="text-end analytics-muted"),
             cls="analytics-row",
         ))
     if not cells:
-        cells = [Tr(Td("No lower locations are available in this scope.", colspan="5", cls="analytics-muted"))]
+        cells = [Tr(Td("No lower locations are available in this scope.", colspan="7", cls="analytics-muted"))]
     return Div(
         Div(H2(f"{child_label}s in this scope", cls="analytics-panel-title"), P("Select a name to open its dashboard. Figures use approved Sunday reports.", cls="analytics-note"), cls="analytics-panel-head"),
-        Div(Table(Thead(Tr(Th(child_label), Th("Latest Sunday report"), Th("Counted population", cls="text-end"), Th("Average per location", cls="text-end"), Th("Review", cls="text-end"))), Tbody(*cells), cls="analytics-table"), cls="analytics-table-wrap"),
+        Div(Table(Thead(Tr(Th(child_label), Th("Latest Sunday report"), Th("Counted population", cls="text-end"), Th("Average per location", cls="text-end"), Th("Expected Sunday attendance", cls="text-end"), Th("% of expected", cls="text-end"), Th("Review", cls="text-end"))), Tbody(*cells), cls="analytics-table"), cls="analytics-table-wrap"),
         cls="panel analytics-table-panel",
     )
 
 
-def _location_history_table(history: list[dict[str, Any]], dates: list[date]) -> Any:
+def _location_history_table(history: list[dict[str, Any]], dates: list[date], location_id: str = "") -> Any:
     cells = []
     for when, report in zip(reversed(dates), reversed(history)):
         coverage = _coverage_values(report)
@@ -216,10 +222,12 @@ def _location_history_table(history: list[dict[str, Any]], dates: list[date]) ->
             population = "Returned; no counted result"
         else:
             population = "Not reported"
-        cells.append(Tr(Td(when.strftime("%d %b %Y").lstrip("0")), Td(state), Td(population, cls="text-end analytics-numeric")))
+        expected = (report.get("location_expected_values") or {}).get(location_id)
+        expected_pct = (100 * _integer(total) / expected) if total is not None and expected else None
+        cells.append(Tr(Td(when.strftime("%d %b %Y").lstrip("0")), Td(state), Td(population, cls="text-end analytics-numeric"), Td("No estimate" if expected is None else _number(expected), cls="text-end analytics-numeric"), Td("â€”" if expected_pct is None else f"{expected_pct:.1f}%", cls="text-end analytics-numeric")))
     return Div(
         Div(H2("Last 8 Sunday Worship records", cls="analytics-panel-title"), P("Each Sunday is shown separately. Not reported and an explicit zero are different states.", cls="analytics-note"), cls="analytics-panel-head"),
-        Div(Table(Thead(Tr(Th("Sunday"), Th("Report state"), Th("Population", cls="text-end"))), Tbody(*cells), cls="analytics-table"), cls="analytics-table-wrap"),
+        Div(Table(Thead(Tr(Th("Sunday"), Th("Report state"), Th("Population", cls="text-end"), Th("Expected Sunday attendance", cls="text-end"), Th("% of expected", cls="text-end"))), Tbody(*cells), cls="analytics-table"), cls="analytics-table-wrap"),
         cls="panel analytics-table-panel",
     )
 
@@ -449,6 +457,20 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
     ancestors = series.get("ancestors") if isinstance(series.get("ancestors"), list) else []
     named_scope = next((str(item.get("name")) for item in ancestors if item.get("path") == scope_path and item.get("name")), scope_label)
     worker_note = f"{active_workers} active Â· {awaiting_workers} awaiting approval Â· {suspended_workers} suspended Â· {other_workers} inactive/other Â· {total_workers} on register."
+    expected_percent = current.get("expected_population_percent")
+    expected_total = current.get("expected_population_total")
+    if not _integer(current.get("locations_with_estimate")):
+        expected_value, expected_note = "No estimates yet", "Expected Sunday attendance has not been entered for locations in this scope."
+    elif expected_percent is None:
+        expected_value, expected_note = "No eligible report", "No counted location report has both an estimate and an attendance count."
+    else:
+        expected_value = f"{float(expected_percent):.1f}%"
+        expected_note = (
+            f"Pooled: {_number(current.get('expected_population_counted_total'))} counted / "
+            f"{_number(expected_total)} expected across {current.get('expected_population_counted_locations', 0)} locations; "
+            f"{current.get('expected_population_no_estimate_locations', 0)} counted locations have no estimate."
+        )
+    can_manage_expected = level == "State" and ctx.level == 5 and ctx.profile.role_label == "State Overseer"
     dashboard_url = "/dashboard"
     filters = Form(
         Input(type="hidden", name="profile", value=ctx.profile.key),
@@ -467,10 +489,11 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
             filters,
             Main(
                 _scope_breadcrumb(ctx, ancestors, scope_path),
-                Div(P(f"{level.upper()}", cls="analytics-eyebrow"), H1(named_scope, cls="analytics-title"), P(f"Sunday Worship Â· week of {latest.strftime('%d %b %Y').lstrip('0')} Â· figures from current development records", cls="analytics-subtitle"), cls="analytics-heading"),
+                Div(P(f"{level.upper()}", cls="analytics-eyebrow"), H1(named_scope, cls="analytics-title"), P(f"Sunday Worship Â· week of {latest.strftime('%d %b %Y').lstrip('0')} Â· figures from current development records", cls="analytics-subtitle"), A("Manage expected Sunday attendance", href="/analytics/expected-population", cls="btn btn-outline-primary btn-sm admin-inline-btn") if can_manage_expected else None, cls="analytics-heading"),
                 _coverage_panel(current, latest, include_pending),
                 Div(
                     _metric("Latest Sunday population", population_value, f"{_integer(current.get('n_counted'))} locations counted Â· {_short_date(latest)}", "Adds up"),
+                    _metric("% of expected Sunday attendance", expected_value, expected_note, "Pooled"),
                     _metric(f"Average per reporting location Â· {weeks} weeks", "â€”" if avg is None else _number(avg), "Recomputed from reported weeks; missing reports are omitted.", "Recomputed"),
                     _metric("Active workers", _number(active_workers), worker_note, "Snapshot"),
                     _metric("Workersâ€™ meeting attendance rate", "Rate withheld" if expected_attendance else "No report", attendance_note, "Roster check"),
@@ -535,7 +558,9 @@ async def render_analytics_dashboard_panel(request: Request, ctx: Any, panel: st
     child_reports = [{"overview": (row.get("history") or [{}])[-1]} for row in children]
     current = history[-1] if history else {}
     if level == "Location":
-        children_panel = _location_history_table(history, dates)
+        location_nodes = series.get("location_nodes") or []
+        location_id = str(location_nodes[0].get("location_id") or "") if location_nodes else ""
+        children_panel = _location_history_table(history, dates, location_id)
     else:
         children_panel = _children_table(children, child_reports, level, ctx)
     points = []
@@ -554,5 +579,14 @@ async def render_analytics_dashboard_panel(request: Request, ctx: Any, panel: st
 def register_analytics_dashboard_panel_routes(app) -> None:
     @app.get("/dashboard/panels")
     async def analytics_dashboard_panels(request: Request):
+        trace, token = dashboard_perf.start_trace()
+        started = time.perf_counter()
         ctx = active_scope_context(request, build_context(request))
-        return await render_analytics_dashboard_panel(request, ctx, "all")
+        try:
+            return await render_analytics_dashboard_panel(request, ctx, "all")
+        finally:
+            dashboard_perf.finish_trace(
+                trace, token,
+                render_ms=(time.perf_counter() - started) * 1000,
+                request=request,
+            )

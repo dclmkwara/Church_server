@@ -4,15 +4,17 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta, timezone
+from types import SimpleNamespace
 from typing import Any, Iterable
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import String, and_, cast, func, literal, or_, select, union_all
+from sqlalchemy import Date, DateTime, Integer, String, and_, cast, func, literal, or_, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
 from app.db.filters import scope_filter, scope_or_ancestor_filter
 from app.models.counts import Count, CountReminderRecipient
+from app.models.expected_population import LocationExpectedPopulation
 from app.models.location import Group, Location, Region, State
 from app.models.programs import ProgramCampaign, ProgramEvent, ProgramType
 
@@ -93,6 +95,7 @@ def _build_overview(
     events: list[Any],
     count_rows: list[Any],
     include_pending: bool,
+    estimates_by_location: dict[str, list[Any]] | None = None,
 ) -> dict[str, Any]:
     """Build independent coverage states and counted values from loaded rows."""
     locations_by_id = {str(row.location_id): row for row in locations}
@@ -231,6 +234,56 @@ def _build_overview(
         key: value if has_counted_rows else None
         for key, value in values.items()
     }
+    estimates_by_location = estimates_by_location or {}
+    expected_by_location: dict[str, int] = {}
+    for location_id, versions in estimates_by_location.items():
+        eligible = [version for version in versions if version.effective_from <= occurrence_date]
+        if eligible:
+            version = max(eligible, key=lambda item: (item.effective_from, getattr(item, "created_at", None) or datetime.min.replace(tzinfo=timezone.utc)))
+            expected_by_location[location_id] = int(version.expected_value)
+    counted_location_ids = set(counted_units)
+    estimated_counted_locations = set()
+    expected_total = 0
+    expected_counted_population = 0
+    # Location-level reports can be paired directly with each location's
+    # estimate. Combined reports are comparable only when every covered
+    # location has an estimate; otherwise their aggregate cannot be split
+    # honestly across estimated and unestimated locations.
+    for location_id, reported_total in location_totals.items():
+        if location_id in expected_by_location:
+            estimated_counted_locations.add(location_id)
+            expected_total += expected_by_location[location_id]
+            expected_counted_population += reported_total
+    for event in combined_events:
+        event_id = str(event.id)
+        if not _within(str(event.path), scope_path):
+            continue
+        rows = rows_by_event.get(event_id, [])
+        covered = {
+            location_id for location_id in counted_units
+            if str(getattr(event_for_location.get(location_id), "id", "")) == event_id
+        }
+        if covered and covered.issubset(expected_by_location):
+            review = _report_review_state(rows)
+            if review == "approved" or (include_pending and review == "pending"):
+                estimated_counted_locations.update(covered)
+                expected_total += sum(expected_by_location[item] for item in covered)
+                expected_counted_population += _count_values(rows)["total"]
+    for report_scope in included_combined_count_scopes:
+        if not _within(report_scope, scope_path):
+            continue
+        rows = rows_by_scope.get(report_scope, [])
+        covered = {
+            location_id for location_id in counted_units
+            if count_scope_for_location.get(location_id) == report_scope
+        }
+        if covered and covered.issubset(expected_by_location):
+            review = _report_review_state(rows)
+            if review == "approved" or (include_pending and review == "pending"):
+                estimated_counted_locations.update(covered)
+                expected_total += sum(expected_by_location[item] for item in covered)
+                expected_counted_population += _count_values(rows)["total"]
+    expected_percent = round(expected_counted_population * 100 / expected_total, 1) if expected_total > 0 else None
     return {
         "program_domain": "weekly_programs",
         "program_type": _PROGRAM.key,
@@ -247,6 +300,13 @@ def _build_overview(
         "coverage": coverage,
         "unreported_location_ids": unreported_location_ids,
         "location_totals": location_totals,
+        "location_expected_values": expected_by_location,
+        "expected_population_total": expected_total if estimated_counted_locations else None,
+        "expected_population_counted_total": expected_counted_population if estimated_counted_locations else None,
+        "expected_population_counted_locations": len(estimated_counted_locations),
+        "expected_population_no_estimate_locations": len(counted_location_ids - set(expected_by_location)),
+        "locations_with_estimate": len(set(expected_by_location) & set(locations_by_id)),
+        "expected_population_percent": expected_percent,
         "additivity": "additive",
         "status_rule": "approved" if not include_pending else "approved+pending",
         "include_pending": include_pending,
@@ -407,6 +467,9 @@ class SundayWorshipAnalytics:
                 select(
                     child_model.path.label("path"), child_name.label("name"),
                     child_location_id.label("location_id"), literal("child").label("node_type"),
+                    literal(None, type_=Date).label("effective_from"),
+                    literal(None, type_=Integer).label("expected_value"),
+                    literal(None, type_=DateTime(timezone=True)).label("estimate_created_at"),
                 ).where(scope_filter(child_model.path, scope_path))
             )
         scope_parts = [part for part in scope_path.split(".") if part]
@@ -422,12 +485,38 @@ class SundayWorshipAnalytics:
                 select(
                     node_model.path.label("path"), name_column.label("name"),
                     node_location_id.label("location_id"), literal("ancestor").label("node_type"),
+                    literal(None, type_=Date).label("effective_from"),
+                    literal(None, type_=Integer).label("expected_value"),
+                    literal(None, type_=DateTime(timezone=True)).label("estimate_created_at"),
                 ).where(node_model.path == path)
             )
+        hierarchy_selects.append(
+            select(
+                LocationExpectedPopulation.path.label("path"),
+                Location.location_name.label("name"),
+                cast(LocationExpectedPopulation.location_id, String).label("location_id"),
+                literal("estimate").label("node_type"),
+                LocationExpectedPopulation.effective_from.label("effective_from"),
+                LocationExpectedPopulation.expected_value.label("expected_value"),
+                LocationExpectedPopulation.created_at.label("estimate_created_at"),
+            ).join(Location, Location.location_id == LocationExpectedPopulation.location_id)
+            .where(
+                scope_filter(LocationExpectedPopulation.path, scope_path),
+                LocationExpectedPopulation.effective_from <= last_date,
+            )
+        )
         hierarchy_result = await db.execute(union_all(*hierarchy_selects).order_by("path")) if hierarchy_selects else None
         hierarchy_rows = list(hierarchy_result.all()) if hierarchy_result is not None else []
         children = [row for row in hierarchy_rows if row.node_type == "child"]
         ancestors = [{"path": str(row.path), "name": str(row.name or "")} for row in hierarchy_rows if row.node_type == "ancestor"]
+        estimates_by_location: dict[str, list[Any]] = defaultdict(list)
+        for row in hierarchy_rows:
+            if row.node_type == "estimate":
+                estimates_by_location[str(row.location_id)].append(SimpleNamespace(
+                    effective_from=row.effective_from,
+                    expected_value=row.expected_value,
+                    created_at=row.estimate_created_at,
+                ))
 
         type_and_events = select(
             ProgramType.id.label("program_type_id"), ProgramEvent,
@@ -501,6 +590,7 @@ class SundayWorshipAnalytics:
                 scope_path=path, occurrence_date=when, now=now,
                 locations=active_locations, events=active_events,
                 count_rows=daily_counts, include_pending=include_pending,
+                estimates_by_location=estimates_by_location,
             )
 
         scope_history = [build(scope_path, when) for when in occurrence_dates]

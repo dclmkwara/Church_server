@@ -921,6 +921,18 @@ class BackendClient:
             params["latest_date"] = latest_date
         return await self._request("GET", "/dashboard/sunday-worship/series", access_token=access_token, params=params)
 
+    async def get_expected_population(self, access_token: str, *, as_of: str | None = None, include_history: bool = False) -> dict[str, Any]:
+        params: dict[str, Any] = {"include_history": include_history}
+        if as_of:
+            params["as_of"] = as_of
+        return await self._request("GET", "/dashboard/expected-population", access_token=access_token, params=params)
+
+    async def create_expected_population_version(self, access_token: str, *, location_id: str, expected_value: int, effective_from: str, note: str = "") -> dict[str, Any]:
+        return await self._request(
+            "POST", "/dashboard/expected-population", access_token=access_token,
+            json={"location_id": location_id, "expected_value": expected_value, "effective_from": effective_from, "note": note},
+        )
+
     async def get_dashboard_member_analytics(
         self,
         access_token: str,

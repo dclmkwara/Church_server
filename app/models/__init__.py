@@ -26,6 +26,7 @@ from app.models.approvals import TransferRequest, StatusChangeRequest, WorkerRem
 from app.models.public_intake import PublicContactSubmission, PublicPrayerSubmission
 from app.models.official_appointment import OfficialAppointment
 from app.models.location_profile import LocationProfile  # noqa
+from app.models.expected_population import LocationExpectedPopulation  # noqa
 from app.models.church_member import ChurchMember  # noqa
 from app.models.transfers import WorkerTransfer  # noqa
 from app.models.attendance import WorkerAbsenceNotice  # noqa

@@ -20,6 +20,7 @@ from .routes.auth import register_auth_routes
 from .routes.communication import register_communication_routes
 from .routes.church_data import register_church_data_routes
 from .routes.dashboard import register_dashboard_routes
+from .routes.expected_population import register_expected_population_routes
 from .routes.fellowship import register_fellowship_routes
 from .routes.inbox import register_inbox_routes
 from .routes.organization import register_organization_routes
@@ -315,6 +316,7 @@ async def notifications(request: Request):
 
 
 register_dashboard_routes(app)
+register_expected_population_routes(app)
 register_auth_routes(app)
 register_inbox_routes(app)
 register_people_routes(app)
