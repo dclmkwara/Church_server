@@ -13,6 +13,7 @@ from app.api.v1.routes.dashboard import (
     parse_expected_population_csv,
     preview_expected_population_bulk,
 )
+from app.frontend.dclm_admin.routes.expected_population import _expected_population_template_csv
 from app.models.audit import AuditLog
 from app.models.expected_population import LocationExpectedPopulation
 
@@ -68,6 +69,24 @@ def test_csv_parser_accepts_template_headers_and_optional_note():
         "line": 2, "location_code": "KW-001", "expected_attendance_raw": "125",
         "effective_from_raw": "2026-11-01", "note": "Revised estimate",
     }]
+
+
+def test_download_template_is_prefilled_and_keeps_blank_edit_fields():
+    csv_text = _expected_population_template_csv({"locations": [{
+        "path": "org.234.KW.EDR.DEC.D01", "location_code": "D01",
+        "location_name": "Sample Location", "expected_value": 135,
+    }, {
+        "path": "org.234.KW.EDR.DEC.D02", "location_code": "D02",
+        "location_name": "New Location", "expected_value": None,
+    }]})
+    rows, errors = parse_expected_population_csv(csv_text)
+    assert not errors
+    assert [row["location_code"] for row in rows] == [
+        "org.234.KW.EDR.DEC.D01", "org.234.KW.EDR.DEC.D02",
+    ]
+    assert "location_display_code,location_name" in csv_text
+    assert ",135,,\r\n" in csv_text
+    assert "D02,New Location,,,\r\n" in csv_text
 
 
 def test_unknown_codes_are_rejected_and_preview_writes_nothing():

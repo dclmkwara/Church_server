@@ -295,7 +295,8 @@ try:
 
     @app.exception_handler(500)
     async def custom_500_handler(request: Request, exc: Exception):
-        logger.error("Unhandled error: %s", exc, exc_info=True)
+        # Database and HTTP driver exceptions may contain connection details.
+        logger.error("Unhandled error (exception_type=%s, path=%s)", type(exc).__name__, request.url.path)
         if request.url.path.startswith(settings.API_V1_PREFIX) or request.url.path.startswith("/api"):
             return JSONResponse(status_code=500, content={"detail": "Internal server error"})
         return server_error_response(request, exc)
@@ -303,4 +304,4 @@ try:
     app.mount("/", frontend_app)
     logger.info("✅ Faststrap Admin Frontend successfully mounted at root /")
 except Exception as exc:
-    logger.error("Could not mount Faststrap frontend: %s", exc, exc_info=True)
+    logger.error("Could not mount Faststrap frontend (exception_type=%s)", type(exc).__name__)

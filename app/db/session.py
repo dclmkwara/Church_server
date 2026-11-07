@@ -249,5 +249,7 @@ async def test_connection() -> bool:
             result = await session.execute(text("SELECT 1"))
             return result.scalar() == 1
     except Exception as exc:
-        logger.error("Database connection failed: %s", exc)
+        # Driver exceptions can contain connection URLs. Keep the failure
+        # observable without ever writing credentials or URL details to logs.
+        logger.error("Database connection failed (exception_type=%s)", type(exc).__name__)
         return False

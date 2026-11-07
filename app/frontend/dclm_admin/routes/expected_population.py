@@ -1,6 +1,8 @@
 """State-only maintenance screen for versioned Sunday attendance estimates."""
 from __future__ import annotations
 
+import csv
+import io
 from datetime import date
 from html import escape
 
@@ -21,6 +23,23 @@ from ..components.ui import empty_state, page_intro, page_stack, section_card
 
 def _is_state_overseer(ctx) -> bool:
     return ctx.level == 5 and ctx.profile.role_label == "State Overseer"
+
+
+def _expected_population_template_csv(payload: dict) -> str:
+    """Build an editable State template using full paths to disambiguate codes."""
+    output = io.StringIO(newline="")
+    writer = csv.writer(output)
+    writer.writerow(("location_code", "location_display_code", "location_name", "expected_attendance", "effective_from", "note"))
+    for location in payload.get("locations", []):
+        writer.writerow((
+            location.get("path") or location.get("location_code") or "",
+            location.get("location_code") or "",
+            location.get("location_name") or "",
+            "" if location.get("expected_value") is None else location.get("expected_value"),
+            "",
+            "",
+        ))
+    return output.getvalue()
 
 
 def _estimate_rows(locations: list[dict]) -> list:
@@ -198,8 +217,16 @@ def register_expected_population_routes(app) -> None:
         ctx = active_scope_context(request, build_context(request))
         if not _is_state_overseer(ctx):
             return Div(P("Only the State Overseer can download the expected-attendance template.", role="alert", cls="text-danger"))
+        try:
+            client = async_client(get_api_client())
+            payload = await client.get_expected_population(
+                AuthService.get_access_token(request), include_history=False,
+            )
+            csv_text = _expected_population_template_csv(payload)
+        except BackendClientError as exc:
+            return Div(P(f"Template could not be loaded: {escape(str(exc))}", role="alert", cls="text-danger"))
         return PlainTextResponse(
-            "location_code,expected_attendance,effective_from,note\r\n",
+            csv_text,
             media_type="text/csv",
             headers={"Content-Disposition": 'attachment; filename="expected-sunday-attendance-template.csv"'},
         )

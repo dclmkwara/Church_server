@@ -7,7 +7,7 @@ Two modes:
 
 Examples:
   python scripts/db_connect_check.py
-  python scripts/db_connect_check.py --dsn "postgresql+asyncpg://user:pass@host:6543/postgres?sslmode=require"
+  python scripts/db_connect_check.py --dsn "postgresql+asyncpg://user:<redacted>@host:6543/postgres?sslmode=require"
 """
 from __future__ import annotations
 
@@ -74,7 +74,8 @@ async def _check(raw_url: str, label: str) -> None:
         finally:
             await conn.close()
     except Exception as e:
-        print(f"[{label}] FAIL: {type(e).__name__}: {e}")
+        # Driver exceptions can echo the DSN. Report only the exception class.
+        print(f"[{label}] FAIL: {type(e).__name__} (details redacted)")
 
 
 def main() -> int:
