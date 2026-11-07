@@ -12,6 +12,8 @@ Security improvements over the original:
 - Broad `except Exception` replaced with specific exception types.
 """
 import logging
+import os
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -147,18 +149,27 @@ async def login_access_token(
         401 — incorrect credentials or inactive / unapproved account.
     """
     # ── Rate limit: 5 attempts / 60 s per IP ──────────────────────────────────
+    auth_perf = os.getenv("DCLM_AUTH_PERF", "0").strip().lower() in {"1", "true", "yes", "on"}
+    auth_started = time.perf_counter()
+    phase_ms: dict[str, float] = {}
+    phase_started = time.perf_counter()
     client_ip = request.client.host if request.client else "unknown"
     await check_rate_limit(
         f"login:{client_ip}",
         max_requests=5,
         window_seconds=60,
     )
+    phase_ms["rate_limit"] = (time.perf_counter() - phase_started) * 1000
 
     # ── Authenticate ──────────────────────────────────────────────────────────
+    phase_started = time.perf_counter()
     await inject_auth_email(db, form_data.username)
+    phase_ms["login_rls_context"] = (time.perf_counter() - phase_started) * 1000
+    phase_started = time.perf_counter()
     user = await crud_user.authenticate(
         db, email=form_data.username, password=form_data.password
     )
+    phase_ms["user_lookup_and_bcrypt"] = (time.perf_counter() - phase_started) * 1000
     if not user:
         # Use 401 (not 400) — per RFC 6749 §5.2 "invalid_client"
         raise HTTPException(
@@ -189,6 +200,7 @@ async def login_access_token(
     # ── Build tokens ──────────────────────────────────────────────────────────
     score, role_name = _best_role(user)
     scope_path = security.create_admin_access_id(user_path=str(user.path), score=score)
+    phase_started = time.perf_counter()
     await inject_auth_user(db, str(user.user_id))
     nation_paths = await deps.resolve_continental_scope(db, user)
     await inject_scope(
@@ -199,11 +211,26 @@ async def login_access_token(
         user_id=str(user.user_id),
         nation_paths=nation_paths,
     )
+    phase_ms["authenticated_scope_setup"] = (time.perf_counter() - phase_started) * 1000
 
+    phase_started = time.perf_counter()
     access_token = _build_access_token(user, score, role_name, scope_path)
     refresh_token_str, jti = security.create_refresh_token(user_id=str(user.user_id))
+    phase_ms["access_refresh_token_creation"] = (time.perf_counter() - phase_started) * 1000
 
+    phase_started = time.perf_counter()
     await _store_refresh_token(db, str(user.user_id), jti)
+    phase_ms["refresh_token_persist"] = (time.perf_counter() - phase_started) * 1000
+
+    if auth_perf:
+        phase_ms["user_query"] = float(getattr(user, "_login_lookup_ms", 0.0))
+        phase_ms["bcrypt_check"] = float(getattr(user, "_login_password_check_ms", 0.0))
+        logger.info(
+            "auth_login_perf request_id=%s phases_ms=%s total_ms=%.1f",
+            request.headers.get("x-request-id") or request.headers.get("x-dclm-request-id") or "none",
+            phase_ms,
+            (time.perf_counter() - auth_started) * 1000,
+        )
 
     logger.info("Login successful for user_id=%s scope=%s", user.user_id, scope_path)
 

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import json
-from time import time
+import logging
+import os
+from time import perf_counter, time
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -12,6 +14,8 @@ from starlette.responses import Response
 from ..backend import BackendClientError, get_backend_config, profile_key_for_score
 from .api_client import get_api_client
 from app.core.security import create_admin_access_id
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -96,12 +100,24 @@ class AuthService:
 
     @classmethod
     async def authenticate(cls, *, email: str, password: str) -> AuthIdentity:
+        perf_enabled = os.getenv("DCLM_AUTH_PERF", "0").strip().lower() in {"1", "true", "yes", "on"}
+        started = perf_counter()
         client = get_api_client()
+        phase_started = perf_counter()
         tokens = await client.login(email=email, password=password)
+        token_exchange_ms = (perf_counter() - phase_started) * 1000
         access_token = str(tokens.get("access_token") or "")
         if not access_token:
             raise ValueError("The backend did not return an access token.")
+        phase_started = perf_counter()
         user = await client.get_current_user(access_token)
+        profile_load_ms = (perf_counter() - phase_started) * 1000
+        if perf_enabled:
+            logger.info(
+                "auth_frontend_perf phases_ms=%s total_ms=%.1f",
+                {"token_exchange": round(token_exchange_ms, 1), "profile_and_permissions": round(profile_load_ms, 1)},
+                (perf_counter() - started) * 1000,
+            )
         return cls._identity_from_payload(tokens=tokens, user=user)
 
     @classmethod

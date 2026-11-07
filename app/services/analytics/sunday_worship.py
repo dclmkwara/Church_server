@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from typing import Any, Iterable
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import Date, DateTime, Integer, String, and_, cast, func, literal, or_, select, union_all
+from sqlalchemy import Boolean, Date, DateTime, Integer, String, and_, cast, func, literal, or_, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
@@ -435,31 +435,31 @@ class SundayWorshipAnalytics:
         now = now or datetime.now(timezone.utc)
         first_date, last_date = min(occurrence_dates), max(occurrence_dates)
 
+        depth = max(len([part for part in scope_path.split(".") if part]) - 1, 0)
+        child_model = {2: Region, 3: Group, 4: Location}.get(depth)
+        hierarchy_selects = []
+        # Carry the location roster in the same hierarchy/estimate round trip.
+        # The reporting calculator and child table share this request-scoped set.
         reminder_time = select(func.max(CountReminderRecipient.sent_at)).where(
             CountReminderRecipient.location_id == Location.location_id,
             CountReminderRecipient.occurrence_date == last_date,
         ).correlate(Location).scalar_subquery()
-        location_result = await db.execute(
-            select(Location, reminder_time.label("reminded_at")).where(
+        hierarchy_selects.append(
+            select(
+                Location.path.label("path"), Location.location_name.label("name"),
+                cast(Location.location_id, String).label("location_id"), literal("location").label("node_type"),
+                literal(None, type_=Date).label("effective_from"),
+                literal(None, type_=Integer).label("expected_value"),
+                literal(None, type_=DateTime(timezone=True)).label("estimate_created_at"),
+                Location.is_active.label("is_active"), Location.opened_on.label("opened_on"),
+                Location.closed_on.label("closed_on"), reminder_time.label("reminded_at"),
+            ).where(
                 scope_filter(Location.path, scope_path),
-                or_(
-                    Location.is_active.is_(True),
-                    and_(Location.is_active.is_(False), Location.closed_on.is_not(None), Location.closed_on > first_date),
-                ),
+                or_(Location.is_active.is_(True), and_(Location.is_active.is_(False), Location.closed_on.is_not(None), Location.closed_on > first_date)),
                 or_(Location.opened_on.is_(None), Location.opened_on <= last_date),
                 or_(Location.closed_on.is_(None), Location.closed_on > first_date),
-            ).order_by(Location.location_name)
+            )
         )
-        location_rows = list(location_result.all())
-        locations = [row[0] for row in location_rows]
-        reminded_at_by_location = {
-            str(row[0].location_id): row[1]
-            for row in location_rows if row[1] is not None
-        }
-
-        depth = max(len([part for part in scope_path.split(".") if part]) - 1, 0)
-        child_model = {2: Region, 3: Group, 4: Location}.get(depth)
-        hierarchy_selects = []
         if child_model:
             child_name = {Region: Region.region_name, Group: Group.group_name, Location: Location.location_name}[child_model]
             child_location_id = cast(Location.location_id, String) if child_model is Location else literal("", type_=String)
@@ -470,6 +470,8 @@ class SundayWorshipAnalytics:
                     literal(None, type_=Date).label("effective_from"),
                     literal(None, type_=Integer).label("expected_value"),
                     literal(None, type_=DateTime(timezone=True)).label("estimate_created_at"),
+                    literal(None, type_=Boolean).label("is_active"), literal(None, type_=Date).label("opened_on"),
+                    literal(None, type_=Date).label("closed_on"), literal(None, type_=DateTime(timezone=True)).label("reminded_at"),
                 ).where(scope_filter(child_model.path, scope_path))
             )
         scope_parts = [part for part in scope_path.split(".") if part]
@@ -488,6 +490,8 @@ class SundayWorshipAnalytics:
                     literal(None, type_=Date).label("effective_from"),
                     literal(None, type_=Integer).label("expected_value"),
                     literal(None, type_=DateTime(timezone=True)).label("estimate_created_at"),
+                    literal(None, type_=Boolean).label("is_active"), literal(None, type_=Date).label("opened_on"),
+                    literal(None, type_=Date).label("closed_on"), literal(None, type_=DateTime(timezone=True)).label("reminded_at"),
                 ).where(node_model.path == path)
             )
         hierarchy_selects.append(
@@ -499,6 +503,8 @@ class SundayWorshipAnalytics:
                 LocationExpectedPopulation.effective_from.label("effective_from"),
                 LocationExpectedPopulation.expected_value.label("expected_value"),
                 LocationExpectedPopulation.created_at.label("estimate_created_at"),
+                literal(None, type_=Boolean).label("is_active"), literal(None, type_=Date).label("opened_on"),
+                literal(None, type_=Date).label("closed_on"), literal(None, type_=DateTime(timezone=True)).label("reminded_at"),
             ).join(Location, Location.location_id == LocationExpectedPopulation.location_id)
             .where(
                 scope_filter(LocationExpectedPopulation.path, scope_path),
@@ -507,6 +513,14 @@ class SundayWorshipAnalytics:
         )
         hierarchy_result = await db.execute(union_all(*hierarchy_selects).order_by("path")) if hierarchy_selects else None
         hierarchy_rows = list(hierarchy_result.all()) if hierarchy_result is not None else []
+        location_rows = [row for row in hierarchy_rows if row.node_type == "location"]
+        locations = [SimpleNamespace(
+            location_id=row.location_id, path=row.path, location_name=row.name,
+            is_active=row.is_active, opened_on=row.opened_on, closed_on=row.closed_on,
+        ) for row in location_rows]
+        reminded_at_by_location = {
+            str(row.location_id): row.reminded_at for row in location_rows if row.reminded_at is not None
+        }
         children = [row for row in hierarchy_rows if row.node_type == "child"]
         ancestors = [{"path": str(row.path), "name": str(row.name or "")} for row in hierarchy_rows if row.node_type == "ancestor"]
         estimates_by_location: dict[str, list[Any]] = defaultdict(list)

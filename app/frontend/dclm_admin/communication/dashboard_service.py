@@ -864,6 +864,34 @@ class DashboardService:
         except BackendClientError as exc:
             return {"error": str(exc)}
 
+    @staticmethod
+    async def sunday_worship_dashboard(request, ctx, *, weeks: int, scope_path: str, latest_date: str) -> dict[str, Any]:
+        if not await DashboardService.live_enabled(request):
+            return {"error": "Sunday Worship reporting requires the live backend."}
+        try:
+            client = async_client(get_api_client())
+            return await client.get_sunday_worship_dashboard_payload(
+                AuthService.get_access_token(request), scope_path=scope_path, weeks=weeks,
+                include_pending=str((getattr(ctx, "query_extras", {}) or {}).get("include_pending") or "false").lower() == "true",
+                latest_date=latest_date,
+            )
+        except BackendClientError as exc:
+            return {"error": str(exc)}
+
+    @staticmethod
+    async def sunday_worship_dashboard_panels(request, ctx, *, weeks: int, scope_path: str, latest_date: str) -> dict[str, Any]:
+        if not await DashboardService.live_enabled(request):
+            return {"error": "Sunday Worship reporting requires the live backend."}
+        try:
+            client = async_client(get_api_client())
+            return await client.get_sunday_worship_dashboard_panels(
+                AuthService.get_access_token(request), scope_path=scope_path, weeks=weeks,
+                include_pending=str((getattr(ctx, "query_extras", {}) or {}).get("include_pending") or "false").lower() == "true",
+                latest_date=latest_date,
+            )
+        except BackendClientError as exc:
+            return {"error": str(exc)}
+
 async def _newcomer_analytics_public(request, ctx) -> dict[str, Any]:
     payload = await DashboardService._bootstrap_section(request, ctx, "newcomer_analytics")
     if payload:

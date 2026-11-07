@@ -1,16 +1,21 @@
 from __future__ import annotations
 
+import csv
+import io
+import re
 from datetime import date, datetime, timedelta
 from typing import Any, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from pydantic import BaseModel, Field
-from sqlalchemy import and_, cast, func, select, Integer, DateTime, true
+from sqlalchemy import String, and_, cast, func, or_, select, Integer, DateTime, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
 from app.core import analytics_cache
+from app.core.config import settings
 from app.db.filters import ltree_subpath as _ltree_subpath
 from app.db.filters import scope_filter as _scope_filter
 from app.models.core import _LTREE
@@ -36,6 +41,257 @@ class ExpectedPopulationVersionCreate(BaseModel):
     expected_value: int = Field(ge=0, le=10_000_000)
     effective_from: date
     note: str | None = Field(default=None, max_length=2000)
+
+
+class ExpectedPopulationBulkPreviewRequest(BaseModel):
+    csv_text: str = Field(min_length=1, max_length=1_000_000)
+
+
+class ExpectedPopulationBulkApplyRequest(BaseModel):
+    preview_token: str = Field(min_length=1, max_length=2_000_000)
+
+
+_EXPECTED_POPULATION_CSV_MAX_ROWS = 1000
+_EXPECTED_POPULATION_PREVIEW_TTL_SECONDS = 600
+_expected_population_preview_signer = URLSafeTimedSerializer(
+    settings.SECRET_KEY,
+    salt="expected-population-csv-preview-v1",
+)
+
+
+def _csv_header_key(value: Any) -> str:
+    return re.sub(r"[\s-]+", "_", str(value or "").strip().lower())
+
+
+def parse_expected_population_csv(csv_text: str) -> tuple[list[dict[str, Any]], list[str]]:
+    """Parse the documented CSV header and return row values with line numbers."""
+    try:
+        reader = csv.DictReader(io.StringIO(csv_text.lstrip("\ufeff")))
+    except csv.Error as exc:
+        return [], [f"Could not read CSV: {exc}"]
+    headers = {_csv_header_key(value): value for value in (reader.fieldnames or [])}
+    required = {"location_code", "expected_attendance", "effective_from"}
+    missing = sorted(required - set(headers))
+    if missing:
+        return [], [f"Missing required CSV column(s): {', '.join(missing)}"]
+    rows: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for line, raw in enumerate(reader, start=2):
+        if len(rows) >= _EXPECTED_POPULATION_CSV_MAX_ROWS:
+            errors.append(f"CSV may contain at most {_EXPECTED_POPULATION_CSV_MAX_ROWS} data rows.")
+            break
+        code = str(raw.get(headers["location_code"]) or "").strip()
+        attendance_raw = str(raw.get(headers["expected_attendance"]) or "").strip()
+        effective_raw = str(raw.get(headers["effective_from"]) or "").strip()
+        note_header = headers.get("note")
+        note = str(raw.get(note_header) or "").strip() if note_header else ""
+        rows.append({
+            "line": line,
+            "location_code": code,
+            "expected_attendance_raw": attendance_raw,
+            "effective_from_raw": effective_raw,
+            "note": note,
+        })
+    if not rows and not errors:
+        errors.append("CSV contains a header but no data rows.")
+    return rows, errors
+
+
+async def _build_expected_population_bulk_preview(
+    db: AsyncSession,
+    current_user: User,
+    csv_text: str,
+    *,
+    lock_locations: bool = False,
+) -> dict[str, Any]:
+    if not _is_state_overseer(current_user):
+        raise HTTPException(status_code=403, detail="Only the State Overseer can maintain expected Sunday attendance")
+    scope_path = deps.effective_scope_path(current_user)
+    if len([part for part in scope_path.split(".") if part]) != 3:
+        raise HTTPException(status_code=403, detail="Expected Sunday attendance can only be maintained at State scope")
+
+    parsed, parse_errors = parse_expected_population_csv(csv_text)
+    response_rows: list[dict[str, Any]] = []
+    blocking_errors = list(parse_errors)
+    if parse_errors and not parsed:
+        return {
+            "rows": response_rows,
+            "errors": blocking_errors,
+            "can_apply": False,
+            "summary": {"matched_locations": 0, "unknown_codes": 0, "invalid_rows": 0, "locations_changing": 0, "versions_to_add": 0},
+        }
+
+    occurrences: dict[str, int] = {}
+    for row in parsed:
+        key = row["location_code"].casefold()
+        occurrences[key] = occurrences.get(key, 0) + 1
+    codes = sorted({row["location_code"].casefold() for row in parsed if row["location_code"]})
+    location_rows = []
+    if codes:
+        location_stmt = select(Location).where(
+                _scope_filter(Location.path, scope_path),
+                or_(
+                    func.lower(Location.location_code).in_(codes),
+                    func.lower(cast(Location.path, String)).in_(codes),
+                ),
+            )
+        if lock_locations:
+            location_stmt = location_stmt.with_for_update()
+        result = await db.execute(location_stmt)
+        location_rows = list(result.scalars().all())
+    locations_by_code: dict[str, list[Location]] = {}
+    for location in location_rows:
+        locations_by_code.setdefault(str(location.location_code).casefold(), []).append(location)
+        locations_by_code.setdefault(str(location.path).casefold(), []).append(location)
+
+    valid_inputs: list[dict[str, Any]] = []
+    for row in parsed:
+        item = {
+            "line": row["line"],
+            "location_code": row["location_code"],
+            "location_name": "",
+            "expected_attendance": None,
+            "effective_from": row["effective_from_raw"],
+            "note": row["note"],
+            "old_value": None,
+            "old_version_id": None,
+            "new_value": None,
+            "status": "invalid",
+            "message": "",
+            "would_change": False,
+            "invalid_values": False,
+        }
+        row_errors: list[str] = []
+        invalid_values = False
+        if not row["location_code"]:
+            row_errors.append("Location code is required.")
+            invalid_values = True
+        if row["location_code"] and occurrences.get(row["location_code"].casefold(), 0) > 1:
+            row_errors.append("Location code appears more than once in this CSV.")
+            invalid_values = True
+        try:
+            attendance = int(row["expected_attendance_raw"])
+            if attendance < 0 or attendance > 10_000_000:
+                raise ValueError
+        except (TypeError, ValueError):
+            attendance = None
+            row_errors.append("Expected attendance must be a whole number from 0 to 10,000,000.")
+            invalid_values = True
+        try:
+            effective = date.fromisoformat(row["effective_from_raw"])
+        except (TypeError, ValueError):
+            effective = None
+            row_errors.append("Effective-from date must use YYYY-MM-DD.")
+            invalid_values = True
+        matches = locations_by_code.get(row["location_code"].casefold(), []) if row["location_code"] else []
+        matches = list({str(location.location_id): location for location in matches}.values())
+        if row["location_code"] and not matches:
+            item["status"] = "unknown"
+            row_errors.append("Location code is not in this State.")
+        elif len(matches) > 1:
+            row_errors.append("Location code is ambiguous in this State. Use the full location path shown in the hierarchy.")
+            invalid_values = True
+        elif matches and not matches[0].is_active:
+            row_errors.append("Location is inactive; estimates can only be added for active locations.")
+            invalid_values = True
+        if row_errors:
+            if item["status"] != "unknown":
+                item["status"] = "invalid"
+            item["invalid_values"] = invalid_values
+            item["message"] = " ".join(row_errors)
+            blocking_errors.extend([f"Row {row['line']}: {message}" for message in row_errors])
+        else:
+            location = matches[0]
+            item.update({
+                "location_id": str(location.location_id),
+                "location_name": str(location.location_name),
+                "path": str(location.path),
+                "expected_attendance": attendance,
+                "effective_from": effective.isoformat(),
+                "new_value": attendance,
+                "status": "matched",
+            })
+            valid_inputs.append({**item, "_effective_date": effective, "_path": str(location.path)})
+        response_rows.append(item)
+
+    history_by_location: dict[str, list[LocationExpectedPopulation]] = {}
+    if valid_inputs:
+        location_ids = [row["location_id"] for row in valid_inputs]
+        date_limit = max(row["_effective_date"] for row in valid_inputs)
+        history_result = await db.execute(
+            select(LocationExpectedPopulation)
+            .where(
+                LocationExpectedPopulation.location_id.in_(location_ids),
+                LocationExpectedPopulation.effective_from <= date_limit,
+            )
+            .order_by(
+                LocationExpectedPopulation.location_id,
+                LocationExpectedPopulation.effective_from.desc(),
+                LocationExpectedPopulation.created_at.desc(),
+            )
+        )
+        for version in history_result.scalars().all():
+            history_by_location.setdefault(str(version.location_id), []).append(version)
+
+    valid_by_line = {row["line"]: row for row in valid_inputs}
+    locations_changing = 0
+    for item in response_rows:
+        valid = valid_by_line.get(item["line"])
+        if valid is None:
+            continue
+        candidates = [
+            version for version in history_by_location.get(item["location_id"], [])
+            if version.effective_from <= valid["_effective_date"]
+        ]
+        previous = candidates[0] if candidates else None
+        old_value = int(previous.expected_value) if previous is not None else None
+        changed = old_value != item["new_value"]
+        item["old_value"] = old_value
+        item["old_version_id"] = str(previous.id) if previous is not None else None
+        item["would_change"] = changed
+        item["message"] = "Estimate will change." if changed else "Value is unchanged; a new version will still be added."
+        if changed:
+            locations_changing += 1
+        valid["old_value"] = old_value
+        valid["old_version_id"] = str(previous.id) if previous is not None else None
+        valid["would_change"] = changed
+
+    can_apply = bool(parsed) and not blocking_errors and len(valid_inputs) == len(parsed)
+    preview_token = None
+    if can_apply:
+        signed_rows = [
+            {
+                "line": row["line"],
+                "location_id": row["location_id"],
+                "location_code": row["location_code"],
+                "path": row["_path"],
+                "expected_attendance": row["expected_attendance"],
+                "effective_from": row["effective_from"],
+                "note": row["note"],
+                "old_version_id": row["old_version_id"],
+            }
+            for row in valid_inputs
+        ]
+        preview_token = _expected_population_preview_signer.dumps({
+            "actor_id": str(current_user.user_id),
+            "scope_path": scope_path,
+            "csv_text": csv_text,
+            "rows": signed_rows,
+        })
+    unknown_codes = sum(row["status"] == "unknown" for row in response_rows)
+    return {
+        "rows": response_rows,
+        "errors": blocking_errors,
+        "can_apply": can_apply,
+        "preview_token": preview_token,
+        "summary": {
+            "matched_locations": len(valid_inputs),
+            "unknown_codes": unknown_codes,
+            "invalid_rows": sum(bool(row.get("invalid_values")) for row in response_rows),
+            "locations_changing": locations_changing,
+            "versions_to_add": len(valid_inputs),
+        },
+    }
 
 
 def _is_state_overseer(current_user: User) -> bool:
@@ -343,10 +599,10 @@ async def get_dashboard_bootstrap(
         if 'user_statistics' in requested_sections:
             payload['user_statistics'] = await StatisticsService.get_user_statistics(db, effective_scope)
         if 'attendance_summary' in requested_sections:
-            payload['attendance_summary'] = await _get_attendance_summary(
-                db,
-                effective_scope,
-                location_id=effective_location_id,
+            payload['attendance_summary'] = (
+                payload.get('summary', {}).get('attendance_summary')
+                if isinstance(payload.get('summary'), dict)
+                else await _get_attendance_summary(db, effective_scope, location_id=effective_location_id)
             )
         if 'trend_series' in requested_sections:
             payload['trend_series'] = {
@@ -432,6 +688,81 @@ async def get_sunday_worship_series(
     return await SundayWorshipAnalytics.series(
         db, effective_scope, occurrence_dates=occurrence_dates, include_pending=include_pending,
     )
+
+
+@router.get(
+    "/analytics/sunday-worship/dashboard",
+    dependencies=[Depends(deps.PermissionChecker("statistics:read"))],
+)
+async def get_sunday_worship_dashboard_payload(
+    scope_path: Optional[str] = Query(None),
+    weeks: int = Query(4, ge=4, le=8),
+    latest_date: Optional[date] = Query(None),
+    include_pending: bool = Query(False),
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+) -> dict[str, Any]:
+    """Fetch the headline summary and dashboard series under one auth/session."""
+    effective_scope = _effective_scope(current_user, scope_path)
+    latest = latest_date or (date.today() - timedelta(days=(date.today().weekday() + 1) % 7))
+    if latest.weekday() != 6:
+        raise HTTPException(status_code=422, detail="latest_date must be a Sunday")
+    occurrence_dates = [latest - timedelta(weeks=index) for index in reversed(range(weeks))]
+    series = await SundayWorshipAnalytics.series(
+        db, effective_scope, occurrence_dates=occurrence_dates, include_pending=include_pending,
+    )
+    summary = await DashboardService.get_summary(db, effective_scope)
+    bootstrap = {
+        "scope_path": effective_scope,
+        "authorized_scope_path": deps.effective_scope_path(current_user),
+        "scope_kind": _scope_kind(effective_scope),
+        "population_period": "recent",
+        "summary": summary,
+        "worker_analytics": {
+            "total": summary["workers_total"],
+            "active": summary["active_workers"],
+            "pending_verification": summary["pending_workers"],
+            "suspended": summary["suspended_workers"],
+        },
+        "attendance_summary": summary.get("attendance_summary") or {},
+    }
+    return {"series": series, "bootstrap": bootstrap}
+
+
+@router.get(
+    "/analytics/sunday-worship/panels",
+    dependencies=[Depends(deps.PermissionChecker("statistics:read"))],
+)
+async def get_sunday_worship_dashboard_panels(
+    scope_path: Optional[str] = Query(None),
+    weeks: int = Query(4, ge=4, le=8),
+    latest_date: Optional[date] = Query(None),
+    include_pending: bool = Query(False),
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+) -> dict[str, Any]:
+    """Load the deferred trend/table and (when allowed) review queue together."""
+    effective_scope = _effective_scope(current_user, scope_path)
+    latest = latest_date or (date.today() - timedelta(days=(date.today().weekday() + 1) % 7))
+    if latest.weekday() != 6:
+        raise HTTPException(status_code=422, detail="latest_date must be a Sunday")
+    occurrence_dates = [latest - timedelta(weeks=index) for index in reversed(range(weeks))]
+    series = await SundayWorshipAnalytics.series(
+        db, effective_scope, occurrence_dates=occurrence_dates, include_pending=include_pending,
+    )
+    can_review = any(
+        getattr(permission, "permission", None) == "counts:review"
+        for role_row in (current_user.roles or [])
+        for permission in (role_row.permissions or [])
+    )
+    review_groups: list[dict[str, Any]] = []
+    if not can_review:
+        return {"series": series, "can_review": False, "review_groups": []}
+    if can_review:
+        from app.api.v1.routes.counts import list_count_review_groups
+
+        review_groups = await list_count_review_groups(db=db, current_user=current_user)
+    return {"series": series, "can_review": can_review, "review_groups": review_groups}
 
 
 @router.get(
@@ -550,6 +881,91 @@ async def create_expected_population_version(
         "note": version.note or "",
         "created_at": version.created_at.isoformat() if version.created_at else "",
     }
+
+
+@router.post(
+    "/expected-population/bulk-preview",
+    dependencies=[Depends(deps.PermissionChecker("statistics:read"))],
+)
+async def preview_expected_population_bulk(
+    payload: ExpectedPopulationBulkPreviewRequest,
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+) -> dict[str, Any]:
+    """Validate a CSV and return an expiring, signed preview without writing rows."""
+    return await _build_expected_population_bulk_preview(db, current_user, payload.csv_text)
+
+
+@router.post(
+    "/expected-population/bulk-apply",
+    dependencies=[Depends(deps.PermissionChecker("statistics:read"))],
+)
+async def apply_expected_population_bulk(
+    payload: ExpectedPopulationBulkApplyRequest,
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+) -> dict[str, Any]:
+    """Apply exactly the signed preview after rechecking scope and current versions."""
+    if not _is_state_overseer(current_user):
+        raise HTTPException(status_code=403, detail="Only the State Overseer can maintain expected Sunday attendance")
+    try:
+        signed = _expected_population_preview_signer.loads(
+            payload.preview_token,
+            max_age=_EXPECTED_POPULATION_PREVIEW_TTL_SECONDS,
+        )
+    except SignatureExpired as exc:
+        raise HTTPException(status_code=410, detail="This preview expired; upload or paste the CSV again.") from exc
+    except BadSignature as exc:
+        raise HTTPException(status_code=400, detail="Preview token is invalid; create a new preview.") from exc
+
+    scope_path = deps.effective_scope_path(current_user)
+    if signed.get("actor_id") != str(current_user.user_id) or signed.get("scope_path") != scope_path:
+        raise HTTPException(status_code=403, detail="Preview belongs to a different user or State scope")
+    fresh = await _build_expected_population_bulk_preview(
+        db, current_user, str(signed.get("csv_text") or ""), lock_locations=True,
+    )
+    if not fresh.get("can_apply"):
+        raise HTTPException(status_code=409, detail="CSV validation changed; review a new preview before applying.")
+
+    expected = [
+        (row.get("line"), row.get("location_id"), row.get("path"), row.get("expected_attendance"), row.get("effective_from"), row.get("old_version_id"))
+        for row in signed.get("rows", [])
+    ]
+    current = [
+        (row.get("line"), row.get("location_id"), row.get("path"), row.get("expected_attendance"), row.get("effective_from"), row.get("old_version_id"))
+        for row in fresh.get("rows", [])
+    ]
+    if not expected or expected != current:
+        raise HTTPException(status_code=409, detail="An estimate changed after preview. Refresh the preview before applying.")
+
+    versions: list[LocationExpectedPopulation] = []
+    audits: list[AuditLog] = []
+    for row in fresh["rows"]:
+        version = LocationExpectedPopulation(
+            location_id=row["location_id"],
+            path=row["path"],
+            expected_value=int(row["expected_attendance"]),
+            effective_from=date.fromisoformat(row["effective_from"]),
+            set_by_id=current_user.user_id,
+            note=row.get("note") or None,
+        )
+        versions.append(version)
+        audits.append(AuditLog(
+            user_id=current_user.user_id,
+            action="BULK_SET_LOCATION_EXPECTED_POPULATION",
+            resource_type="location_expected_population",
+            resource_id=str(row["location_id"]),
+            changes={
+                "source": "csv",
+                "location_code": row["location_code"],
+                "expected_value": int(row["expected_attendance"]),
+                "effective_from": row["effective_from"],
+                "note": row.get("note") or "",
+            },
+        ))
+    db.add_all([*versions, *audits])
+    await db.commit()
+    return {"status": "applied", "versions_added": len(versions), "audit_entries": len(audits)}
 
 
 @router.get(

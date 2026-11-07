@@ -1,10 +1,10 @@
 """
 Dependencies for API routes — authentication, database access, and authorisation.
 
-Authorization is refreshed from the database on each request so role changes
-take effect immediately. Reserved enterprise roles retain their nation or
-continent scope behavior for future use; this application assigns pastoral
-roles only through score 5.
+Authorization is refreshed from the database on a short token-keyed cache
+window; account mutations invalidate snapshots immediately. Reserved
+enterprise roles retain their nation or continent scope behavior for future
+use; this application assigns pastoral roles only through score 5.
 """
 from typing import Optional
 
@@ -37,6 +37,10 @@ from app.core.auth_cache import (
     get_cached_user as _get_cached_user,
     cache_user as _cache_user,
     invalidate_user_cache,
+    cache_token_user as _cache_token_user,
+    get_token_cached_user as _get_token_cached_user,
+    token_user_load_lock as _token_user_load_lock,
+    release_token_user_load_lock as _release_token_user_load_lock,
 )
 
 
@@ -49,8 +53,8 @@ async def get_current_user(
     """
     Validate the bearer token, inject the RLS scope, and return the User.
 
-    User and role data are loaded fresh so permission changes take effect
-    across replicas without waiting for process-local cache expiration.
+    The current role and permission snapshot is cached by access-token digest
+    for at most 30 seconds; user-level mutations evict the snapshot immediately.
     """
     try:
         payload = security.verify_token(token)
@@ -73,10 +77,21 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # The verified JWT subject is the only row visible before the effective
-    # hierarchy scope is recomputed from current database roles.
-    await inject_auth_user(db, token_data.sub)
-    user = await crud_user.get(db, id=token_data.sub)
+    user = await _get_token_cached_user(db, token)
+    if user is None:
+        load_lock = await _token_user_load_lock(token)
+        try:
+            async with load_lock:
+                user = await _get_token_cached_user(db, token)
+                if user is None:
+                    # The verified JWT subject is the only row visible before
+                    # the effective hierarchy scope is recomputed from roles.
+                    await inject_auth_user(db, token_data.sub)
+                    user = await crud_user.get(db, id=token_data.sub)
+                    if user is not None:
+                        await _cache_token_user(token, user)
+        finally:
+            await _release_token_user_load_lock(token, load_lock)
     if not user or user.is_deleted or not user.is_active or user.approval_status != "approved":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -84,8 +99,8 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # JWT scope is informational only. Recompute from current roles and home
-    # path so role changes take effect on the next request.
+    # JWT scope is informational only. Scope is reconstructed from the
+    # current cached role snapshot, never trusted from token claims.
     await resolve_continental_scope(db, user)
 
     await inject_scope(

@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.filters import scope_filter as _scope_filter
 from app.models.approvals import StatusChangeRequest, TransferRequest, WorkerRemovalRequest
-from app.models.attendance import WorkerAttendance
+from app.models.attendance import WorkerAttendance, WorkerAttendanceSubmission
 from app.models.church_member import ChurchMember
 from app.models.counts import Count
 from app.models.programs import ProgramDomain, ProgramEvent, ProgramType
@@ -48,6 +48,15 @@ class DashboardService:
             uf.append(User.location_id == location_id)
             tf.append(TransferRequest.from_location_id == location_id)
 
+        attendance_filters = [_scope_filter(WorkerAttendance.path, scope_path), WorkerAttendance.is_deleted.is_(False)]
+        submission_filters = [
+            _scope_filter(WorkerAttendanceSubmission.program_scope_path, scope_path),
+            WorkerAttendanceSubmission.is_deleted.is_(False),
+        ]
+        if location_id:
+            attendance_filters.append(WorkerAttendance.location_id == location_id)
+            submission_filters.append(WorkerAttendanceSubmission.location_id == location_id)
+
         # Single round-trip consolidated query: executes all summary aggregates in 1 database trip.
         # Worker status totals are included here so the dashboard does not issue
         # a second independent worker aggregate for the same scope.
@@ -66,6 +75,12 @@ class DashboardService:
             select(func.count(TransferRequest.id)).where(and_(*tf)).scalar_subquery().label("pending_transfers"),
             select(func.count(StatusChangeRequest.id)).where(and_(*sf)).scalar_subquery().label("pending_status_changes"),
             select(func.count(WorkerRemovalRequest.id)).where(and_(*rmf)).scalar_subquery().label("pending_removals"),
+            select(func.coalesce(func.sum(cast(WorkerAttendance.status == "present", Integer)), 0)).where(and_(*attendance_filters)).scalar_subquery().label("attendance_present"),
+            select(func.coalesce(func.sum(cast(WorkerAttendance.status == "late", Integer)), 0)).where(and_(*attendance_filters)).scalar_subquery().label("attendance_late"),
+            select(func.coalesce(func.sum(cast(WorkerAttendance.status == "absent", Integer)), 0)).where(and_(*attendance_filters)).scalar_subquery().label("attendance_absent"),
+            select(func.coalesce(func.sum(cast(WorkerAttendance.status == "excused", Integer)), 0)).where(and_(*attendance_filters)).scalar_subquery().label("attendance_excused"),
+            select(func.coalesce(func.sum(WorkerAttendanceSubmission.expected_workers_count), 0)).where(and_(*submission_filters)).scalar_subquery().label("attendance_opportunities"),
+            select(func.coalesce(func.sum(WorkerAttendanceSubmission.present_count), 0)).where(and_(*submission_filters)).scalar_subquery().label("attendance_submitted_present"),
         )
         row = (await db.execute(stmt)).one()
         pending_items = (
@@ -75,6 +90,8 @@ class DashboardService:
             + int(row.pending_status_changes or 0)
             + int(row.pending_removals or 0)
         )
+        opportunities = int(row.attendance_opportunities or 0)
+        submitted_present = int(row.attendance_submitted_present or 0)
         return {
             "members_total": int(row.members_total or 0), "active_members": int(row.active_members or 0),
             "workers_total": int(row.workers_total or 0), "active_workers": int(row.active_workers or 0),
@@ -87,6 +104,16 @@ class DashboardService:
             "pending_items": pending_items,
             "newcomers_total": int(row.newcomers_total or 0), "converts_total": int(row.converts_total or 0),
             "latest_total": int(row.latest_total or 0), "locations_reporting": int(row.locations_reporting or 0),
+            "attendance_summary": {
+                "expected": opportunities,
+                "opportunities": opportunities,
+                "current_roster": int(row.workers_total or 0),
+                "present": int(row.attendance_present or 0),
+                "late": int(row.attendance_late or 0),
+                "absent": int(row.attendance_absent or 0),
+                "excused": int(row.attendance_excused or 0),
+                "rate": round(submitted_present * 100 / opportunities, 1) if opportunities else 0,
+            },
         }
 
     @staticmethod

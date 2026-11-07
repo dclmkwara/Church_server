@@ -135,13 +135,15 @@ def test_series_load_count_does_not_grow_with_weeks_or_direct_children():
         async def execute(self, _statement):
             self.calls += 1
             result = {
-                1: Result(rows=[(row, None) for row in locations]),
-                2: Result(rows=[
+                1: Result(rows=[
+                    SimpleNamespace(path=row.path, name=row.location_name, location_id=row.location_id, node_type="location", is_active=True, opened_on=None, closed_on=None, reminded_at=None)
+                    for row in locations
+                ] + [
                     SimpleNamespace(path=row.path, name=row.region_name, location_id="", node_type="child")
                     for row in regions
                 ] + [SimpleNamespace(path="org.234.kw", name="Kwara State", location_id="", node_type="ancestor")]),
+                2: Result(rows=[]),
                 3: Result(rows=[]),
-                4: Result(rows=[]),
             }[self.calls]
             return result
 
@@ -151,7 +153,7 @@ def test_series_load_count_does_not_grow_with_weeks_or_direct_children():
         session, "org.234.kw", occurrence_dates=dates,
     ))
 
-    assert session.calls == 4  # locations, hierarchy, type/event, counts
+    assert session.calls == 3  # combined location/hierarchy/estimate, type/event, counts
     assert len(result["scope"]) == len(dates)
     assert len(result["children"]) == 2
     assert all(len(child["history"]) == len(dates) for child in result["children"])

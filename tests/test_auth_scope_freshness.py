@@ -9,9 +9,11 @@ os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost/
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.api import deps
+from app.core.auth_cache import clear_user_cache, invalidate_user_cache
 
 
 def test_request_scope_is_recomputed_from_current_database_roles(monkeypatch):
+    clear_user_cache()
     injected_scopes = []
     context_scopes = []
     user = SimpleNamespace(
@@ -51,7 +53,49 @@ def test_request_scope_is_recomputed_from_current_database_roles(monkeypatch):
     assert context_scopes == [(3, ())]
 
 
+def test_token_permission_snapshot_is_reused_until_user_cache_invalidation(monkeypatch):
+    clear_user_cache()
+    user = SimpleNamespace(
+        user_id="user-cache-1", path="org.234.KW.ILR.ILE.003",
+        roles=[SimpleNamespace(score_value=3, permissions=[])],
+        is_deleted=False, is_active=True, approval_status="approved",
+    )
+    lookups = []
+    scopes = []
+
+    class MergeSession:
+        async def merge(self, cached, *, load):
+            return cached
+    monkeypatch.setattr(deps.security, "verify_token", lambda token: {"sub": "user-cache-1"})
+
+    async def fake_get(db, *, id):
+        lookups.append(id)
+        return user
+
+    async def fake_inject_auth_user(db, user_id):
+        return None
+
+    async def fake_inject_scope(db, scope_path, *, role_score, continent=None, user_id=None, nation_paths=()):
+        scopes.append(scope_path)
+
+    monkeypatch.setattr(deps.crud_user, "get", fake_get)
+    monkeypatch.setattr(deps, "inject_auth_user", fake_inject_auth_user)
+    monkeypatch.setattr(deps, "inject_scope", fake_inject_scope)
+    monkeypatch.setattr(deps, "set_scope_context", lambda score, paths=(): None)
+
+    first = asyncio.run(deps.get_current_user(db=MergeSession(), token="cache-token-1"))
+    second = asyncio.run(deps.get_current_user(db=MergeSession(), token="cache-token-1"))
+    assert first is user and second is user
+    assert lookups == ["user-cache-1"]
+    assert len(scopes) == 2
+
+    invalidate_user_cache("user-cache-1")
+    asyncio.run(deps.get_current_user(db=MergeSession(), token="cache-token-1"))
+    assert lookups == ["user-cache-1", "user-cache-1"]
+
+
 def test_request_rejects_unapproved_account(monkeypatch):
+    clear_user_cache()
     user = SimpleNamespace(
         user_id="user-1",
         path="org.234.KW.ILR.ILE.003",
@@ -81,6 +125,7 @@ def test_request_rejects_unapproved_account(monkeypatch):
 
 
 def test_request_rejects_refresh_token_as_access_token(monkeypatch):
+    clear_user_cache()
     monkeypatch.setattr(
         deps.security,
         "verify_token",

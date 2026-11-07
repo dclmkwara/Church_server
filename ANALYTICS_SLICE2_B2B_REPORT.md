@@ -1,5 +1,8 @@
 # Analytics Slice 2 and B2b Close-out Report
 
+> **Status update (7 November 2026):** This file records the earlier Slice 2/B2b handoff and is superseded for current commit, migration, performance, sign-in, screenshots, and verification results by [ANALYTICS_SLICE2_ACCEPTANCE_REPORT.md](ANALYTICS_SLICE2_ACCEPTANCE_REPORT.md). The B2b implementation is committed as `bc5ed15994bf608d4f28b6d161281990c7240c0b`; local Alembic proof and current remote catalog evidence are in [DEPLOY_MIGRATION_RUNBOOK.md](DEPLOY_MIGRATION_RUNBOOK.md). Do not use the older ?not committed? or empty-ledger statements below as current status.
+
+ 
 **Date:** 7 November 2026  
 **Scope:** Slice 2 correctness and performance checkpoint, plus B2b expected Sunday attendance. B3 and the deferred attendance/count slices were not started.
 

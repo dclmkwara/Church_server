@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, text, or_, and_
+from sqlalchemy.orm import aliased
 from pydantic import BaseModel, Field
 from zoneinfo import ZoneInfo
 
@@ -358,49 +359,44 @@ async def list_count_review_groups(
     """List pending count groups for the acceptor and one overdue escalation tier."""
     score = deps.highest_role_score(current_user)
     scope_path = deps.effective_scope_path(current_user)
+    prior_count = aliased(Count)
     result = await db.execute(
-        select(Count).where(
-            scope_filter(Count.path, scope_path), Count.is_deleted.is_(False), Count.status == COUNT_PENDING
-        ).order_by(Count.created_at, Count.id)
-    )
-    pending = list(result.scalars().all())
-    grouped: dict[tuple, list[Count]] = {}
-    for row in pending:
-        grouped.setdefault(_count_group_key(row), []).append(row)
-    prior_ids = {row.supersedes_id for row in pending if row.supersedes_id is not None}
-    metadata_stmt = (
-        select(Count.location_id, Location.location_name, Location.path,
-               Count.program_type_id, ProgramType.name, Count.event_id, ProgramEvent.title,
-               ProgramEvent.campaign_id, ProgramCampaign.title,
-               Count.entered_by_id, User.name, Count.supersedes_id,
-               Count.rejection_reason, Count.rejected_at, Count.rejected_by_id)
+        select(
+            Count, Location.location_name, Location.path, ProgramType.name,
+            ProgramEvent.title, ProgramCampaign.title, User.name, prior_count,
+        ).select_from(Count)
         .outerjoin(Location, Location.location_id == Count.location_id)
         .outerjoin(ProgramType, ProgramType.id == Count.program_type_id)
         .outerjoin(ProgramEvent, ProgramEvent.id == Count.event_id)
         .outerjoin(ProgramCampaign, ProgramCampaign.id == ProgramEvent.campaign_id)
         .outerjoin(User, User.user_id == Count.entered_by_id)
-        .where(Count.id.in_([row.id for row in pending]))
+        .outerjoin(prior_count, prior_count.id == Count.supersedes_id)
+        .where(
+            scope_filter(Count.path, scope_path), Count.is_deleted.is_(False), Count.status == COUNT_PENDING
+        ).order_by(Count.created_at, Count.id)
     )
-    metadata_rows = (await db.execute(metadata_stmt)).all() if pending else []
-    prior_stmt = select(Count).where(Count.id.in_(prior_ids), Count.is_deleted.is_(False)) if prior_ids else None
-    prior_rows = (await db.execute(prior_stmt)).scalars().all() if prior_stmt is not None else []
+    review_rows = list(result.all())
+    pending = [row[0] for row in review_rows]
+    grouped: dict[tuple, list[Count]] = {}
+    for row in pending:
+        grouped.setdefault(_count_group_key(row), []).append(row)
     location_by_id = {}
     program_by_id = {}
     event_by_id = {}
     submitter_names = {}
     from types import SimpleNamespace
-    for row in metadata_rows:
-        (location_id, location_name, location_path, program_id, program_name,
-         event_id, event_title, campaign_id, campaign_title, submitter_id, submitter_name, *_rest) = row
-        if location_id and location_name:
-            location_by_id[str(location_id)] = SimpleNamespace(location_name=location_name, path=location_path)
-        if program_id and program_name:
-            program_by_id[program_id] = SimpleNamespace(name=program_name)
-        if event_id:
-            event_by_id[str(event_id)] = SimpleNamespace(title=event_title or campaign_title)
-        if submitter_id and submitter_name:
-            submitter_names[str(submitter_id)] = submitter_name
-    history_by_id = {str(row.id): row for row in prior_rows}
+    history_by_id = {}
+    for count_row, location_name, location_path, program_name, event_title, campaign_title, submitter_name, prior in review_rows:
+        if count_row.location_id and location_name:
+            location_by_id[str(count_row.location_id)] = SimpleNamespace(location_name=location_name, path=location_path)
+        if count_row.program_type_id is not None and program_name:
+            program_by_id[count_row.program_type_id] = SimpleNamespace(name=program_name)
+        if count_row.event_id:
+            event_by_id[str(count_row.event_id)] = SimpleNamespace(title=event_title or campaign_title)
+        if count_row.entered_by_id and submitter_name:
+            submitter_names[str(count_row.entered_by_id)] = submitter_name
+        if prior is not None and not prior.is_deleted:
+            history_by_id[str(prior.id)] = prior
     now = datetime.now(timezone.utc)
     payload = []
     for rows in grouped.values():

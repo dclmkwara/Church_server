@@ -921,6 +921,26 @@ class BackendClient:
             params["latest_date"] = latest_date
         return await self._request("GET", "/dashboard/sunday-worship/series", access_token=access_token, params=params)
 
+    async def get_sunday_worship_dashboard_payload(
+        self, access_token: str, *, scope_path: str, weeks: int,
+        include_pending: bool, latest_date: str,
+    ) -> dict[str, Any]:
+        params = {
+            "scope_path": scope_path, "weeks": weeks,
+            "include_pending": include_pending, "latest_date": latest_date,
+        }
+        return await self._request("GET", "/dashboard/analytics/sunday-worship/dashboard", access_token=access_token, params=params)
+
+    async def get_sunday_worship_dashboard_panels(
+        self, access_token: str, *, scope_path: str, weeks: int,
+        include_pending: bool, latest_date: str,
+    ) -> dict[str, Any]:
+        params = {
+            "scope_path": scope_path, "weeks": weeks,
+            "include_pending": include_pending, "latest_date": latest_date,
+        }
+        return await self._request("GET", "/dashboard/analytics/sunday-worship/panels", access_token=access_token, params=params)
+
     async def get_expected_population(self, access_token: str, *, as_of: str | None = None, include_history: bool = False) -> dict[str, Any]:
         params: dict[str, Any] = {"include_history": include_history}
         if as_of:
@@ -931,6 +951,18 @@ class BackendClient:
         return await self._request(
             "POST", "/dashboard/expected-population", access_token=access_token,
             json={"location_id": location_id, "expected_value": expected_value, "effective_from": effective_from, "note": note},
+        )
+
+    async def preview_expected_population_csv(self, access_token: str, csv_text: str) -> dict[str, Any]:
+        return await self._request(
+            "POST", "/dashboard/expected-population/bulk-preview", access_token=access_token,
+            json={"csv_text": csv_text},
+        )
+
+    async def apply_expected_population_csv(self, access_token: str, preview_token: str) -> dict[str, Any]:
+        return await self._request(
+            "POST", "/dashboard/expected-population/bulk-apply", access_token=access_token,
+            json={"preview_token": preview_token},
         )
 
     async def get_dashboard_member_analytics(

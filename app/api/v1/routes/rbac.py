@@ -12,6 +12,7 @@ from app.schemas.rbac import (
     RoleScoreCreate, RoleScoreUpdate, RoleScoreResponse
 )
 from app.models.user import Role as RoleModel, RoleScore, User
+from app.core.auth_cache import clear_user_cache
 
 router = APIRouter()
 
@@ -214,7 +215,9 @@ async def update_role(
         raise HTTPException(status_code=403, detail="Role permission changes require an approved governance workflow")
     if set(role_in.model_dump(exclude_unset=True)) - {"role_name"}:
         raise HTTPException(status_code=403, detail="Role definitions are fixed; permission changes require an approved governance workflow")
-    return await role.update_with_permissions(db, db_obj=db_role, obj_in=role_in)
+    updated = await role.update_with_permissions(db, db_obj=db_role, obj_in=role_in)
+    clear_user_cache()
+    return updated
 
 @router.delete(
     "/roles/{role_id}",
@@ -258,7 +261,9 @@ async def set_role_permissions(
         raise HTTPException(status_code=403, detail="This role is reserved or event-scoped and cannot be edited here")
     if db_role.score_value < 2 or db_role.score_value > 5:
         raise HTTPException(status_code=403, detail="This application only manages role definitions at levels 2 through 5")
-    return await role.update_with_permissions(db, db_obj=db_role, obj_in={"permission_ids": permission_ids})
+    updated = await role.update_with_permissions(db, db_obj=db_role, obj_in={"permission_ids": permission_ids})
+    clear_user_cache()
+    return updated
 
 @router.delete(
     "/roles/{role_id}/permissions/{permission_id}",
@@ -282,6 +287,7 @@ async def remove_role_permission(
         raise HTTPException(status_code=403, detail="System, worker, and reserved enterprise roles cannot be edited here")
     db_role.permissions = [p for p in db_role.permissions if p.id != permission_id]
     await db.commit()
+    clear_user_cache()
     role_with_permissions = await role.get_with_permissions(db, role_id)
     return role_with_permissions or db_role
 

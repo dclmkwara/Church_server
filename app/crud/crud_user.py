@@ -10,11 +10,12 @@ Production changes:
 - .dict() replaced with .model_dump() throughout (Pydantic v2 API).
 """
 from datetime import datetime, timezone
+import time
 from typing import Any, Dict, List, Optional, Union
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import joinedload, selectinload
 
 from app.crud.base import CRUDBase
 from app.models.user import Role, User, Worker
@@ -35,14 +36,12 @@ class CRUDUser(CRUDBase[User, UserCreate, UserUpdate]):
             select(User)
             .where(User.user_id == id)
             .options(
-                selectinload(User.roles).options(
-                    selectinload(Role.score),
-                    selectinload(Role.permissions),
-                )
+                joinedload(User.roles).joinedload(Role.score),
+                joinedload(User.roles).joinedload(Role.permissions),
             )
         )
         result = await db.execute(query)
-        return result.scalars().first()
+        return result.unique().scalars().first()
 
     async def create(self, db: AsyncSession, *, obj_in: UserCreate) -> User:
         """
@@ -167,9 +166,11 @@ class CRUDUser(CRUDBase[User, UserCreate, UserUpdate]):
         Authenticate a user by email and password.
 
         Loads roles + score only — NOT permissions. Permission loading is
-        deferred to PermissionChecker which uses the 60-second user cache.
+        deferred to PermissionChecker, where the authenticated request resolves
+        the current permission snapshot into the token-keyed 30-second cache.
         Removing the permissions join cuts ~10–20 ms from every login.
         """
+        lookup_started = time.perf_counter()
         result = await db.execute(
             select(User)
             .where(User.email == email)
@@ -182,11 +183,15 @@ class CRUDUser(CRUDBase[User, UserCreate, UserUpdate]):
                 )
             )
         )
+        lookup_ms = (time.perf_counter() - lookup_started) * 1000
         user = result.scalars().first()
         if not user:
             return None
+        password_started = time.perf_counter()
         if not verify_password(password, user.password):
             return None
+        user._login_lookup_ms = lookup_ms
+        user._login_password_check_ms = (time.perf_counter() - password_started) * 1000
         return user
 
     async def is_active(self, user: User) -> bool:

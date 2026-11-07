@@ -176,7 +176,29 @@ def _bootstrap_empty_database(sync_conn) -> bool:
         return False
 
     sync_conn.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS ltree")
-    Base.metadata.create_all(bind=sync_conn)
+    # The runtime LtreeType intentionally compiles as VARCHAR for asyncpg, but
+    # PostgreSQL cannot build a GiST index on that representation. Defer the
+    # expected-population path index until its path column has been converted
+    # to LTREE, matching the normal Alembic migration below.
+    deferred_ltree_indexes = []
+    expected_table = Base.metadata.tables.get("location_expected_population")
+    if expected_table is not None:
+        for index in tuple(expected_table.indexes):
+            if index.name == "ix_location_expected_population_path_gist":
+                expected_table.indexes.remove(index)
+                deferred_ltree_indexes.append(index)
+    try:
+        Base.metadata.create_all(bind=sync_conn)
+    finally:
+        if expected_table is not None:
+            expected_table.indexes.update(deferred_ltree_indexes)
+    if deferred_ltree_indexes:
+        sync_conn.exec_driver_sql(
+            "ALTER TABLE public.location_expected_population "
+            "ALTER COLUMN path TYPE LTREE USING path::ltree"
+        )
+        for index in deferred_ltree_indexes:
+            index.create(bind=sync_conn, checkfirst=True)
     _create_reporting_views(sync_conn)
     _create_performance_indexes(sync_conn)
 

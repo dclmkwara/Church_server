@@ -4,10 +4,10 @@ from __future__ import annotations
 from datetime import date
 from html import escape
 
-from fasthtml.common import A, Div, Form, H1, H2, Input, P, Table, Tbody, Td, Th, Thead, Tr
-from faststrap import Alert, Button
+from fasthtml.common import A, Div, Form, H1, H2, Input, P, Table, Tbody, Td, Textarea, Th, Thead, Tr
+from faststrap import Alert, Button, Input as FsInput
 from starlette.requests import Request
-from starlette.responses import RedirectResponse
+from starlette.responses import PlainTextResponse, RedirectResponse
 
 from ..auth_context import build_context
 from ..backend import BackendClientError
@@ -73,6 +73,50 @@ def _estimate_rows(locations: list[dict]) -> list:
     return rows
 
 
+def _bulk_preview_content(payload: dict) -> Div:
+    summary = payload.get("summary") or {}
+    rows = payload.get("rows") or []
+    preview_rows = [
+        Tr(
+            Td(str(row.get("line") or "")),
+            Td(str(row.get("path") or row.get("location_code") or "")),
+            Td(str(row.get("location_name") or "—")),
+            Td("No prior estimate" if row.get("old_value") is None else f"{int(row['old_value']):,}", cls="text-end"),
+            Td("—" if row.get("new_value") is None else f"{int(row['new_value']):,}", cls="text-end"),
+            Td(str(row.get("effective_from") or "—")),
+            Td(f"{row.get('status')}: {row.get('message') or ''}"),
+        )
+        for row in rows
+    ]
+    errors = payload.get("errors") or []
+    result = [Alert(
+        f"Matched {int(summary.get('matched_locations') or 0)} locations; "
+        f"{int(summary.get('unknown_codes') or 0)} unknown codes; "
+        f"{int(summary.get('invalid_rows') or 0)} invalid rows; "
+        f"{int(summary.get('locations_changing') or 0)} values changing; "
+        f"{int(summary.get('versions_to_add') or 0)} versions would be added.",
+        variant="info", role="status",
+    )]
+    if rows:
+        result.append(Table(
+            Thead(Tr(Th("CSV row"), Th("Location code / full path"), Th("Location"), Th("Old value", cls="text-end"), Th("New value", cls="text-end"), Th("Effective from"), Th("Preview result"))),
+            Tbody(*preview_rows), cls="table table-sm table-hover align-middle",
+        ))
+    if errors:
+        result.append(Alert(Div(*(P(str(error), cls="mb-1") for error in errors)), variant="danger", role="alert"))
+    if payload.get("can_apply") and payload.get("preview_token"):
+        result.append(Form(
+            Input(type="hidden", name="preview_token", value=payload["preview_token"]),
+            Button(f"Confirm and add {int(summary.get('versions_to_add') or 0)} versions", type="submit", variant="primary", size="sm"),
+            P("Each row adds a new dated version and an audit entry. No earlier version is replaced.", cls="small text-muted mt-2 mb-0"),
+            method="post", action="/analytics/expected-population/bulk-apply",
+            hx_post="/analytics/expected-population/bulk-apply",
+            hx_target="#expected-population-bulk-preview", hx_swap="innerHTML",
+            hx_confirm=f"Add {int(summary.get('versions_to_add') or 0)} new estimate versions?",
+        ))
+    return Div(*result)
+
+
 def register_expected_population_routes(app) -> None:
     @app.get("/analytics/expected-population")
     async def expected_population_page(request: Request):
@@ -99,6 +143,23 @@ def register_expected_population_routes(app) -> None:
                     page_intro("Expected Sunday attendance", "Set a dated estimate for each location. Saving always adds a version and preserves the earlier history.", scope_label=ctx.current_scope_label, scope_kind=ctx.current_scope_kind),
                     P("Estimates are used only for Sunday Worship. The percentage is pooled from counted location reports that have an estimate; missing reports are not treated as zero.", cls="text-muted"),
                     Alert("No estimates yet. Enter each location's expected Sunday attendance below.", variant="info", role="status") if estimate_count == 0 and locations else None,
+                    section_card(
+                        "Bulk upload expected attendance",
+                        "Paste CSV or upload a CSV file. Use a full hierarchy path when a local location code is repeated. Preview checks every code and value before saving.",
+                        Div(
+                            A("Download CSV template", href="/analytics/expected-population/template.csv", cls="btn btn-outline-secondary btn-sm mb-3"),
+                            Form(
+                                Textarea(name="csv_text", placeholder="location_code,expected_attendance,effective_from,note", rows="5", cls="form-control mb-3", aria_label="Paste expected attendance CSV"),
+                                FsInput("file", input_type="file", label="Or upload a CSV file", accept=".csv,text/csv"),
+                                Button("Preview CSV", type="submit", variant="outline-primary", size="sm", cls="mt-3"),
+                                method="post", action="/analytics/expected-population/bulk-preview",
+                                enctype="multipart/form-data", hx_post="/analytics/expected-population/bulk-preview",
+                                hx_encoding="multipart/form-data", hx_target="#expected-population-bulk-preview",
+                                hx_swap="innerHTML",
+                            ),
+                            Div(P("A preview is required before applying. Unknown codes, duplicate codes, invalid values, or stale previews block the entire import.", cls="small text-muted mt-2"), id="expected-population-bulk-preview", aria_live="polite"),
+                        ),
+                    ),
                     section_card("Location estimates", f"{len(locations)} locations · current as of {payload.get('as_of') or date.today().isoformat()}", body),
                     A("Back to dashboard", href="/dashboard", cls="btn btn-outline-primary admin-inline-btn"),
                 )
@@ -131,3 +192,58 @@ def register_expected_population_routes(app) -> None:
         except (ValueError, BackendClientError) as exc:
             return Div(P(f"Estimate was not saved: {escape(str(exc))}", role="alert", cls="text-danger mb-0"))
         return RedirectResponse("/analytics/expected-population?saved=1", status_code=303)
+
+    @app.get("/analytics/expected-population/template.csv")
+    async def expected_population_csv_template(request: Request):
+        ctx = active_scope_context(request, build_context(request))
+        if not _is_state_overseer(ctx):
+            return Div(P("Only the State Overseer can download the expected-attendance template.", role="alert", cls="text-danger"))
+        return PlainTextResponse(
+            "location_code,expected_attendance,effective_from,note\r\n",
+            media_type="text/csv",
+            headers={"Content-Disposition": 'attachment; filename="expected-sunday-attendance-template.csv"'},
+        )
+
+    @app.post("/analytics/expected-population/bulk-preview")
+    async def expected_population_bulk_preview(request: Request):
+        ctx = active_scope_context(request, build_context(request))
+        if not _is_state_overseer(ctx):
+            return Alert("Only the State Overseer can preview this import.", variant="danger", role="alert")
+        form = await request.form()
+        upload = form.get("file")
+        csv_text = str(form.get("csv_text") or "")
+        if upload and hasattr(upload, "read") and getattr(upload, "filename", ""):
+            raw = await upload.read(1_000_001)
+            if len(raw) > 1_000_000:
+                return Alert("CSV file exceeds the 1 MB limit.", variant="danger", role="alert")
+            try:
+                csv_text = raw.decode("utf-8-sig")
+            except UnicodeDecodeError:
+                return Alert("CSV must be UTF-8 encoded.", variant="danger", role="alert")
+        if not csv_text.strip():
+            return Alert("Paste CSV content or choose a CSV file.", variant="danger", role="alert")
+        try:
+            client = async_client(get_api_client())
+            preview = await client.preview_expected_population_csv(AuthService.get_access_token(request), csv_text)
+        except BackendClientError as exc:
+            return Alert(f"CSV preview failed: {exc}", variant="danger", role="alert")
+        return _bulk_preview_content(preview)
+
+    @app.post("/analytics/expected-population/bulk-apply")
+    async def expected_population_bulk_apply(request: Request):
+        ctx = active_scope_context(request, build_context(request))
+        if not _is_state_overseer(ctx):
+            return Alert("Only the State Overseer can apply this import.", variant="danger", role="alert")
+        form = await request.form()
+        preview_token = str(form.get("preview_token") or "")
+        if not preview_token:
+            return Alert("Preview token is missing. Preview the CSV again.", variant="danger", role="alert")
+        try:
+            client = async_client(get_api_client())
+            result = await client.apply_expected_population_csv(AuthService.get_access_token(request), preview_token)
+        except BackendClientError as exc:
+            return Alert(f"CSV was not applied: {exc}", variant="danger", role="alert")
+        return Div(
+            Alert(f"Added {int(result.get('versions_added') or 0)} estimate versions with matching audit entries.", variant="success", role="status"),
+            A("Reload estimate history", href="/analytics/expected-population", cls="btn btn-outline-primary btn-sm"),
+        )

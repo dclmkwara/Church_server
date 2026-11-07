@@ -157,6 +157,13 @@ async def _set_rls_values(session: AsyncSession, **values: str) -> None:
         "reset_token": "",
     })
     context.update(values)
+    # When context is installed before the first statement, SQLAlchemy's
+    # ``after_begin`` hook applies it on the connection. Executing this query
+    # too would send the identical settings twice. If the transaction already
+    # has a checked-out connection, update that transaction immediately.
+    transaction = session.sync_session.get_transaction()
+    if transaction is None or not transaction._connections:
+        return
     await session.execute(
         text(
             "SELECT set_config('app.scope_path', :scope_path, true), "

@@ -577,6 +577,12 @@ class APIClient:
             latest_date=latest_date,
         )
 
+    async def get_sunday_worship_dashboard_payload(self, access_token: str, **params) -> dict[str, Any]:
+        return await self._backend_client.get_sunday_worship_dashboard_payload(access_token, **params)
+
+    async def get_sunday_worship_dashboard_panels(self, access_token: str, **params) -> dict[str, Any]:
+        return await self._backend_client.get_sunday_worship_dashboard_panels(access_token, **params)
+
     async def get_expected_population(self, access_token: str, *, as_of: str | None = None, include_history: bool = False) -> dict[str, Any]:
         return await self._backend_client.get_expected_population(
             access_token, as_of=as_of, include_history=include_history,
@@ -590,6 +596,12 @@ class APIClient:
             access_token, location_id=location_id, expected_value=expected_value,
             effective_from=effective_from, note=note,
         )
+
+    async def preview_expected_population_csv(self, access_token: str, csv_text: str) -> dict[str, Any]:
+        return await self._backend_client.preview_expected_population_csv(access_token, csv_text)
+
+    async def apply_expected_population_csv(self, access_token: str, preview_token: str) -> dict[str, Any]:
+        return await self._backend_client.apply_expected_population_csv(access_token, preview_token)
 
     async def get_dashboard_member_analytics(
         self,

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+import os
+from time import perf_counter
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from fasthtml.common import A, Div, Footer, Form, H1, Img, Input, Link, P, Script, Title
@@ -11,6 +14,8 @@ from faststrap import Alert, Badge, Button, Card, Icon
 from ..backend import BackendClientError, get_backend_config
 from ..communication import AuthService
 from ..components.feedback import toast_stack
+
+logger = logging.getLogger(__name__)
 
 
 def _auth_layout(
@@ -143,6 +148,8 @@ def register_auth_routes(app) -> None:
 
     @app.post("/login")
     async def login_submit(request: Request, email: str = "", password: str = "", next: str = ""):
+        login_started = perf_counter()
+        perf_enabled = os.getenv("DCLM_AUTH_PERF", "0").strip().lower() in {"1", "true", "yes", "on"}
         config = get_backend_config()
         if not config.enabled:
             target = AuthService.sanitize_next_path(next) or "/dashboard"
@@ -161,8 +168,15 @@ def register_auth_routes(app) -> None:
                 toast_title="Sign in failed",
             )
         target = AuthService.sanitize_next_path(next) or "/dashboard"
+        response_started = perf_counter()
         response = RedirectResponse(_append_profile(target, identity.profile_key), status_code=303)
         await AuthService.persist_identity(response, identity)
+        if perf_enabled:
+            logger.info(
+                "auth_redirect_perf phases_ms=%s total_ms=%.1f",
+                {"cookie_and_redirect_response": round((perf_counter() - response_started) * 1000, 1)},
+                (perf_counter() - login_started) * 1000,
+            )
         return response
 
     @app.get("/logout")
