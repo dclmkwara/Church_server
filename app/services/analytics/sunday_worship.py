@@ -14,7 +14,7 @@ from sqlalchemy.orm import joinedload
 from app.db.filters import scope_filter, scope_or_ancestor_filter
 from app.models.counts import Count, CountReminderRecipient
 from app.models.location import Group, Location, Region, State
-from app.models.programs import ProgramEvent, ProgramType
+from app.models.programs import ProgramCampaign, ProgramEvent, ProgramType
 
 from .program_config import (
     AWAITING_HOURS_AFTER_OCCURRENCE,
@@ -375,24 +375,10 @@ class SundayWorshipAnalytics:
         now = now or datetime.now(timezone.utc)
         first_date, last_date = min(occurrence_dates), max(occurrence_dates)
 
-        type_result = await db.execute(
-            select(ProgramType.id).where(
-                ProgramType.slug == _PROGRAM.program_type_slug,
-                ProgramType.is_deleted.is_(False),
-            )
-        )
-        type_id = type_result.scalar_one_or_none()
-
-        reminder_time = (
-            select(func.max(CountReminderRecipient.sent_at))
-            .where(
-                CountReminderRecipient.location_id == Location.location_id,
-                CountReminderRecipient.occurrence_date == last_date,
-                CountReminderRecipient.sent_at >= now - timedelta(hours=24),
-            )
-            .correlate(Location)
-            .scalar_subquery()
-        )
+        reminder_time = select(func.max(CountReminderRecipient.sent_at)).where(
+            CountReminderRecipient.location_id == Location.location_id,
+            CountReminderRecipient.occurrence_date == last_date,
+        ).correlate(Location).scalar_subquery()
         location_result = await db.execute(
             select(Location, reminder_time.label("reminded_at")).where(
                 scope_filter(Location.path, scope_path),
@@ -407,9 +393,8 @@ class SundayWorshipAnalytics:
         location_rows = list(location_result.all())
         locations = [row[0] for row in location_rows]
         reminded_at_by_location = {
-            str(location.location_id): reminded_at
-            for location, reminded_at in location_rows
-            if reminded_at is not None
+            str(row[0].location_id): row[1]
+            for row in location_rows if row[1] is not None
         }
 
         depth = max(len([part for part in scope_path.split(".") if part]) - 1, 0)
@@ -444,23 +429,37 @@ class SundayWorshipAnalytics:
         children = [row for row in hierarchy_rows if row.node_type == "child"]
         ancestors = [{"path": str(row.path), "name": str(row.name or "")} for row in hierarchy_rows if row.node_type == "ancestor"]
 
-        event_result = await db.execute(
-            select(ProgramEvent).options(joinedload(ProgramEvent.campaign)).where(
-                ProgramEvent.program_type_id == type_id if type_id is not None else ProgramEvent.id.is_(None),
+        type_and_events = select(
+            ProgramType.id.label("program_type_id"), ProgramEvent,
+            ProgramCampaign.status.label("campaign_status"),
+            ProgramCampaign.is_deleted.label("campaign_deleted"),
+        ).select_from(ProgramType).outerjoin(
+            ProgramEvent, and_(ProgramEvent.program_type_id == ProgramType.id,
                 ProgramEvent.date.in_(occurrence_dates),
                 ProgramEvent.approval_status == "approved",
                 ProgramEvent.is_deleted.is_(False),
-                scope_or_ancestor_filter(ProgramEvent.path, scope_path),
-            )
+                scope_or_ancestor_filter(ProgramEvent.path, scope_path)),
+        ).outerjoin(
+            ProgramCampaign, ProgramCampaign.id == ProgramEvent.campaign_id,
+        ).where(
+            ProgramType.slug == _PROGRAM.program_type_slug,
+            ProgramType.is_deleted.is_(False),
         )
+        event_result = await db.execute(type_and_events)
+        event_rows = list(event_result.all())
+        type_id = event_rows[0].program_type_id if event_rows else None
+        event_rows = [row for row in event_rows if row[1] is not None]
         events = [
-            event for event in event_result.scalars().unique().all()
-            if event.campaign is None or (event.campaign.status == "active" and not event.campaign.is_deleted)
+            row[1] for row in event_rows
+            if not row[1].campaign_id or (
+                row.campaign_status == "active" and not row.campaign_deleted
+            )
         ]
-
         start_at = datetime.combine(first_date, time.min, ZoneInfo(REPORTING_TIMEZONE)).astimezone(timezone.utc)
         end_at = datetime.combine(last_date + timedelta(days=1), time.min, ZoneInfo(REPORTING_TIMEZONE)).astimezone(timezone.utc)
         canonical_filters = []
+        # Resolve the canonical type and events in one query. The empty event
+        # result retains legacy name matching without another type lookup.
         if type_id is not None:
             canonical_filters.append(Count.program_type_id == type_id)
         canonical_filters.append(and_(
@@ -511,12 +510,11 @@ class SundayWorshipAnalytics:
                 "path": str(location_by_id[location_id].path),
                 "name": str(location_by_id[location_id].location_name),
                 "location_id": location_id,
+                "reminded_at": reminded_at_by_location.get(location_id),
             }
             for location_id in scope_history[-1].get("unreported_location_ids", [])
             if location_id in location_by_id
         ]
-        for row in missing_locations:
-            row["reminded_at"] = reminded_at_by_location.get(row["location_id"])
         return {
             "scope": scope_history,
             "ancestors": ancestors,

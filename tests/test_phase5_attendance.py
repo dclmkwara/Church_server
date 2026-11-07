@@ -20,14 +20,14 @@ class _Result:
 
 class _AttendanceSummaryDB:
     def __init__(self):
-        self._results = iter((
-            _Result(row=SimpleNamespace(present=30, late=0, absent=0, excused=0)),
-            _Result(scalar=10),
-            _Result(row=SimpleNamespace(opportunities=40, submitted_present=30)),
-        ))
+        self.calls = 0
 
     async def execute(self, _statement):
-        return next(self._results)
+        self.calls += 1
+        return _Result(row=SimpleNamespace(
+            present=30, late=0, absent=0, excused=0,
+            current_roster=10, opportunities=40, submitted_present=30,
+        ))
 
 
 def test_attendance_stats_route_precedes_uuid_parameter_route():
@@ -39,11 +39,13 @@ def test_attendance_stats_route_precedes_uuid_parameter_route():
     assert get_paths.index("/stats") < get_paths.index("/{attendance_id}")
 
 
-def test_attendance_summary_uses_each_meeting_roster_snapshot():
-    summary = asyncio.run(_get_attendance_summary(_AttendanceSummaryDB(), "org.234.KW"))
+def test_attendance_summary_uses_each_meeting_roster_snapshot_in_one_query():
+    db = _AttendanceSummaryDB()
+    summary = asyncio.run(_get_attendance_summary(db, "org.234.KW"))
 
     assert summary["present"] == 30
     assert summary["current_roster"] == 10
     assert summary["opportunities"] == 40
     assert summary["expected"] == 40
     assert summary["rate"] == 75.0
+    assert db.calls == 1

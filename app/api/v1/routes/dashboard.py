@@ -5,7 +5,7 @@ from typing import Any, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, cast, func, select, Integer, DateTime
+from sqlalchemy import and_, cast, func, select, Integer, DateTime, true
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import deps
@@ -23,8 +23,9 @@ from app.services.dashboard_service import DashboardService
 from app.services.statistics_service import StatisticsService
 from app.services.analytics.sunday_worship import SundayWorshipAnalytics
 
-router = APIRouter()
 _DASHBOARD_CACHE_TTL = 20.0
+
+router = APIRouter()
 
 DEFAULT_BOOTSTRAP_SECTIONS = (
     'summary',
@@ -115,17 +116,8 @@ async def _get_attendance_summary(db: AsyncSession, scope_path: str, *, location
         func.coalesce(func.sum(cast(WorkerAttendance.status == 'absent', Integer)), 0).label('absent'),
         func.coalesce(func.sum(cast(WorkerAttendance.status == 'excused', Integer)), 0).label('excused'),
     ).where(and_(*filters))
-    expected_stmt = select(func.count(Worker.worker_id)).where(and_(*worker_filters))
-
-    attendance_row = (await db.execute(attendance_stmt)).one()
-    expected = int((await db.execute(expected_stmt)).scalar() or 0)
-    present = int(attendance_row.present or 0)
-    late = int(attendance_row.late or 0)
-    absent = int(attendance_row.absent or 0)
-    excused = int(attendance_row.excused or 0)
-    # A current worker snapshot is not the denominator for a historical period.
-    # Use the roster size captured with each usher submission so every meeting
-    # contributes its own attendance opportunity count.
+    expected_stmt = select(func.count(Worker.worker_id)).where(and_(*worker_filters)).scalar_subquery()
+    attendance_stmt = attendance_stmt.subquery()
     submission_filters = [
         _scope_filter(WorkerAttendanceSubmission.program_scope_path, scope_path),
         WorkerAttendanceSubmission.is_deleted.is_(False),
@@ -135,10 +127,22 @@ async def _get_attendance_summary(db: AsyncSession, scope_path: str, *, location
     submission_stmt = select(
         func.coalesce(func.sum(WorkerAttendanceSubmission.expected_workers_count), 0).label('opportunities'),
         func.coalesce(func.sum(WorkerAttendanceSubmission.present_count), 0).label('submitted_present'),
-    ).where(and_(*submission_filters))
-    submission_row = (await db.execute(submission_stmt)).one()
-    opportunities = int(submission_row.opportunities or 0)
-    submitted_present = int(submission_row.submitted_present or 0)
+    ).where(and_(*submission_filters)).subquery()
+    stmt = select(
+        attendance_stmt.c.present, attendance_stmt.c.late, attendance_stmt.c.absent, attendance_stmt.c.excused,
+        expected_stmt.label('current_roster'), submission_stmt.c.opportunities, submission_stmt.c.submitted_present,
+    ).select_from(attendance_stmt.join(submission_stmt, true()))
+    row = (await db.execute(stmt)).one()
+    expected = int(row.current_roster or 0)
+    present = int(row.present or 0)
+    late = int(row.late or 0)
+    absent = int(row.absent or 0)
+    excused = int(row.excused or 0)
+    # A current worker snapshot is not the denominator for a historical period.
+    # Use the roster size captured with each usher submission so every meeting
+    # contributes its own attendance opportunity count.
+    opportunities = int(row.opportunities or 0)
+    submitted_present = int(row.submitted_present or 0)
     rate = round((submitted_present / opportunities) * 100, 1) if opportunities else 0
     return {
         'expected': opportunities,
@@ -273,12 +277,15 @@ async def get_dashboard_bootstrap(
 
         if 'summary' in requested_sections:
             payload['summary'] = await DashboardService.get_summary(db, effective_scope, location_id=effective_location_id)
+            payload['worker_analytics'] = {
+                'total': payload['summary']['workers_total'],
+                'active': payload['summary']['active_workers'],
+                'pending_verification': payload['summary']['pending_workers'],
+                'suspended': payload['summary']['suspended_workers'],
+            }
         if 'member_analytics' in requested_sections:
             payload['member_analytics'] = await DashboardService.get_member_analytics(
-                db,
-                effective_scope,
-                location_id=effective_location_id,
-                months=months,
+                db, effective_scope, location_id=effective_location_id, months=months,
             )
         if 'population_statistics' in requested_sections:
             payload['population_statistics'] = await StatisticsService.get_population_statistics(
@@ -287,7 +294,7 @@ async def get_dashboard_bootstrap(
                 location_id=effective_location_id,
                 date_filter=_period_start(period),
             )
-        if 'worker_analytics' in requested_sections:
+        if 'worker_analytics' in requested_sections and 'worker_analytics' not in payload:
             payload['worker_analytics'] = await DashboardService.get_worker_analytics(
                 db,
                 effective_scope,
@@ -337,11 +344,7 @@ async def get_dashboard_bootstrap(
 
         return payload
 
-    return await analytics_cache.get_or_set(
-        ('dashboard', 'bootstrap', effective_scope, effective_location_id, months, period, requested_sections),
-        _build_payload,
-        ttl=_DASHBOARD_CACHE_TTL,
-    )
+    return await _build_payload()
 
 
 
@@ -409,12 +412,8 @@ async def get_sunday_worship_series(
     if latest.weekday() != 6:
         raise HTTPException(status_code=422, detail="latest_date must be a Sunday")
     occurrence_dates = [latest - timedelta(weeks=index) for index in reversed(range(weeks))]
-    return await analytics_cache.get_or_set(
-        ('dashboard', 'sunday-worship-series', effective_scope, latest, weeks, include_pending),
-        lambda: SundayWorshipAnalytics.series(
-            db, effective_scope, occurrence_dates=occurrence_dates, include_pending=include_pending,
-        ),
-        ttl=_DASHBOARD_CACHE_TTL,
+    return await SundayWorshipAnalytics.series(
+        db, effective_scope, occurrence_dates=occurrence_dates, include_pending=include_pending,
     )
 
 

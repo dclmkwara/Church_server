@@ -174,13 +174,15 @@ class BackendClient:
             raise BackendClientError("httpx is required for backend integration.") from exc
 
         request_headers = dict(headers or {})
+        dashboard_call_token = None
         if access_token:
             request_headers["Authorization"] = f"Bearer {access_token}"
         try:
-            from app.core.dashboard_perf import current_trace
+            from app.core.dashboard_perf import bind_backend_call, current_trace
             trace = current_trace()
             if trace is not None:
                 request_headers.setdefault("X-DCLM-Request-ID", trace.request_id)
+                dashboard_call_token = bind_backend_call(path.strip("/"))
         except Exception:
             pass
 
@@ -209,9 +211,11 @@ class BackendClient:
             raise BackendClientError(_format_network_error(exc)) from exc
         finally:
             try:
-                from app.core.dashboard_perf import record_backend_call
+                from app.core.dashboard_perf import record_backend_call, unbind_backend_call
                 record_backend_call(f"{method.upper()} {path}", (__import__("time").perf_counter() - started) * 1000,
                                     getattr(response, "status_code", None))
+                if dashboard_call_token is not None:
+                    unbind_backend_call(dashboard_call_token)
             except Exception:
                 pass
 

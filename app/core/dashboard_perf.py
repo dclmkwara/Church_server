@@ -19,11 +19,13 @@ class DashboardTrace:
     backend_calls: list[dict[str, Any]] = field(default_factory=list)
     database_queries: list[dict[str, Any]] = field(default_factory=list)
     phases: list[dict[str, Any]] = field(default_factory=list)
+    database_by_call: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
 
 
 _active_trace: contextvars.ContextVar[DashboardTrace | None] = contextvars.ContextVar(
     "dclm_dashboard_trace", default=None
 )
+_backend_call: contextvars.ContextVar[str] = contextvars.ContextVar("dclm_dashboard_backend_call", default="unattributed")
 
 
 def enabled() -> bool:
@@ -56,13 +58,14 @@ def finish_trace(trace: DashboardTrace | None, token: contextvars.Token | None, 
         request.state._dashboard_perf_trace = trace
         request.state._dashboard_perf_render_ms = render_ms
     logger.info(
-        "dashboard_perf request_id=%s render_ms=%.1f phases=%s backend_calls=%s db_query_count=%d db_total_ms=%.1f db_queries=%s",
+        "dashboard_perf request_id=%s render_ms=%.1f phases=%s backend_calls=%s db_query_count=%d db_total_ms=%.1f db_by_call=%s db_queries=%s",
         trace.request_id,
         render_ms,
         trace.phases,
         trace.backend_calls,
         len(trace.database_queries),
         sum(row["elapsed_ms"] for row in trace.database_queries),
+        trace.database_by_call,
         trace.database_queries,
     )
 
@@ -77,7 +80,17 @@ def record_database_query(statement: str, elapsed_ms: float) -> None:
     trace = current_trace()
     if trace is not None:
         normalized = " ".join(statement.split())
-        trace.database_queries.append({"sql": normalized[:180], "elapsed_ms": round(elapsed_ms, 1)})
+        row = {"sql": normalized[:180], "elapsed_ms": round(elapsed_ms, 1)}
+        trace.database_queries.append(row)
+        trace.database_by_call.setdefault(_backend_call.get(), []).append(row)
+
+
+def bind_backend_call(name: str) -> contextvars.Token:
+    return _backend_call.set(name)
+
+
+def unbind_backend_call(token: contextvars.Token) -> None:
+    _backend_call.reset(token)
 
 
 def timed_phase(trace: DashboardTrace | None, name: str, started: float) -> None:

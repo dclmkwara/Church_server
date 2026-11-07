@@ -48,13 +48,16 @@ class DashboardService:
             uf.append(User.location_id == location_id)
             tf.append(TransferRequest.from_location_id == location_id)
 
-        # Single round-trip consolidated query: executes all summary aggregates in 1 database trip
+        # Single round-trip consolidated query: executes all summary aggregates in 1 database trip.
+        # Worker status totals are included here so the dashboard does not issue
+        # a second independent worker aggregate for the same scope.
         stmt = select(
             select(func.count(ChurchMember.id)).where(and_(*mf)).scalar_subquery().label("members_total"),
             select(func.coalesce(func.sum(_status_case(ChurchMember.status, "active")), 0)).where(and_(*mf)).scalar_subquery().label("active_members"),
             select(func.count(Worker.worker_id)).where(and_(*wf)).scalar_subquery().label("workers_total"),
             select(func.coalesce(func.sum(_status_case(Worker.status, "Active")), 0)).where(and_(*wf)).scalar_subquery().label("active_workers"),
             select(func.coalesce(func.sum(_status_case(Worker.approval_status, "pending_verification")), 0)).where(and_(*wf)).scalar_subquery().label("pending_workers"),
+            select(func.coalesce(func.sum(cast(case((and_(func.lower(Worker.status) == "suspended", Worker.approval_status == "approved"), 1), else_=0), Integer)), 0)).where(and_(*wf)).scalar_subquery().label("suspended_workers"),
             select(func.coalesce(func.sum(_status_case(Record.record_type, "newcomer")), 0)).where(and_(*rf)).scalar_subquery().label("newcomers_total"),
             select(func.coalesce(func.sum(_status_case(Record.record_type, "convert")), 0)).where(and_(*rf)).scalar_subquery().label("converts_total"),
             select(func.coalesce(func.max(Count.total), 0)).where(and_(*cf)).scalar_subquery().label("latest_total"),
@@ -76,6 +79,7 @@ class DashboardService:
             "members_total": int(row.members_total or 0), "active_members": int(row.active_members or 0),
             "workers_total": int(row.workers_total or 0), "active_workers": int(row.active_workers or 0),
             "pending_workers": int(row.pending_workers or 0),
+            "suspended_workers": int(row.suspended_workers or 0),
             "pending_users": int(row.pending_users or 0),
             "pending_transfers": int(row.pending_transfers or 0),
             "pending_status_changes": int(row.pending_status_changes or 0),

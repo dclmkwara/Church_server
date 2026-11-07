@@ -784,6 +784,12 @@ async def _create_user_account(request, payload: dict[str, Any]) -> dict[str, An
 
 async def _list_locations(request, ctx) -> list[dict[str, Any]]:
     scope_path = await PeopleService.effective_scope_path(request, ctx)
+    async def load_locations() -> list[dict[str, Any]]:
+        return await _load_locations_uncached(request, ctx, scope_path)
+    return await request_cached(request, ("people", "locations", scope_path), load_locations)
+
+
+async def _load_locations_uncached(request, ctx, scope_path: str) -> list[dict[str, Any]]:
     if await PeopleService.use_mock(request):
         return [
             {
@@ -802,7 +808,7 @@ async def _list_locations(request, ctx) -> list[dict[str, Any]]:
         rows = [_normalize_location(row) for row in source]
     except BackendClientError:
         raise
-    filtered = [row for row in rows if not scope_path or row["path"].startswith(scope_path)]
+    filtered = [row for row in rows if not scope_path or row["path"] == scope_path or row["path"].startswith(scope_path + ".")]
     return sorted(filtered, key=lambda row: (row["location_name"].lower(), row["location_id"]))
 
 

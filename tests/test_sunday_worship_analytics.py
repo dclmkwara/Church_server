@@ -94,7 +94,7 @@ def test_pending_zero_is_received_but_not_counted_by_default():
 
 
 def test_series_load_count_does_not_grow_with_weeks_or_direct_children():
-    """The combined scope/week payload uses a fixed five database reads."""
+    """The combined scope/week payload uses a fixed four database reads."""
     locations = [
             SimpleNamespace(location_id=f"l{index}", location_name=f"Location {index}", path=f"org.234.kw.r{index}.g.001", is_active=True, opened_on=None, closed_on=None)
         for index in range(1, 3)
@@ -135,14 +135,13 @@ def test_series_load_count_does_not_grow_with_weeks_or_direct_children():
         async def execute(self, _statement):
             self.calls += 1
             result = {
-                1: Result(scalar=17),
-                2: Result(rows=[(location, None) for location in locations]),
-                3: Result(rows=[
+                1: Result(rows=[(row, None) for row in locations]),
+                2: Result(rows=[
                     SimpleNamespace(path=row.path, name=row.region_name, location_id="", node_type="child")
                     for row in regions
                 ] + [SimpleNamespace(path="org.234.kw", name="Kwara State", location_id="", node_type="ancestor")]),
+                3: Result(rows=[]),
                 4: Result(rows=[]),
-                5: Result(rows=[]),
             }[self.calls]
             return result
 
@@ -152,7 +151,7 @@ def test_series_load_count_does_not_grow_with_weeks_or_direct_children():
         session, "org.234.kw", occurrence_dates=dates,
     ))
 
-    assert session.calls == 5
+    assert session.calls == 4  # locations, hierarchy, type/event, counts
     assert len(result["scope"]) == len(dates)
     assert len(result["children"]) == 2
     assert all(len(child["history"]) == len(dates) for child in result["children"])

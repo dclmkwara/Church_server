@@ -18,7 +18,7 @@ from ..components.chartjs import donut_chart as _donut_chart
 from ..components.chartjs import sparkline_chart as _sparkline
 from ..components.shell import primary_button, shell_layout
 from ..components.ui import activity_feed, empty_state, page_stack, quick_actions, section_card, stat_card
-from .analytics_dashboard import render_analytics_dashboard
+from .analytics_dashboard import render_analytics_dashboard, register_analytics_dashboard_panel_routes
 
 PANEL_COPY = {
     "congregation": (
@@ -1124,6 +1124,7 @@ async def _dashboard_content(request: Request, ctx) -> Any:
 
 
 def register_dashboard_routes(app) -> None:
+    register_analytics_dashboard_panel_routes(app)
     @app.get("/dashboard")
     async def dashboard(request: Request):
         ctx = build_context(request)

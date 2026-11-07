@@ -22,7 +22,7 @@ from app.schemas.sync import SyncResult
 from app.services.statistics_service import StatisticsService
 from app.models.user import User, Role, Worker, user_roles
 from app.models.counts import Count, CountReminderRecipient
-from app.models.programs import ProgramEvent, ProgramType, ProgramDomain
+from app.models.programs import ProgramCampaign, ProgramEvent, ProgramType, ProgramDomain
 from app.models.location import Location
 from app.db.filters import scope_filter
 from app.db.filters import scope_or_ancestor_filter
@@ -367,20 +367,39 @@ async def list_count_review_groups(
     grouped: dict[tuple, list[Count]] = {}
     for row in pending:
         grouped.setdefault(_count_group_key(row), []).append(row)
-    location_ids = {row.location_id for row in pending}
-    program_ids = {row.program_type_id for row in pending if row.program_type_id is not None}
-    event_ids = {row.event_id for row in pending if row.event_id is not None}
-    submitter_ids = {row.entered_by_id for row in pending if row.entered_by_id is not None}
     prior_ids = {row.supersedes_id for row in pending if row.supersedes_id is not None}
-    location_rows = (await db.execute(select(Location).where(Location.location_id.in_(location_ids)))).scalars().all() if location_ids else []
-    program_rows = (await db.execute(select(ProgramType).where(ProgramType.id.in_(program_ids)))).scalars().all() if program_ids else []
-    event_rows = (await db.execute(select(ProgramEvent).where(ProgramEvent.id.in_(event_ids)))).scalars().all() if event_ids else []
-    user_rows = (await db.execute(select(User.user_id, User.name).where(User.user_id.in_(submitter_ids)))).all() if submitter_ids else []
-    prior_rows = (await db.execute(select(Count).where(Count.id.in_(prior_ids), Count.is_deleted.is_(False)))).scalars().all() if prior_ids else []
-    location_by_id = {str(row.location_id): row for row in location_rows}
-    program_by_id = {row.id: row for row in program_rows}
-    event_by_id = {str(row.id): row for row in event_rows}
-    submitter_names = {str(user_id): name for user_id, name in user_rows}
+    metadata_stmt = (
+        select(Count.location_id, Location.location_name, Location.path,
+               Count.program_type_id, ProgramType.name, Count.event_id, ProgramEvent.title,
+               ProgramEvent.campaign_id, ProgramCampaign.title,
+               Count.entered_by_id, User.name, Count.supersedes_id,
+               Count.rejection_reason, Count.rejected_at, Count.rejected_by_id)
+        .outerjoin(Location, Location.location_id == Count.location_id)
+        .outerjoin(ProgramType, ProgramType.id == Count.program_type_id)
+        .outerjoin(ProgramEvent, ProgramEvent.id == Count.event_id)
+        .outerjoin(ProgramCampaign, ProgramCampaign.id == ProgramEvent.campaign_id)
+        .outerjoin(User, User.user_id == Count.entered_by_id)
+        .where(Count.id.in_([row.id for row in pending]))
+    )
+    metadata_rows = (await db.execute(metadata_stmt)).all() if pending else []
+    prior_stmt = select(Count).where(Count.id.in_(prior_ids), Count.is_deleted.is_(False)) if prior_ids else None
+    prior_rows = (await db.execute(prior_stmt)).scalars().all() if prior_stmt is not None else []
+    location_by_id = {}
+    program_by_id = {}
+    event_by_id = {}
+    submitter_names = {}
+    from types import SimpleNamespace
+    for row in metadata_rows:
+        (location_id, location_name, location_path, program_id, program_name,
+         event_id, event_title, campaign_id, campaign_title, submitter_id, submitter_name, *_rest) = row
+        if location_id and location_name:
+            location_by_id[str(location_id)] = SimpleNamespace(location_name=location_name, path=location_path)
+        if program_id and program_name:
+            program_by_id[program_id] = SimpleNamespace(name=program_name)
+        if event_id:
+            event_by_id[str(event_id)] = SimpleNamespace(title=event_title or campaign_title)
+        if submitter_id and submitter_name:
+            submitter_names[str(submitter_id)] = submitter_name
     history_by_id = {str(row.id): row for row in prior_rows}
     now = datetime.now(timezone.utc)
     payload = []

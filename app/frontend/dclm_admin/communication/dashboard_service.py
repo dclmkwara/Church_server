@@ -13,7 +13,6 @@ from .church_data_service import ChurchDataService
 from .people_service import PeopleService
 from .report_service import ReportService
 from .request_cache import request_cached
-from .ttl_cache import ttl_cached
 from .workflow_service import WorkflowService
 from .active_scope import active_scope_context
 
@@ -141,9 +140,8 @@ class DashboardService:
         requested_sections = DashboardService.requested_bootstrap_sections(request)
         cache_key = ("dashboard", "bootstrap", scope_path, period, requested_sections)
 
-        # Layer 1 — request-scoped: free for repeated calls within one request lifecycle.
-        # Layer 2 — 60-second TTL: reuse result across multiple HTMX requests
-        # (e.g. section panel toggles) without re-hitting the backend each time.
+        # Keep dashboard metrics request-scoped. Cross-request caching would
+        # make fresh submissions invisible without an explicit freshness label.
         async def _fetch() -> dict[str, Any] | None:
             try:
                 client = async_client(get_api_client())
@@ -164,7 +162,7 @@ class DashboardService:
         return await request_cached(
             request,
             cache_key,
-            lambda: ttl_cached(cache_key, 60.0, _fetch),
+            _fetch,
         )
 
 
