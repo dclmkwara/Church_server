@@ -3481,7 +3481,7 @@ class DemoStore:
             "absent": absent,
             "late": late,
             "excused": sum(1 for row in rows if row["status"] == "excused"),
-            "rate": int((present / expected) * 100) if expected else 0,
+            "rate": round((present / expected) * 100, 1) if expected else 0,
             "records": len(rows),
         }
 

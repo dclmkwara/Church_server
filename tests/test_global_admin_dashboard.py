@@ -1,3 +1,4 @@
+import asyncio
 import os
 from pathlib import Path
 import sys
@@ -20,7 +21,9 @@ from app.frontend.dclm_admin.routes.dashboard import (
     _dashboard_loading_content,
     _dashboard_profile,
     _bootstrap_keys_for_profile,
+    _workers_panel,
 )
+from fasthtml.common import to_xml
 
 
 def test_visible_modules_all_levels():
@@ -96,11 +99,55 @@ def test_global_admin_dashboard_profile_and_keys():
     assert "church_statistics" in bootstrap_keys
 
 
-def test_population_statistics_are_loaded_by_default_for_levels_two_to_five():
-    """Local and state dashboards should show population mix without a manual load click."""
+def test_legacy_population_aggregate_is_not_bootstrapped_for_levels_two_to_five():
+    """The B1 dashboard uses the scoped Sunday Worship endpoint instead of mixed totals."""
     for profile_type in ("local", "state"):
         bootstrap_keys = _bootstrap_keys_for_profile(profile_type)
-        assert "population_statistics" in bootstrap_keys
+        assert "population_statistics" not in bootstrap_keys
+
+
+def test_worker_dashboard_distinguishes_no_submission_from_reported_zero():
+    worker_mix = {
+        "total": 2, "active": 2, "inactive": 0, "male": 1, "female": 1,
+        "male_ratio": 50, "female_ratio": 50,
+    }
+    no_submission = to_xml(
+        asyncio.run(
+            _workers_panel(
+                {"worker_mix": worker_mix, "attendance_summary": {"opportunities": 0, "present": 0, "late": 0, "rate": 0}},
+                view="summary",
+            )
+        )
+    )
+    reported_zero = to_xml(
+        asyncio.run(
+            _workers_panel(
+                {"worker_mix": worker_mix, "attendance_summary": {"opportunities": 12, "present": 0, "late": 0, "rate": 0.0}},
+                view="summary",
+            )
+        )
+    )
+
+    assert "No submission attendance rate" in no_submission
+    assert "0 present / 0 late" in reported_zero
+    assert "0.0% attendance rate" in reported_zero
+
+
+def test_worker_dashboard_renders_decimal_attendance_rate():
+    worker_mix = {
+        "total": 2, "active": 2, "inactive": 0, "male": 1, "female": 1,
+        "male_ratio": 50, "female_ratio": 50,
+    }
+    rendered = to_xml(
+        asyncio.run(
+            _workers_panel(
+                {"worker_mix": worker_mix, "attendance_summary": {"opportunities": 26, "present": 8, "late": 0, "rate": 30.8}},
+                view="summary",
+            )
+        )
+    )
+
+    assert "30.8% attendance rate" in rendered
 
 
 def test_global_admin_shell_layout_renders():

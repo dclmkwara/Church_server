@@ -6,12 +6,15 @@ import datetime
 from fasthtml.common import Div, Form, H3, H4, Input, Option, P, Select, Textarea
 from decimal import Decimal, InvalidOperation
 from starlette.requests import Request
+from zoneinfo import ZoneInfo
 
 from faststrap import Badge, Button, PlaceholderCard, Spinner, TabPane, Tabs
 
 from ..backend import BackendClientError
 from ..auth_context import build_context
 from ..communication import ChurchDataService, PeopleService
+from ..communication.dashboard_service import DashboardService
+from ..communication.active_scope import active_scope_context
 from ..communication.count_aggregation import aggregate_count_submissions
 from ..components.feedback import simple_toast_response
 from ..components.shell import hidden_context_inputs, shell_layout
@@ -25,6 +28,11 @@ PAYMENT_METHODS = ["Cash", "Bank Transfer", "Mobile Money"]
 RECORD_STATUSES = ["follow_up_pending", "contacted", "integrated"]
 RECORD_GENDERS = ["Male", "Female"]
 ATTENDANCE_STATUSES = ["present", "late", "absent", "excused"]
+
+
+def _scope_path(ctx) -> str:
+    """Return the selected scope or the context current path."""
+    return str((getattr(ctx, "query_extras", {}) or {}).get("scope_path") or getattr(ctx, "current_scope_path", ""))
 
 PAYMENT_METHOD_VALUES = {
     "Cash": "cash",
@@ -76,17 +84,21 @@ async def _church_data_loading_shell(
 
 
 async def _scope_locations(request: Request, ctx) -> list[dict[str, str]]:
+    ctx = active_scope_context(request, ctx)
     if await ChurchDataService.live_enabled(request):
         return [{"value": row["location_id"], "label": row["location_name"]} for row in await PeopleService.list_locations(request, ctx)]
-    return [{"value": row["location"], "label": row["location"]} for row in STORE.visible_locations(ctx.current_scope_path)]
+    scope_path = await ChurchDataService.effective_scope_path(request, ctx)
+    return [{"value": row["location"], "label": row["location"]} for row in STORE.visible_locations(scope_path)]
 
 
 async def _scope_events(request: Request, ctx) -> list[dict[str, str]]:
+    ctx = active_scope_context(request, ctx)
     if await ChurchDataService.live_enabled(request):
         events = await ChurchDataService.list_events(request, ctx)
         if events:
             return [{"value": row["event_id"], "label": row["title"]} for row in events]
-    return [{"value": event["title"], "label": event["title"]} for event in STORE.list_program_events(ctx.current_scope_path)]
+    scope_path = str((getattr(ctx, "query_extras", {}) or {}).get("scope_path") or getattr(ctx, "current_scope_path", ""))
+    return [{"value": event["title"], "label": event["title"]} for event in STORE.list_program_events(scope_path)]
 
 
 async def _fund_badge(fund_type: str):
@@ -107,9 +119,14 @@ async def _count_mobile_card(ctx, row):
     return Div(
         H3(row["event_title"], cls="h6 fw-semibold mb-1"),
         P(f"{row['location']} - {row['date']}", cls="text-muted mb-3"),
+        Div(
+            status_badge(row["status"]),
+            Badge("Auto-accepted", variant="info") if row.get("auto_accepted") else "",
+            cls="d-flex flex-wrap align-items-center gap-1 mb-2",
+        ),
         P(f"Sections: {', '.join(sections)}", cls="small text-muted mb-2"),
         Div(
-            Div(P("Total", cls="small text-muted mb-1"), P(str(row["total"]), cls="fw-semibold mb-0")),
+            Div(P("Counted total", cls="small text-muted mb-1"), P(str(row["total"]) if row["total"] is not None else "Not counted", cls="fw-semibold mb-0")),
             Div(P("Usher submissions", cls="small text-muted mb-1"), P(str(row.get("submissions", 1)), cls="fw-semibold mb-0")),
             cls="drawer-two-up mb-3",
         ),
@@ -129,15 +146,16 @@ async def _count_mobile_card(ctx, row):
 
 
 async def _count_stats(request: Request, ctx, *, oob: bool = False) -> Div:
+    ctx = active_scope_context(request, ctx)
     summary = await ChurchDataService.count_summary(request, ctx)
     _month = datetime.date.today().strftime("%B")
     _year = datetime.date.today().year
     return _summary_grid(
         [
-            ("Latest service attendance", str(summary["latest_total"]), "Sum of all usher sections for the latest event, date, and location", "bar-chart"),
-            (f"{_month} attendance", str(summary["monthly_total"]), f"Service totals in {_month} after combining usher sections", "calendar3"),
+            ("Latest approved attendance", str(summary["latest_total"]) if summary["latest_total"] is not None else "No approved report", "Approved submissions only; pending and rejected values are excluded", "bar-chart"),
+            (f"{_month} approved total", str(summary["monthly_total"]) if summary["monthly_total"] is not None else "No approved reports", f"Approved service totals in {_month} after combining submissions", "calendar3"),
             ("Locations reporting", str(summary["locations_reporting"]), "Locations with service counts this month", "geo-alt"),
-            ("Average service", str(summary["average_total"]), "Average total per event, date, and location", "calculator"),
+            ("Average approved service", str(summary["average_total"]) if summary["average_total"] is not None else "No approved reports", "Average total per event, date, program, and reporting unit", "calculator"),
         ],
         grid_id="counts-stats",
         grid_cls="counts-stat-grid",
@@ -146,7 +164,9 @@ async def _count_stats(request: Request, ctx, *, oob: bool = False) -> Div:
 
 
 async def _counts_table(request: Request, ctx, *, location: str = "", event_title: str = "", oob: bool = False) -> Div:
-    rows = await ChurchDataService.list_counts(request, ctx, location=location, event_id=event_title) if await ChurchDataService.live_enabled(request) else STORE.list_counts(ctx.current_scope_path, location=location, event_title=event_title)
+    ctx = active_scope_context(request, ctx)
+    scope_path = str((getattr(ctx, "query_extras", {}) or {}).get("scope_path") or getattr(ctx, "current_scope_path", ""))
+    rows = await ChurchDataService.list_counts(request, ctx, location=location, event_id=event_title) if await ChurchDataService.live_enabled(request) else STORE.list_counts(scope_path, location=location, event_title=event_title)
     if not rows:
         attrs = {"id": "counts-results"}
         if oob:
@@ -162,8 +182,13 @@ async def _counts_table(request: Request, ctx, *, location: str = "", event_titl
                 row["event_title"],
                 row["date"],
                 row["location"],
-                row["total"],
-                Div(P(f"{row['submissions']} usher section(s)", cls="fw-semibold mb-1"), P(", ".join(row["sections"]) or "Section not specified", cls="small text-muted mb-0")),
+                str(row["total"]) if row["total"] is not None else "Not counted",
+                Div(
+                    status_badge(row["status"]),
+                    Badge("Auto-accepted", variant="info") if row.get("auto_accepted") else "",
+                    cls="d-flex flex-wrap align-items-center gap-1",
+                ),
+                Div(P(f"{row['submissions']} submission(s)", cls="fw-semibold mb-1"), P(", ".join(row["sections"]) or "Section labels are not recorded", cls="small text-muted mb-0")),
                 Button(
                     "View",
                     variant="outline-primary",
@@ -178,11 +203,176 @@ async def _counts_table(request: Request, ctx, *, location: str = "", event_titl
         )
         mobile_cards.append(await _count_mobile_card(ctx, row))
     return responsive_table(
-        ["Event", "Date", "Location", "Combined Total", "Sections", "Action"],
+        ["Program", "Date", "Location / venue", "Approved total", "Review status", "Submissions", "Action"],
         desktop_rows,
         mobile_cards,
         results_id="counts-results",
         oob="outerHTML:#counts-results" if oob else None,
+    )
+
+
+async def _count_review_workspace(request: Request, ctx, occurrence_date: str) -> Div:
+    try:
+        groups, unreported = await asyncio.gather(
+            ChurchDataService.list_count_review_groups(request),
+            ChurchDataService.list_unreported_sunday_locations(request, occurrence_date),
+        )
+    except BackendClientError as exc:
+        return Div(P(f"Count review is unavailable: {exc}", cls="text-danger mb-0"), id="count-review-content")
+    aged_10 = sum(bool(row.get("flag_10h")) for row in groups)
+    aged_24 = sum(bool(row.get("flag_24h")) for row in groups)
+    cards = await _summary_grid(
+        [
+            ("Pending groups", str(len(groups)), "Pending submissions grouped by reporting unit, program, and date", "clipboard-check"),
+            ("Waiting 10+ hours", str(aged_10), "Needs attention for the accepting pastor", "clock"),
+            ("Waiting 24+ hours", str(aged_24), "Escalates one level up for visibility", "exclamation-circle"),
+            ("Unreported locations", str(len(unreported)), f"Sunday Worship on {occurrence_date}", "geo-alt"),
+        ],
+        grid_id="count-review-stats",
+        grid_cls="counts-stat-grid",
+    )
+    review_cards = []
+    for row in groups:
+        flags = []
+        if row.get("flag_10h"):
+            flags.append(Badge("10+ hours", variant="warning", cls="me-1"))
+        if row.get("flag_24h"):
+            flags.append(Badge("24+ hours", variant="danger", cls="me-1"))
+        if row.get("escalated"):
+            flags.append(Badge("Escalated", variant="info", cls="me-1"))
+        cat = row.get("categories") or {}
+        categories = " • ".join(
+            f"{label}: {int(cat.get(field) or 0)}"
+            for label, field in (("Adult men", "adult_male"), ("Adult women", "adult_female"), ("Youth men", "youth_male"), ("Youth women", "youth_female"), ("Boys", "boys"), ("Girls", "girls"))
+        )
+        section_note = (
+            f"{row.get('section_count', 0)} section(s): {', '.join(row.get('section_labels') or [])}"
+            if row.get("sections_recorded") else f"{row.get('submission_count', 0)} submissions; section labels are not recorded"
+        )
+        correction_note = ""
+        if row.get("correction_history"):
+            latest_prior = row["correction_history"][-1]
+            correction_note = Div(
+                P("Correction history", cls="small fw-semibold mb-1"),
+                P(f"This submission corrects rejected count {latest_prior['supersedes_id']} • {latest_prior.get('rejection_reason') or 'No reason recorded'}", cls="small text-warning-emphasis mb-0"),
+                cls="rounded bg-warning-subtle p-2 mt-2",
+            )
+        actions = P("Waiting for the accepting pastor; this level can view the delay but cannot decide this group.", cls="small text-muted mb-0")
+        if row.get("actionable"):
+            actions = Div(
+                Form(
+                    *hidden_context_inputs(ctx),
+                    Button("Approve all submissions", variant="primary", size="md", type="submit"),
+                    hx_post=ctx.url_for(f"/church-data/count-review/{row['count_id']}/approve"),
+                    hx_target="#count-review-content", hx_swap="outerHTML", cls="d-inline-flex",
+                ),
+                Form(
+                    *hidden_context_inputs(ctx),
+                    Textarea(name="reason", required=True, rows="2", placeholder="Required reason for returning this count", cls="form-control mb-2"),
+                    Button("Reject group", variant="outline-danger", size="md", type="submit"),
+                    hx_post=ctx.url_for(f"/church-data/count-review/{row['count_id']}/reject"),
+                    hx_target="#count-review-content", hx_swap="outerHTML", cls="mt-2",
+                ),
+                cls="d-grid gap-2 mt-3",
+            )
+        review_cards.append(
+            Div(
+                Div(H4(f"{row.get('program_type')} — {row.get('date')}", cls="h6 fw-semibold mb-0"), *flags, cls="d-flex flex-wrap gap-2 align-items-center justify-content-between"),
+                P(f"{row.get('location')} • {row.get('program_level')} report • {row.get('event_title') or 'Standing program'}", cls="small text-muted mt-2 mb-2"),
+                Div(P(f"Pending total: {row.get('total')}", cls="h4 fw-semibold mb-0"), P(f"{row.get('submission_count')} submissions • {section_note}", cls="small text-muted mb-0"), cls="d-flex justify-content-between align-items-start gap-3 flex-wrap"),
+                P(categories, cls="small mt-3 mb-1"),
+                P(f"Submitted by {', '.join(row.get('submitters') or []) or 'Unknown'} • waiting {row.get('age_hours')} hours", cls="small text-muted mb-0"),
+                correction_note,
+                actions,
+                cls="border rounded-3 bg-white p-3 p-lg-4 shadow-sm",
+            )
+        )
+    if not review_cards:
+        review_content = empty_state("clipboard-check", "No count groups need review", "Pending counts in this scope will appear here, oldest first.")
+    else:
+        review_content = Div(*review_cards, cls="d-grid gap-3")
+    reminder_rows = []
+    for row in unreported:
+        reminder_rows.append(
+            Div(
+                Div(H4(row["location"], cls="h6 fw-semibold mb-1"), P(f"Sunday Worship • {row['date']}", cls="small text-muted mb-0")),
+                Form(
+                    *hidden_context_inputs(ctx),
+                    Input(type="hidden", name="location_id", value=row["location_id"]),
+                    Input(type="hidden", name="program_type_id", value=str(row["program_type_id"])),
+                    Input(type="hidden", name="occurrence_date", value=row["date"]),
+                    Button("Remind location", variant="outline-primary", size="md", type="submit"),
+                    hx_post=ctx.url_for("/church-data/count-review/remind"),
+                    hx_target="#count-review-content", hx_swap="outerHTML",
+                ),
+                cls="d-flex align-items-center justify-content-between gap-3 border rounded-3 p-3 bg-white",
+            )
+        )
+    reminders = Div(
+        H4("Unreported Sunday Worship", cls="h6 fw-semibold"),
+        P("Locations without a report and not covered by a combined event. Reminders go to active users at the location through the in-app broadcast.", cls="small text-muted"),
+        *(reminder_rows or [empty_state("geo-alt", "No uncovered locations", f"No unreported locations were found for {occurrence_date}.")]),
+        cls="d-grid gap-3 mt-4",
+    )
+    return Div(
+        cards,
+        Form(
+            *hidden_context_inputs(ctx),
+            filter_field("Sunday date", Input(type="date", name="occurrence_date", value=occurrence_date, required=True, cls="form-control"), field_id="count-review-date"),
+            Button("Load date", variant="outline-primary", size="md", type="submit"),
+            hx_get=ctx.url_for("/church-data/count-review/content"), hx_target="#count-review-content", hx_swap="outerHTML",
+            cls="d-flex align-items-end gap-2 flex-wrap mb-3",
+        ),
+        Div(H4("Pending count groups", cls="h5 fw-semibold"), review_content, reminders, cls="mt-4"),
+        id="count-review-content",
+    )
+
+
+async def _meeting_program_page(request: Request, ctx, *, title: str, subtitle: str, program_type_slug: str, active_key: str) -> Div:
+    if not ctx.has_permission("attendance:read"):
+        return shell_layout(ctx, request_path=request.url.path, active_key="attendance", title=title, subtitle=subtitle, primary_action=None, content=empty_state("shield-lock", "Attendance access required", "Your role does not include attendance reporting."), show_shell_intro=False)
+    metrics = await DashboardService.meeting_program_metrics(request, ctx, program_type_slug=program_type_slug)
+    rows = metrics.get("ranking") or []
+    if rows:
+        item = rows[0]
+        cards = await _summary_grid(
+            [
+                ("Present records", str(item.get("present", 0)), "Stored worker attendance rows marked present", "person-check"),
+                ("Late records", str(item.get("late", 0)), "Stored worker attendance rows marked late", "clock"),
+                ("Absent records", str(item.get("absent", 0)), "Stored worker attendance rows marked absent", "person-x"),
+                ("Attendance records", str(item.get("records", 0)), "Individual rows currently stored for this program type", "clipboard-data"),
+            ],
+            grid_id=f"{active_key}-stats", grid_cls="counts-stat-grid",
+        )
+    else:
+        cards = empty_state("clipboard-check", "No attendance reports", f"No worker attendance rows are recorded for {title} in this scope.")
+    monthly = metrics.get("monthly_trend") or []
+    if monthly:
+        trend_rows = [
+            [row["period"], row["present"], row["late"], row["absent"], row["excused"], row["records"]]
+            for row in monthly
+        ]
+        trend_table = responsive_table(
+            ["Month", "Present records", "Late", "Absent", "Excused", "Total records"],
+            trend_rows, [], results_id=f"{active_key}-trend",
+        )
+    else:
+        trend_table = empty_state("calendar3", "No monthly trend yet", "Monthly rows appear after attendance is submitted for this meeting type.")
+    body = page_stack(
+        cards,
+        section_card(
+            "Attendance trend",
+            f"Monthly records for {title}; this page filters strictly to program type {program_type_slug}.",
+            trend_table,
+        ),
+        section_card(
+            "How to read these figures",
+            "These are stored attendance rows. The current system can receive repeated full-roster submissions for one meeting, so a unique-worker faithfulness percentage is withheld until the roster snapshot deduplication fix is implemented.",
+        ),
+    )
+    return shell_layout(
+        ctx, request_path=request.url.path, active_key=active_key, title=title,
+        subtitle=subtitle, primary_action=None, content=body, show_shell_intro=False,
     )
 
 
@@ -212,7 +402,8 @@ async def _finance_mobile_card(ctx, row):
 
 
 async def _finance_stats(request: Request, ctx, *, oob: bool = False) -> Div:
-    summary = await ChurchDataService.finance_summary(request, ctx) if await ChurchDataService.live_enabled(request) else STORE.finance_summary(ctx.current_scope_path)
+    ctx = active_scope_context(request, ctx)
+    summary = await ChurchDataService.finance_summary(request, ctx) if await ChurchDataService.live_enabled(request) else STORE.finance_summary(_scope_path(ctx))
     _month = datetime.date.today().strftime("%B")
     _year = datetime.date.today().year
     return _summary_grid(
@@ -229,7 +420,8 @@ async def _finance_stats(request: Request, ctx, *, oob: bool = False) -> Div:
 
 
 async def _finance_table(request: Request, ctx, *, fund_type: str = "", location: str = "", method: str = "", oob: bool = False) -> Div:
-    rows = await ChurchDataService.list_finance(request, ctx, fund_type=fund_type, location=location, method=method) if await ChurchDataService.live_enabled(request) else STORE.list_finance(ctx.current_scope_path, fund_type=fund_type, location=location, method=method)
+    ctx = active_scope_context(request, ctx)
+    rows = await ChurchDataService.list_finance(request, ctx, fund_type=fund_type, location=location, method=method) if await ChurchDataService.live_enabled(request) else STORE.list_finance(_scope_path(ctx), fund_type=fund_type, location=location, method=method)
     if not rows:
         attrs = {"id": "finance-results"}
         if oob:
@@ -332,6 +524,7 @@ async def _record_rows(ctx, rows, *, suffix: str):
 
 
 async def _records_workspace(request: Request, ctx, *, search: str = "", status: str = "", location: str = "", gender: str = "", oob: bool = False):
+    ctx = active_scope_context(request, ctx)
     all_rows = await ChurchDataService.list_records(
         request,
         ctx,
@@ -340,7 +533,7 @@ async def _records_workspace(request: Request, ctx, *, search: str = "", status:
         location=location,
         gender=gender,
     ) if await ChurchDataService.live_enabled(request) else STORE.list_records(
-        ctx.current_scope_path,
+        _scope_path(ctx),
         search=search,
         status=status,
         location=location,
@@ -391,7 +584,8 @@ async def _attendance_mobile_card(ctx, row):
 
 
 async def _attendance_stats(request: Request, ctx, *, oob: bool = False) -> Div:
-    summary = await ChurchDataService.attendance_summary(request, ctx) if await ChurchDataService.live_enabled(request) else STORE.attendance_summary(ctx.current_scope_path)
+    ctx = active_scope_context(request, ctx)
+    summary = await ChurchDataService.attendance_summary(request, ctx) if await ChurchDataService.live_enabled(request) else STORE.attendance_summary(_scope_path(ctx))
     return _summary_grid(
         [
             ("Expected workers", str(summary["expected"]), "Workers expected for attendance"),
@@ -416,8 +610,9 @@ async def _attendance_table(
     event_title: str = "",
     oob: bool = False,
 ) -> Div:
+    ctx = active_scope_context(request, ctx)
     rows = await ChurchDataService.list_attendance(request, ctx, status=status, location=location, unit=unit, event_id=event_title) if await ChurchDataService.live_enabled(request) else STORE.list_attendance(
-        ctx.current_scope_path,
+        _scope_path(ctx),
         status=status,
         location=location,
         unit=unit,
@@ -465,9 +660,98 @@ async def _attendance_table(
 
 
 def register_church_data_routes(app) -> None:
+    @app.get("/church-data/meetings/workers-saturday")
+    async def saturday_workers_meeting_page(request: Request):
+        ctx = active_scope_context(request, build_context(request))
+        return await _meeting_program_page(
+            request, ctx, title="Saturday Workers Meeting",
+            subtitle="Weekly worker attendance records for Saturday Workers Meeting.",
+            program_type_slug="saturday_workers_meeting", active_key="workers-meeting",
+        )
+
+    @app.get("/church-data/meetings/leaders-tuesday")
+    async def tuesday_leaders_meeting_page(request: Request):
+        ctx = active_scope_context(request, build_context(request))
+        return await _meeting_program_page(
+            request, ctx, title="Tuesday Leaders Meeting",
+            subtitle="Weekly leader attendance records for Tuesday Leaders Meeting.",
+            program_type_slug="tuesday_leaders_meeting", active_key="leaders-meeting",
+        )
+
+    @app.get("/church-data/count-review")
+    async def count_review_page(request: Request, occurrence_date: str = ""):
+        ctx = active_scope_context(request, build_context(request))
+        if not ctx.has_permission("counts:review"):
+            return shell_layout(ctx, request_path=request.url.path, active_key="counts", title="Count Review", subtitle="Count approvals are restricted to the accepting pastor.", primary_action=None, content=empty_state("shield-lock", "Review access required", "Your role does not approve program counts."), show_shell_intro=False)
+        if not occurrence_date:
+            local_today = datetime.datetime.now(ZoneInfo("Africa/Lagos")).date()
+            occurrence_date = (local_today - datetime.timedelta(days=(local_today.weekday() - 6) % 7)).isoformat()
+        content = await _count_review_workspace(request, ctx, occurrence_date)
+        return shell_layout(
+            ctx, request_path=request.url.path, active_key="count-review", title="Count Review",
+            subtitle="Approve or return count submissions together, and follow up on unreported Sunday Worship.",
+            primary_action=None, content=content, show_shell_intro=False,
+        )
+
+    @app.get("/church-data/count-review/content")
+    async def count_review_content(request: Request, occurrence_date: str = ""):
+        ctx = active_scope_context(request, build_context(request))
+        if not ctx.has_permission("counts:review"):
+            return Div(P("Count review access is required.", cls="text-danger"), id="count-review-content")
+        if not occurrence_date:
+            local_today = datetime.datetime.now(ZoneInfo("Africa/Lagos")).date()
+            occurrence_date = (local_today - datetime.timedelta(days=(local_today.weekday() - 6) % 7)).isoformat()
+        return await _count_review_workspace(request, ctx, occurrence_date)
+
+    @app.post("/church-data/count-review/{count_id}/approve")
+    async def count_review_approve(request: Request, count_id: str):
+        ctx = build_context(request)
+        if not ctx.has_permission("counts:review"):
+            return Div(P("Count review access is required.", cls="text-danger"), id="count-review-content")
+        try:
+            await ChurchDataService.approve_count_group(request, count_id)
+            local_today = datetime.datetime.now(ZoneInfo("Africa/Lagos")).date()
+            sunday = (local_today - datetime.timedelta(days=(local_today.weekday() - 6) % 7)).isoformat()
+            panel = await _count_review_workspace(request, ctx, sunday)
+            return simple_toast_response(panel, "Every pending submission in this count group was approved.", title="Count approved")
+        except BackendClientError as exc:
+            return Div(P(f"Approval was not saved: {exc}", cls="text-danger"), id="count-review-content")
+
+    @app.post("/church-data/count-review/{count_id}/reject")
+    async def count_review_reject(request: Request, count_id: str):
+        ctx = build_context(request)
+        if not ctx.has_permission("counts:review"):
+            return Div(P("Count review access is required.", cls="text-danger"), id="count-review-content")
+        form = await request.form()
+        reason = str(form.get("reason") or "").strip()
+        if not reason:
+            return Div(P("Enter a reason before rejecting this count group.", cls="text-danger"), id="count-review-content")
+        try:
+            await ChurchDataService.reject_count_group(request, count_id, reason=reason)
+            local_today = datetime.datetime.now(ZoneInfo("Africa/Lagos")).date()
+            sunday = (local_today - datetime.timedelta(days=(local_today.weekday() - 6) % 7)).isoformat()
+            panel = await _count_review_workspace(request, ctx, sunday)
+            return simple_toast_response(panel, "Every pending submission in this count group was rejected with the supplied reason.", title="Count returned", variant="warning")
+        except BackendClientError as exc:
+            return Div(P(f"Rejection was not saved: {exc}", cls="text-danger"), id="count-review-content")
+
+    @app.post("/church-data/count-review/remind")
+    async def count_review_remind(request: Request):
+        ctx = build_context(request)
+        if not ctx.has_permission("counts:review"):
+            return Div(P("Count review access is required.", cls="text-danger"), id="count-review-content")
+        form = await request.form()
+        payload = {key: str(form.get(key) or "") for key in ("location_id", "program_type_id", "occurrence_date")}
+        try:
+            await ChurchDataService.remind_count_location(request, payload)
+            panel = await _count_review_workspace(request, ctx, payload["occurrence_date"])
+            return simple_toast_response(panel, "An in-app reminder was sent to users at the location.", title="Reminder sent")
+        except BackendClientError as exc:
+            return Div(P(f"Reminder was not sent: {exc}", cls="text-danger"), id="count-review-content")
+
     @app.get("/church-data/counts")
     async def counts_page(request: Request, location: str = "", event_title: str = ""):
-        ctx = build_context(request)
+        ctx = active_scope_context(request, build_context(request))
         body = await _church_data_loading_shell(
             request,
             ctx,
@@ -490,7 +774,7 @@ def register_church_data_routes(app) -> None:
 
     @app.get("/church-data/counts/content")
     async def counts_content(request: Request, location: str = "", event_title: str = ""):
-        ctx = build_context(request)
+        ctx = active_scope_context(request, build_context(request))
         locations, events, stats_div, table_div = await asyncio.gather(
             _scope_locations(request, ctx),
             _scope_events(request, ctx),
@@ -536,7 +820,7 @@ def register_church_data_routes(app) -> None:
 
     @app.get("/church-data/counts/list")
     async def counts_list(request: Request, location: str = "", event_title: str = ""):
-        ctx = build_context(request)
+        ctx = active_scope_context(request, build_context(request))
         return await _counts_table(request, ctx, location=location, event_title=event_title)
 
     @app.get("/church-data/counts/new")
@@ -550,21 +834,24 @@ def register_church_data_routes(app) -> None:
     @app.get("/church-data/counts/{count_id}/drawer")
     async def count_drawer(request: Request, count_id: str):
         ctx = build_context(request)
-        source_rows = await ChurchDataService.list_counts(request, ctx) if await ChurchDataService.live_enabled(request) else STORE.list_counts(ctx.current_scope_path)
+        ctx = active_scope_context(request, ctx)
+        source_rows = await ChurchDataService.list_counts(request, ctx) if await ChurchDataService.live_enabled(request) else STORE.list_counts(_scope_path(ctx))
         row = next((entry for entry in source_rows if entry["count_id"] == count_id), None)
         if row is None:
             return P("Count not found.", cls="text-muted")
         service_rows = [
             entry for entry in source_rows
-            if (entry["event_id"], entry["date"], entry["location_id"])
-            == (row["event_id"], row["date"], row["location_id"])
+            if (entry["event_id"], entry["date"], entry["location_id"], entry.get("program_type"), entry.get("program_level"), entry.get("program_scope_path"))
+            == (row["event_id"], row["date"], row["location_id"], row.get("program_type"), row.get("program_level"), row.get("program_scope_path"))
         ]
+        approved_rows = [entry for entry in service_rows if entry.get("status") == "approved"]
         category_fields = ("adult_male", "adult_female", "youth_male", "youth_female", "boys", "girls")
-        combined = {field: sum(int(entry.get(field) or 0) for entry in service_rows) for field in category_fields}
+        combined = {field: sum(int(entry.get(field) or 0) for entry in approved_rows) for field in category_fields}
+        rejected_rows = [entry for entry in service_rows if entry.get("status") == "rejected"]
         return Div(
-            H3(row["event_title"], cls="h5 fw-semibold"),
+            H3(row.get("program_type") or row["event_title"], cls="h5 fw-semibold"),
             P(f"{row['location']} - {row['date']}", cls="text-muted"),
-            P(f"Combined from {len(service_rows)} usher submission(s)", cls="small text-muted"),
+            P(f"Review status: {row['status']} • {len(service_rows)} submission(s); {len(approved_rows)} approved", cls="small text-muted"),
             Div(
                 Div(P("Adult male", cls="small text-muted mb-1"), P(str(combined["adult_male"]), cls="fw-semibold mb-0")),
                 Div(P("Adult female", cls="small text-muted mb-1"), P(str(combined["adult_female"]), cls="fw-semibold mb-0")),
@@ -574,7 +861,8 @@ def register_church_data_routes(app) -> None:
                 Div(P("Girls", cls="small text-muted mb-1"), P(str(combined["girls"]), cls="fw-semibold mb-0")),
                 cls="drawer-meta-grid",
             ),
-            Div(P("Combined total", cls="small text-muted mb-1"), P(str(sum(combined.values())), cls="display-6 fw-semibold mb-0"), cls="drawer-note-box mt-3"),
+            Div(P("Approved total", cls="small text-muted mb-1"), P(str(sum(combined.values())) if approved_rows else "Not counted", cls="display-6 fw-semibold mb-0"), cls="drawer-note-box mt-3"),
+            Div(P(f"Rejected submissions: {len(rejected_rows)}", cls="small text-danger mb-0"), P(rejected_rows[-1].get("rejection_reason") or "", cls="small text-muted mb-0") if rejected_rows else "", cls="mt-2") if rejected_rows else "",
             H4("Submissions", cls="h6 fw-semibold mt-4"),
             *[
                 Div(
@@ -589,7 +877,7 @@ def register_church_data_routes(app) -> None:
 
     @app.get("/church-data/finance")
     async def finance_page(request: Request, fund_type: str = "", location: str = "", method: str = ""):
-        ctx = build_context(request)
+        ctx = active_scope_context(request, build_context(request))
         body = await _church_data_loading_shell(
             request,
             ctx,
@@ -612,7 +900,7 @@ def register_church_data_routes(app) -> None:
 
     @app.get("/church-data/finance/content")
     async def finance_content(request: Request, fund_type: str = "", location: str = "", method: str = ""):
-        ctx = build_context(request)
+        ctx = active_scope_context(request, build_context(request))
         locations, stats, table = await asyncio.gather(
             _scope_locations(request, ctx),
             _finance_stats(request, ctx),
@@ -854,7 +1142,7 @@ def register_church_data_routes(app) -> None:
 
     @app.get("/church-data/newcomers")
     async def newcomers_page(request: Request, search: str = "", status: str = "", location: str = "", gender: str = ""):
-        ctx = build_context(request)
+        ctx = active_scope_context(request, build_context(request))
         body = await _church_data_loading_shell(
             request,
             ctx,
@@ -877,7 +1165,7 @@ def register_church_data_routes(app) -> None:
 
     @app.get("/church-data/newcomers/content")
     async def newcomers_content(request: Request, search: str = "", status: str = "", location: str = "", gender: str = ""):
-        ctx = build_context(request)
+        ctx = active_scope_context(request, build_context(request))
         locations, workspace = await asyncio.gather(
             _scope_locations(request, ctx),
             _records_workspace(request, ctx, search=search, status=status, location=location, gender=gender),
@@ -988,7 +1276,7 @@ def register_church_data_routes(app) -> None:
         unit: str = "",
         event_title: str = "",
     ):
-        ctx = build_context(request)
+        ctx = active_scope_context(request, build_context(request))
         body = await _church_data_loading_shell(
             request,
             ctx,
@@ -1017,7 +1305,7 @@ def register_church_data_routes(app) -> None:
         unit: str = "",
         event_title: str = "",
     ):
-        ctx = build_context(request)
+        ctx = active_scope_context(request, build_context(request))
         events, locations, stats_div, table_div = await asyncio.gather(
             _scope_events(request, ctx),
             _scope_locations(request, ctx),

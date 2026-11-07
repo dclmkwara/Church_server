@@ -1,0 +1,684 @@
+<title>Church Admin Analytics Prototype</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: sticky scope bar on top; coverage strip, six headline cards, then a children table beside a needs-attention list, then the trend. At Location level the table becomes a week-by-week record list. */
+:root{
+  --bg:#EDF0F3; --surface:#FFFFFF; --surface-2:#F5F7F9; --ink:#121C26; --muted:#566574;
+  --line:#D5DCE3; --line-strong:#B8C2CC; --hdr:#FFFFFF;
+  --accent:#2A4FA3; --accent-ink:#FFFFFF; --accent-wash:#E3EAF7;
+  --ok:#1D7A4C; --ok-wash:#DDF0E5; --warn:#9A5F00; --warn-wash:#FBEBCB;
+  --bad:#B3342B; --bad-wash:#F8DEDB; --none:#6F7E8C; --none-wash:#E6EAEE;
+  --display:'Bricolage Grotesque','Segoe UI',system-ui,sans-serif;
+  --body:'IBM Plex Sans',system-ui,'Segoe UI',sans-serif;
+  --mono:'IBM Plex Mono',ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0E151C; --surface:#16202A; --surface-2:#1B2733; --ink:#E7EDF2; --muted:#9AABB9;
+    --line:#2A3846; --line-strong:#3A4B5B; --hdr:#121B24;
+    --accent:#7FA0EA; --accent-ink:#0E151C; --accent-wash:#1E2D4A;
+    --ok:#52C28A; --ok-wash:#163528; --warn:#E3A93B; --warn-wash:#3A2C12;
+    --bad:#F0827A; --bad-wash:#3F1E1B; --none:#8B9AA8; --none-wash:#25313C; color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0E151C; --surface:#16202A; --surface-2:#1B2733; --ink:#E7EDF2; --muted:#9AABB9;
+  --line:#2A3846; --line-strong:#3A4B5B; --hdr:#121B24;
+  --accent:#7FA0EA; --accent-ink:#0E151C; --accent-wash:#1E2D4A;
+  --ok:#52C28A; --ok-wash:#163528; --warn:#E3A93B; --warn-wash:#3A2C12;
+  --bad:#F0827A; --bad-wash:#3F1E1B; --none:#8B9AA8; --none-wash:#25313C; color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:14px;line-height:1.5}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:30;background:var(--hdr)}
+.inner{max-width:1280px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+button,select,input{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.mono{font-family:var(--mono)}
+.muted{color:var(--muted)}
+.tn{font-variant-numeric:tabular-nums}
+
+/* top bar */
+.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:20;background:var(--hdr);border-bottom:1px solid var(--line)}
+.row1,.row2{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 16px;padding-block:8px}
+.row2{border-top:1px solid var(--line)}
+.brand{display:flex;align-items:baseline;gap:10px;min-width:0}
+.mark{font-family:var(--display);font-weight:700;font-size:15px}
+.proto{color:var(--muted);font-size:12px}
+.ctl{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px}
+.ctl label{font-size:12px;color:var(--muted)}
+select{background:var(--surface);border:1px solid var(--line-strong);border-radius:6px;padding:5px 8px}
+#crumbs{display:flex;flex-wrap:wrap;align-items:center;gap:2px 6px;min-width:0}
+.crumb{background:none;border:0;padding:4px 6px;border-radius:5px;color:var(--accent);cursor:pointer;font-weight:500}
+.crumb:hover{background:var(--accent-wash)}
+.crumb.cur{color:var(--ink);font-weight:600;cursor:default}
+.sep{color:var(--muted)}
+.limit{font-size:12px;color:var(--muted);padding-left:8px}
+.seg{display:inline-flex;border:1px solid var(--line-strong);border-radius:6px;overflow:hidden}
+.seg button{background:var(--surface);border:0;padding:5px 12px;cursor:pointer}
+.seg button+button{border-left:1px solid var(--line-strong)}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink);font-weight:600}
+.tog{display:inline-flex;align-items:center;gap:6px;font-size:13px;cursor:pointer}
+
+/* pills and dots */
+.pill{display:inline-flex;align-items:center;gap:6px;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:500;white-space:nowrap;background:var(--none-wash);color:var(--muted)}
+.pill.ok{background:var(--ok-wash);color:var(--ok)}
+.pill.warn{background:var(--warn-wash);color:var(--warn)}
+.pill.bad{background:var(--bad-wash);color:var(--bad)}
+.d{display:inline-block;width:9px;height:9px;border-radius:50%;flex:none;vertical-align:middle}
+.d.ok{background:var(--ok)}
+.d.half{background:linear-gradient(90deg,var(--warn) 50%,transparent 50%);border:1.5px solid var(--warn)}
+.d.bad{background:var(--bad);border-radius:2px}
+.d.none{border:1.5px dashed var(--none)}
+
+main{padding-block:20px 48px;display:flex;flex-direction:column;gap:16px}
+.head h1{font-family:var(--display);font-weight:700;font-size:clamp(26px,4vw,36px);line-height:1.1;margin:2px 0 4px;text-wrap:balance}
+.eyebrow{margin:0;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.meta{margin:0;color:var(--muted)}
+
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:16px}
+.panel h2{font-family:var(--display);font-weight:700;font-size:17px;margin:0 0 2px}
+.panel .sub{margin:0 0 12px;color:var(--muted);font-size:13px}
+.label{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+
+/* coverage */
+.cov{display:flex;height:12px;border-radius:6px;overflow:hidden;background:var(--none-wash)}
+.cov .a{background:var(--ok)}
+.cov .p{background:var(--warn)}
+.cov .r{background:var(--bad)}
+.cov .m{background:repeating-linear-gradient(135deg,var(--none-wash) 0 4px,var(--line-strong) 4px 5px)}
+.cov.sm{height:8px;min-width:90px}
+.covhead{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:4px 16px;margin-bottom:8px}
+.covhead strong{font-family:var(--display);font-size:20px}
+.legend{display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:10px;font-size:13px}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+
+/* cards */
+.cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:14px 16px;display:flex;flex-direction:column;gap:4px;min-width:0}
+.card .top2{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.tag{font-size:10px;letter-spacing:.06em;text-transform:uppercase;border:1px solid var(--line-strong);border-radius:4px;padding:0 5px;color:var(--muted);white-space:nowrap}
+.val{font-family:var(--display);font-weight:700;font-size:32px;line-height:1.1;font-variant-numeric:tabular-nums}
+.val.txt{font-size:22px;color:var(--none)}
+.card .line{font-size:13px;color:var(--muted)}
+.up{color:var(--ok);font-weight:600}.down{color:var(--bad);font-weight:600}.flat{color:var(--muted)}
+
+/* split */
+.split{display:grid;grid-template-columns:minmax(0,1.75fr) minmax(0,1fr);gap:16px;align-items:start}
+.scroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;min-width:900px}
+th{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);text-align:left;font-weight:500;padding:6px 10px;border-bottom:1px solid var(--line-strong);white-space:nowrap}
+td{padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:middle;font-variant-numeric:tabular-nums}
+th.r,td.r{text-align:right}
+tr.go{cursor:pointer}
+tr.go:hover td{background:var(--surface-2)}
+.link{background:none;border:0;padding:0;color:var(--accent);font-weight:600;cursor:pointer;text-align:left}
+.cell2{display:block;font-size:11px;color:var(--muted);font-family:var(--mono)}
+.pendv{font-style:italic}
+.small{font-size:12px;color:var(--muted)}
+.tools{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;justify-content:space-between;margin-bottom:10px}
+
+/* attention */
+.stack{display:flex;flex-direction:column;gap:16px;min-width:0}
+.att{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.att li{border-top:1px solid var(--line);padding:10px 0;display:flex;gap:10px;align-items:flex-start}
+.att li:first-child{border-top:0}
+.att .t{font-weight:500}
+.att button.t{background:none;border:0;padding:0;text-align:left;color:var(--ink);cursor:pointer;font-weight:500}
+.att button.t:hover{color:var(--accent);text-decoration:underline}
+.att .sv{font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
+.dec{display:flex;flex-direction:column}
+.dec div{display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-top:1px solid var(--line)}
+.dec div:first-child{border-top:0}
+.dec b{font-family:var(--display);font-size:18px}
+
+/* chart */
+.chart svg{display:block;width:100%;min-width:600px;height:auto}
+.ax{fill:var(--muted);font:11px var(--mono)}
+.gl{stroke:var(--line);stroke-width:1}
+.ln{stroke:var(--accent);fill:none;stroke-width:2.25;stroke-linejoin:round;stroke-linecap:round}
+.pt{fill:var(--accent)}
+.endlbl{fill:var(--ink);font:600 12px var(--mono)}
+.shade{fill:var(--accent-wash)}
+.bar{fill:var(--ok)}
+.key{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12px;color:var(--muted);margin-top:8px}
+.key i{display:inline-block;width:12px;height:12px;border-radius:2px;vertical-align:-2px;margin-right:6px}
+
+details.assume{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:12px 16px}
+details.assume summary{cursor:pointer;font-family:var(--display);font-weight:700;font-size:17px}
+details.assume ol{margin:12px 0 0;padding-left:20px;display:flex;flex-direction:column;gap:8px}
+.rules{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:14px}
+.rules div{border-top:2px solid var(--line-strong);padding-top:8px}
+.rules b{display:block;margin-bottom:2px}
+
+/* event pages: program x day matrix */
+[hidden]{display:none!important}
+table.mx{min-width:860px}
+table.dt{min-width:0}
+.mx tbody th{text-transform:none;letter-spacing:0;font-size:13px;color:var(--ink);font-weight:600;white-space:normal;width:170px;vertical-align:top;padding-top:12px}
+.mx td{padding:6px;vertical-align:top}
+.mc{display:flex;flex-direction:column;gap:2px;width:100%;min-height:64px;text-align:left;background:var(--surface-2);border:1px solid var(--line);border-radius:6px;padding:8px 10px;cursor:pointer;color:var(--ink)}
+.mc:hover{border-color:var(--line-strong)}
+.mc[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-wash);box-shadow:inset 0 0 0 1px var(--accent)}
+.mc strong{font-family:var(--display);font-size:20px;line-height:1.1;font-variant-numeric:tabular-nums}
+.ml{display:flex;justify-content:space-between;gap:8px;font-size:12px;flex-wrap:wrap}
+.ml i{font-style:normal;color:var(--muted)}
+.ml em{font-style:normal;color:var(--none)}
+.ml.tot{border-top:1px solid var(--line-strong);padding-top:3px;margin-top:2px;font-weight:600}
+.dtitle{margin:0 0 4px;font-family:var(--display);font-weight:700;font-size:17px}
+@media (max-width:980px){.split{grid-template-columns:minmax(0,1fr)}.cards{grid-template-columns:repeat(2,minmax(0,1fr))}.rules{grid-template-columns:minmax(0,1fr)}}
+@media (max-width:560px){.cards{grid-template-columns:minmax(0,1fr)}.proto{display:none}}
+@media (prefers-reduced-motion:no-preference){.card,.panel{transition:border-color .15s}.card:hover{border-color:var(--line-strong)}}
+</style>
+
+<div class="top">
+  <div class="inner">
+    <div class="row1">
+      <div class="brand"><span class="mark">Church Admin</span><span class="proto">Analytics prototype</span></div>
+      <div class="seg" id="views" role="group" aria-label="Page"><button type="button" data-view="dash" aria-pressed="true">Dashboard</button><button type="button" data-view="retreat" aria-pressed="false">Retreat</button><button type="button" data-view="crusade" aria-pressed="false">Crusade</button></div>
+      <div class="ctl">
+        <label for="persona">View as</label>
+        <select id="persona">
+          <option value="kwara">State Overseer (level 5)</option>
+          <option value="ilc">Regional Pastor (level 4)</option>
+          <option value="ilc-tnk">Group Pastor (level 3)</option>
+          <option value="ilc-tnk-001">Location Pastor (level 2)</option>
+        </select>
+        <span class="pill"><i class="d none"></i>Sample data</span>
+      </div>
+    </div>
+    <div class="row2">
+      <nav id="crumbs" aria-label="Scope"></nav>
+      <div class="ctl">
+        <div class="seg" id="periodseg" role="group" aria-label="Period">
+          <button type="button" data-period="4" aria-pressed="true">4 weeks</button>
+          <button type="button" data-period="8" aria-pressed="false">8 weeks</button>
+        </div>
+        <label class="tog" for="inc"><input type="checkbox" id="inc"> Count reports pending review</label>
+      </div>
+    </div>
+  </div>
+</div>
+<main class="inner" id="main"></main>
+
+<script>
+/* ---------- sample data: Kwara State, 7 regions, 40 locations, 16 Sundays ---------- */
+const W=16, L=W-1;
+const dates=[];for(let i=0;i<W;i++){dates.push(new Date(2026,10,1-7*(L-i)).toLocaleDateString('en-GB',{day:'numeric',month:'short'}));}
+function hash(s){let h=2166136261;for(const c of s){h^=c.charCodeAt(0);h=Math.imul(h,16777619);}return h>>>0;}
+function rng(seed){let a=seed>>>0;return()=>{a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+
+const REGIONS=[
+ {code:'ILC',name:'Ilorin Central',rep:.93,groups:[['TNK','Tanke',4],['FTE','Fate',3],['OJB','Oja-Oba',3]]},
+ {code:'ILE',name:'Ilorin East',rep:.9,groups:[['SGO','Sango',3],['GAK','Gaa-Akanbi',3]]},
+ {code:'ILW',name:'Ilorin West',rep:.88,groups:[['ADW','Adewole',3],['GNM','Ganmo',2]]},
+ {code:'OFA',name:'Offa',rep:.85,groups:[['OFM','Offa Market',3],['OYN','Oyun',2]]},
+ {code:'OMU',name:'Omu-Aran',rep:.8,groups:[['OMC','Omu Market',3],['ARD','Arandun',2]]},
+ {code:'KAI',name:'Kaiama',rep:.62,groups:[['KAC','Kaiama',3],['GWN','Gwanara',2]]},
+ {code:'PAT',name:'Patigi',rep:.5,groups:[['PTC','Patigi',3],['LFG','Lafiagi',1]]}
+];
+const SUF=['Main','Annex','Road','Estate','Junction'];
+const CHILD={State:'Region',Region:'Group',Group:'Location'};
+const nodes={};
+function mk(id,level,name,code,parent){const n={id,level,name,code,parent,children:[]};nodes[id]=n;if(parent)parent.children.push(n);return n;}
+const OV={
+ 'ilc-ojb-003':l=>{l.exp=null;},
+ 'kai-gwn-002':l=>{l.exp=null;},
+ 'ile-sgo-001':l=>{l.exp=Math.round((l.weeks[L]?l.weeks[L].att:150)*0.82/10)*10;},
+ 'ilc-fte-002':l=>{l.weeks[L]={s:'approved',att:0,off:0,conv:0,newc:0};},
+ 'omu-omc-001':l=>{for(let i=6;i<W;i++){const w=l.weeks[i];if(w){const f=1-0.065*(i-5);w.att=Math.round(w.att*f);w.off=Math.round(w.off*f/100)*100;}}},
+ 'kai-kac-001':l=>{for(let i=W-4;i<W;i++)l.weeks[i]=null;},
+ 'pat-lfg-001':l=>{for(let i=W-6;i<W;i++)l.weeks[i]=null;}
+};
+function gen(ln){
+  const r=rng(hash(ln.id));
+  const base=60+Math.pow(r(),1.5)*360, drift=(r()-.45)*0.012;
+  const rep=Math.min(.97,Math.max(.3,ln.rep+(r()-.5)*.12));
+  ln.active=Math.max(6,Math.round(base/8*(.8+r()*.4)));
+  ln.pend=r()<.45?0:1+Math.floor(r()*3); ln.susp=r()<.75?0:1;
+  ln.cand=ln.pend; ln.trans=r()<.15?1:0; ln.rem=r()<.08?1:0;
+  ln.weeks=[];ln.wm=[];
+  for(let i=0;i<W;i++){
+    if(r()<rep){
+      let s='approved';
+      if(i===L){const q=r();s=q<.7?'approved':q<.9?'pending':'rejected';}else if(r()>.97){s='rejected';}
+      const att=Math.round(base*(1+drift*(i-8))*(.93+r()*.14));
+      ln.weeks.push({s,att,off:Math.round(att*(1300+r()*1500)/100)*100,conv:Math.floor(att/160*(.2+r()*1.4)),newc:Math.floor(att/120*(.2+r()*1.3))});
+    }else{ln.weeks.push(null);}
+    ln.wm.push(r()<Math.min(.98,rep+.04)?{p:Math.round(ln.active*(.5+r()*.42)),e:ln.active}:null);
+  }
+  {const re=rng(hash(ln.id+'exp'));ln.exp=Math.round(base*(1.1+re()*.5)/10)*10;}
+  if(OV[ln.id])OV[ln.id](ln);
+}
+const root=mk('kwara','State','Kwara State','DCL-234-KW',null);
+for(const R of REGIONS){
+  const rn=mk(R.code.toLowerCase(),'Region',R.name,'DCL-234-KW-'+R.code,root);
+  for(const [gc,gname,cnt] of R.groups){
+    const gn=mk((R.code+'-'+gc).toLowerCase(),'Group',gname,rn.code+'-'+gc,rn);
+    for(let k=1;k<=cnt;k++){
+      const num=String(k).padStart(3,'0');
+      const ln=mk(gn.id+'-'+num,'Location',gname+' '+SUF[(k-1)%5],gn.code+'-'+num,gn);
+      ln.rep=R.rep;gen(ln);
+    }
+  }
+}
+
+/* ---------- metric engine: one definition per metric, used at every level ---------- */
+function leavesOf(n){if(!n._lv)n._lv=n.children.length?n.children.flatMap(leavesOf):[n];return n._lv;}
+function counted(w,inc){return w&&(w.s==='approved'||(inc&&w.s==='pending'));}
+function weekStats(lv,i,inc){
+  let sum=0,c=0,appr=0,pend=0,rej=0,miss=0,zero=0;
+  for(const l of lv){const w=l.weeks[i];
+    if(!w){miss++;continue;}
+    if(w.s==='approved')appr++;else if(w.s==='pending')pend++;else rej++;
+    if(counted(w,inc)){sum+=w.att;c++;if(w.att===0)zero++;}
+  }
+  return {sum,counted:c,appr,pend,rej,miss,zero,n:lv.length,recv:appr+pend+rej};
+}
+function periodStats(lv,a,b,inc){
+  let reports=0,att=0,off=0,conv=0,newc=0;
+  for(const l of lv)for(let i=a;i<b;i++){const w=l.weeks[i];if(counted(w,inc)){reports++;att+=w.att;off+=w.off;conv+=w.conv;newc+=w.newc;}}
+  return {reports,att,off,conv,newc,avg:reports?att/reports:null,offAvg:reports?off/reports:null};
+}
+function workerStats(lv,a,b){
+  let active=0,pend=0,susp=0,wp=0,we=0,meets=0,cand=0,trans=0,rem=0;
+  for(const l of lv){active+=l.active;pend+=l.pend;susp+=l.susp;cand+=l.cand;trans+=l.trans;rem+=l.rem;
+    for(let i=a;i<b;i++){const m=l.wm[i];if(m){wp+=m.p;we+=m.e;meets++;}}}
+  return {active,pend,susp,wp,we,meets,cand,trans,rem,total:active+pend+susp};
+}
+
+/* ---------- state ---------- */
+const S={persona:'kwara',scope:'kwara',period:4,inc:false,sort:'name',view:'dash',metric:'att',ev:{retreat:'easter-2026',crusade:'crusade-2026-10'},sel:{retreat:'1|Bible Study',crusade:'1|Crusade Evening'}};
+const $=s=>document.querySelector(s);
+const fmt=n=>Math.round(n).toLocaleString('en-US');
+const naira=n=>n>=1e6?'₦'+(n/1e6).toFixed(2)+'M':'₦'+Math.round(n).toLocaleString('en-US');
+const plural=(n,w)=>n+' '+w+(n===1?'':'s');
+function range(){const len=S.period;return {cs:W-len,ce:W,ps:W-2*len,pe:W-len};}
+function within(n,max){for(let c=n;c;c=c.parent)if(c===max)return true;return false;}
+function chain(n,max){const out=[];for(let c=n;c;c=c.parent){out.unshift(c);if(c===max)break;}return out;}
+function deltaHTML(a,b){
+  if(a==null)return '<span class="muted">—</span>';
+  if(!b)return '<span class="muted">no prior</span>';
+  const p=(a-b)/b*100,abs=Math.abs(p);
+  if(abs<3)return '<span class="flat">≈ flat</span>';
+  return p>0?`<span class="up">▲ ${abs.toFixed(0)}%</span>`:`<span class="down">▼ ${abs.toFixed(0)}%</span>`;
+}
+function covBar(ws,cls){
+  const n=ws.n||1,p=v=>(v/n*100).toFixed(2)+'%';
+  return `<div class="cov ${cls||''}" role="img" aria-label="${ws.appr} approved, ${ws.pend} pending review, ${ws.rej} returned, ${ws.miss} not reported of ${ws.n}"><span class="a" style="width:${p(ws.appr)}"></span><span class="p" style="width:${p(ws.pend)}"></span><span class="r" style="width:${p(ws.rej)}"></span><span class="m" style="width:${p(ws.miss)}"></span></div>`;
+}
+function stateCell(w){
+  if(!w)return '<span class="pill"><i class="d none"></i>Not reported</span>';
+  if(w.s==='approved')return `<strong>${fmt(w.att)}</strong>`+(w.att===0?' <span class="pill ok"><i class="d ok"></i>Reported 0</span>':'');
+  if(w.s==='pending')return `<strong class="pendv">${fmt(w.att)}</strong> <span class="pill warn"><i class="d half"></i>Pending review</span>`;
+  return '<span class="pill bad"><i class="d bad"></i>Returned</span>';
+}
+function lastRep(l){for(let i=L;i>=0;i--)if(l.weeks[i])return dates[i];return '';}
+
+/* attendance against the church's estimated population: pooled over locations that have BOTH a counted report and an estimate */
+function expStats(lv,i,inc){
+  let att=0,exp=0,n=0,noEst=0,cnt=0;
+  for(const l of lv){
+    const w=l.weeks[i];if(!counted(w,inc))continue;
+    cnt++;
+    if(l.exp==null){noEst++;continue;}
+    att+=w.att;exp+=l.exp;n++;
+  }
+  return {att,exp,n,noEst,cnt,pct:exp?att/exp*100:null};
+}
+function pctCell(ex){
+  if(ex.pct!=null)return `<strong>${ex.pct.toFixed(0)}%</strong><span class="cell2">of ${fmt(ex.exp)} expected</span>`;
+  if(ex.cnt&&ex.noEst)return '<span class="muted">No estimate</span>';
+  return '<span class="muted">—</span>';
+}
+/* ---------- needs attention ---------- */
+function attention(n){
+  const items=[],{cs,ce,ps,pe}=range();
+  if(n.children.length){
+    for(const c of n.children){
+      const lv=leavesOf(c),ws=weekStats(lv,L,S.inc),isL=!c.children.length;
+      const cur=periodStats(lv,cs,ce,S.inc),prev=periodStats(lv,ps,pe,S.inc);
+      if(ws.miss>0){
+        if(isL){let run=0;for(let i=L;i>=0&&!c.weeks[i];i--)run++;
+          items.push({sev:run>=3?3:2,id:c.id,k:run,t:run>1?`${c.name} has no report for ${run} weeks`:`${c.name} did not report on ${dates[L]}`,s:run>1?`Last report: ${lastRep(c)||'none in 16 weeks'}`:'Sunday Worship'});
+        }else items.push({sev:ws.miss/ws.n>=.4?3:2,id:c.id,k:ws.miss/ws.n*100,t:`${c.name}: ${ws.miss} of ${ws.n} locations did not report`,s:`Sunday Worship, ${dates[L]}`});
+      }
+      if(ws.rej>0)items.push({sev:2,id:c.id,k:ws.rej,t:`${c.name}: ${plural(ws.rej,'report')} returned for correction`,s:'Waiting for the usher to resubmit'});
+      if(ws.pend>0)items.push({sev:1,id:c.id,k:ws.pend,t:`${c.name}: ${plural(ws.pend,'report')} awaiting review`,s:'Not counted in totals until approved'});
+      if(cur.avg!=null&&prev.avg&&(cur.avg-prev.avg)/prev.avg<=-.15)
+        items.push({sev:2,id:c.id,k:-(cur.avg-prev.avg)/prev.avg*10,t:`${c.name}: average attendance down ${Math.round(-(cur.avg-prev.avg)/prev.avg*100)}%`,s:`Compared with the previous ${S.period} weeks`});
+    }
+  }else{
+    let run=0;for(let i=L;i>=0&&!n.weeks[i];i--)run++;
+    const w=n.weeks[L];
+    if(run>0)items.push({sev:run>=3?3:2,k:9,t:run>1?`No report for ${run} weeks`:`No report for ${dates[L]}`,s:run>1?`Last report: ${lastRep(n)||'none in 16 weeks'}`:'Sunday Worship'});
+    if(w&&w.s==='rejected')items.push({sev:3,k:8,t:'Latest report was returned',s:'Resubmit it so it counts'});
+    if(w&&w.s==='pending')items.push({sev:1,k:7,t:'Latest report is awaiting review',s:'Not counted until approved'});
+    if(n.cand)items.push({sev:1,k:6,t:`${plural(n.cand,'worker candidate')} awaiting Group Pastor approval`,s:'Workers page'});
+    if(n.trans)items.push({sev:1,k:5,t:'1 worker transfer in progress',s:'Waiting on the approval chain'});
+    if(n.rem)items.push({sev:2,k:4,t:'1 removal request under review',s:'Suspended workers stay on the register'});
+    let cv=0,nw=0;for(let i=L-1;i<=L;i++){const x=n.weeks[i];if(counted(x,S.inc)){cv+=x.conv;nw+=x.newc;}}
+    if(cv+nw)items.push({sev:1,k:3,t:`${cv} converts and ${nw} newcomers in the last 2 weeks need follow-up`,s:'Names and phone numbers show at this level only'});
+  }
+  items.sort((a,b)=>b.sev-a.sev||b.k-a.k);
+  return items.slice(0,8);
+}
+
+/* ---------- trend chart ---------- */
+function niceMax(v){const p=Math.pow(10,Math.floor(Math.log10(v)));return [1,2,2.5,5,10].find(k=>k*p>=v)*p;}
+function chartHTML(lv,cs){
+  const pts=[],cov=[];
+  for(let i=0;i<W;i++){const s=weekStats(lv,i,S.inc);pts.push(s.counted?s.sum/s.counted:null);cov.push(s.counted/s.n);}
+  const vals=pts.filter(v=>v!=null),top=niceMax(Math.max(10,...vals)*1.12);
+  const X0=48,X1=684,step=(X1-X0)/W,x=i=>X0+step*(i+.5);
+  const yL=v=>170-(v/top)*156,yB=c=>262-c*56;
+  let g='',path='',seg=[];
+  [0,top/2,top].forEach(t=>{g+=`<line class="gl" x1="${X0}" x2="${X1}" y1="${yL(t)}" y2="${yL(t)}"/><text class="ax" x="${X0-6}" y="${yL(t)+4}" text-anchor="end">${fmt(t)}</text>`;});
+  [0,1].forEach(t=>{g+=`<line class="gl" x1="${X0}" x2="${X1}" y1="${yB(t)}" y2="${yB(t)}"/><text class="ax" x="${X0-6}" y="${yB(t)+4}" text-anchor="end">${t*100}%</text>`;});
+  const flush=()=>{if(seg.length>1)path+=`<path class="ln" d="M${seg.map(p=>p.join(' ')).join(' L')}"/>`;seg=[];};
+  let dots='',last=-1;
+  for(let i=0;i<W;i++){
+    if(pts[i]==null){flush();continue;}
+    seg.push([x(i).toFixed(1),yL(pts[i]).toFixed(1)]);dots+=`<circle class="pt" cx="${x(i).toFixed(1)}" cy="${yL(pts[i]).toFixed(1)}" r="${i===last?4:3}"/>`;last=i;
+  }
+  flush();
+  let bars='';for(let i=0;i<W;i++){const h=cov[i]*56;bars+=`<rect class="bar" x="${(x(i)-12).toFixed(1)}" y="${(262-h).toFixed(1)}" width="24" height="${Math.max(h,0).toFixed(1)}" rx="2"/>`;}
+  let xl='';[0,3,6,9,12,15].forEach(i=>{xl+=`<text class="ax" x="${x(i).toFixed(1)}" y="284" text-anchor="middle">${dates[i]}</text>`;});
+  let end='';if(last>=0)end=`<text class="endlbl" x="${(x(last)+4).toFixed(1)}" y="${(yL(pts[last])-9).toFixed(1)}" text-anchor="end">${fmt(pts[last])}</text>`;
+  const shade=`<rect class="shade" x="${(X0+step*cs).toFixed(1)}" y="8" width="${(X1-X0-step*cs).toFixed(1)}" height="258"/>`;
+  return `<div class="scroll chart"><svg viewBox="0 0 700 296" role="img" aria-label="Weekly average attendance per reporting location and share of locations counted, last 16 Sundays">${shade}${g}${bars}${path}${dots}${end}${xl}<text class="ax" x="${X0}" y="194">Locations counted, share of all locations</text></svg></div>
+  <div class="key"><span><i style="background:var(--accent-wash);border:1px solid var(--line-strong)"></i>Selected period</span><span><i style="background:var(--accent)"></i>Average per reporting location</span><span><i style="background:var(--ok)"></i>Share of locations counted</span><span>Gaps mean no counted report that week.</span></div>`;
+}
+
+/* ---------- render ---------- */
+function render(){
+  const n=nodes[S.scope],max=nodes[S.persona],lv=leavesOf(n),isLeaf=!n.children.length;
+  const {cs,ce,ps,pe}=range();
+  const ws=weekStats(lv,L,S.inc),cur=periodStats(lv,cs,ce,S.inc),prev=periodStats(lv,ps,pe,S.inc),wk=workerStats(lv,cs,ce);
+
+  const ch=chain(n,max);
+  $('#crumbs').innerHTML=ch.map((c,i)=>i===ch.length-1?`<span class="crumb cur" aria-current="page">${c.name}</span>`:`<button type="button" class="crumb" data-go="${c.id}">${c.name}</button>`).join('<span class="sep">›</span>')+(max.level!=='State'?`<span class="limit">Your access starts at ${max.level.toLowerCase()} level</span>`:'');
+  $('#persona').value=S.persona;$('#inc').checked=S.inc;
+  document.querySelectorAll('[data-period]').forEach(b=>b.setAttribute('aria-pressed',String(+b.dataset.period===S.period)));
+  document.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.view===S.view)));
+  $('#periodseg').hidden=S.view!=='dash';
+  if(S.view!=='dash'){renderEvent(n);return;}
+
+  const sizeTxt=n.level==='State'?`${lv.length} locations in ${n.children.length} regions`:n.level==='Region'?`${lv.length} locations in ${n.children.length} groups`:n.level==='Group'?`${lv.length} locations`:'One location';
+  let h=`<section class="head"><p class="eyebrow">${n.level} · <span class="mono">${n.code}</span></p><h1>${n.name}</h1><p class="meta">${sizeTxt} · Sunday Worship, week of ${dates[L]} · data as of 6 Nov 2026</p></section>`;
+
+  /* coverage strip */
+  const unit=isLeaf?'this location has':`${ws.recv} of ${ws.n} locations have`;
+  h+=`<section class="panel" aria-labelledby="covh"><div class="covhead"><div><span class="label" id="covh">Reporting coverage · Sunday Worship, ${dates[L]}</span><br><strong>${isLeaf?(ws.recv?'Report received':'No report received'):`${ws.recv} of ${ws.n} locations have reported`}</strong></div><span class="small">${S.inc?'Totals count approved and pending reports.':'Totals count approved reports only.'}${ws.zero?` ${plural(ws.zero,'location')} reported zero.`:''}</span></div>${covBar(ws)}<div class="legend"><span><i class="d ok"></i>Approved ${ws.appr}</span><span><i class="d half"></i>Pending review ${ws.pend}</span><span><i class="d bad"></i>Returned ${ws.rej}</span><span><i class="d none"></i>Not reported ${ws.miss}</span></div></section>`;
+
+  /* headline cards */
+  const ex=expStats(lv,L,S.inc),exLine=(ex.pct!=null?` · <strong>${ex.pct.toFixed(0)}% of expected</strong>`:'')+(ex.noEst?` · ${ex.noEst} without estimate`:'');
+  const c1=ws.counted===0?`<div class="val txt">No counted report</div><div class="line">${ws.pend?`${ws.pend} awaiting review`:ws.rej?'Returned for correction':'Nothing received yet'}</div>`:`<div class="val">${fmt(ws.sum)}</div><div class="line">${isLeaf?(ws.zero?'Reported zero':'Counted'):`${ws.counted} of ${ws.n} locations counted`}${ws.pend&&!S.inc?` · ${ws.pend} pending`:''}${exLine}</div>`;
+  const periodTxt=`last ${S.period} weeks`;
+  h+=`<section class="cards" aria-label="Headline figures">
+  <div class="card"><div class="top2"><span class="label">Latest Sunday attendance</span><span class="tag">Adds up</span></div>${c1}</div>
+  <div class="card"><div class="top2"><span class="label">Average per reporting location</span><span class="tag">Recomputed</span></div>${cur.avg==null?'<div class="val txt">No counted report</div>':`<div class="val">${fmt(cur.avg)}</div>`}<div class="line">${deltaHTML(cur.avg,prev.avg)} vs previous ${S.period} weeks · ${plural(cur.reports,'report')}</div></div>
+  <div class="card"><div class="top2"><span class="label">Approved offerings, ${periodTxt}</span><span class="tag">Adds up</span></div>${cur.reports?`<div class="val">${naira(cur.off)}</div>`:'<div class="val txt">No counted report</div>'}<div class="line">${cur.reports?`${naira(cur.offAvg)} per report · ${deltaHTML(cur.offAvg,prev.offAvg)}`:'—'}</div></div>
+  <div class="card"><div class="top2"><span class="label">New converts, ${periodTxt}</span><span class="tag">Adds up</span></div>${cur.reports?`<div class="val">${fmt(cur.conv)}</div>`:'<div class="val txt">No counted report</div>'}<div class="line">${cur.reports?`plus ${fmt(cur.newc)} newcomers · from ${plural(cur.reports,'report')}`:'—'}</div></div>
+  <div class="card"><div class="top2"><span class="label">Active workers</span><span class="tag">Snapshot</span></div><div class="val">${fmt(wk.active)}</div><div class="line">${wk.pend} awaiting approval · ${wk.susp} suspended · ${fmt(wk.total)} on the register</div></div>
+  <div class="card"><div class="top2"><span class="label">Workers' meeting attendance</span><span class="tag">Recomputed</span></div>${wk.we?`<div class="val">${(wk.wp/wk.we*100).toFixed(1)}%</div>`:'<div class="val txt">No meetings reported</div>'}<div class="line">${fmt(wk.wp)} present of ${fmt(wk.we)} places · ${plural(wk.meets,'meeting')} reported</div></div>
+  </section>`;
+
+  /* main split */
+  let left='';
+  if(!isLeaf){
+    const rows=n.children.map(c=>{
+      const l2=leavesOf(c),w2=weekStats(l2,L,S.inc),cu=periodStats(l2,cs,ce,S.inc),pr=periodStats(l2,ps,pe,S.inc),wk2=workerStats(l2,cs,ce);
+      return {c,l2,w2,cu,pr,wk2,ex:expStats(l2,L,S.inc),leaf:!c.children.length,dl:cu.avg!=null&&pr.avg?(cu.avg-pr.avg)/pr.avg:0};
+    });
+    if(S.sort==='missing')rows.sort((a,b)=>(b.w2.miss/b.w2.n)-(a.w2.miss/a.w2.n)||b.w2.miss-a.w2.miss);
+    if(S.sort==='decline')rows.sort((a,b)=>a.dl-b.dl);
+    const body=rows.map(r=>{
+      const c=r.c,w2=r.w2;
+      const lw=r.leaf?c.weeks[L]:null;
+      const reportCell=r.leaf?(!lw?'<span class="pill"><i class="d none"></i>Not reported</span>':lw.s==='approved'?'<span class="pill ok"><i class="d ok"></i>Approved</span>':lw.s==='pending'?'<span class="pill warn"><i class="d half"></i>Pending review</span>':'<span class="pill bad"><i class="d bad"></i>Returned</span>'):`${covBar(w2,'sm')}<span class="cell2">${w2.recv}/${w2.n} reported</span>`;
+      const latestCell=r.leaf?(lw&&lw.s!=='rejected'?`<strong class="${lw.s==='pending'?'pendv':''}">${fmt(lw.att)}</strong>${lw.att===0?'<span class="cell2">reported zero</span>':''}`:'<span class="muted">—</span>'):(w2.counted?`<strong>${fmt(w2.sum)}</strong><span class="cell2">${w2.counted}/${w2.n} counted</span>`:'<span class="muted">No counted report</span>');
+      return `<tr class="go" data-go="${c.id}"><td><button type="button" class="link" data-go="${c.id}">${c.name}</button><span class="cell2">${c.code}</span></td><td>${reportCell}</td><td class="r">${latestCell}</td><td class="r">${pctCell(r.ex)}</td><td class="r">${r.cu.avg==null?'<span class="muted">—</span>':fmt(r.cu.avg)}</td><td class="r">${deltaHTML(r.cu.avg,r.pr.avg)}</td><td class="r">${r.cu.reports?naira(r.cu.off):'<span class="muted">—</span>'}</td><td class="r">${r.wk2.active}<span class="cell2">${r.wk2.pend} pending</span></td><td class="r">${r.wk2.we?(r.wk2.wp/r.wk2.we*100).toFixed(0)+'%':'<span class="muted">—</span>'}</td></tr>`;
+    }).join('');
+    const cl=CHILD[n.level];
+    left=`<section class="panel"><div class="tools"><div><h2>${cl}s in ${n.name}</h2><p class="sub" style="margin:0">Select a row to open it. Figures use the period above.</p></div><div class="ctl"><label for="sort">Sort by</label><select id="sort"><option value="name"${S.sort==='name'?' selected':''}>Name</option><option value="missing"${S.sort==='missing'?' selected':''}>Most unreported</option><option value="decline"${S.sort==='decline'?' selected':''}>Biggest decline</option></select></div></div>
+    <div class="scroll"><table><thead><tr><th>${cl}</th><th>Latest Sunday report</th><th class="r">Latest Sunday</th><th class="r">% of expected</th><th class="r">Avg per location</th><th class="r">vs previous</th><th class="r">Offerings</th><th class="r">Active workers</th><th class="r">Workers' meeting</th></tr></thead><tbody>${body}</tbody></table></div></section>`;
+  }else{
+    let body='';
+    for(let i=L;i>=L-7;i--){
+      const w=n.weeks[i],m=n.wm[i];
+      body+=`<tr><td>${dates[i]}</td><td>${stateCell(w)}</td><td class="r">${n.exp!=null&&counted(w,S.inc)?`${(w.att/n.exp*100).toFixed(0)}%`:'<span class="muted">—</span>'}</td><td class="r">${w&&w.s!=='rejected'?naira(w.off):'<span class="muted">—</span>'}</td><td class="r">${w&&w.s!=='rejected'?w.conv:'<span class="muted">—</span>'}</td><td class="r">${w&&w.s!=='rejected'?w.newc:'<span class="muted">—</span>'}</td><td class="r">${m?`${m.p} of ${m.e}`:'<span class="pill"><i class="d none"></i>Not reported</span>'}</td></tr>`;
+    }
+    left=`<section class="panel"><h2>Sunday reports at ${n.name}</h2><p class="sub">The last 8 Sundays. A week with no report says so; it is never shown as zero. Estimated population: ${n.exp==null?'not set':fmt(n.exp)}.</p><div class="scroll"><table><thead><tr><th>Sunday</th><th>Attendance</th><th class="r">% of expected</th><th class="r">Offering</th><th class="r">Converts</th><th class="r">Newcomers</th><th class="r">Workers' meeting</th></tr></thead><tbody>${body}</tbody></table></div></section>`;
+  }
+  const items=attention(n);
+  const attHTML=items.length?`<ul class="att">${items.map(it=>`<li><i class="d ${it.sev===3?'bad':it.sev===2?'half':'none'}" style="margin-top:6px"></i><div>${it.id?`<button type="button" class="t" data-go="${it.id}">${it.t}</button>`:`<span class="t">${it.t}</span>`}<div class="small">${it.s}</div><div class="sv">${it.sev===3?'High':it.sev===2?'Medium':'Low'}</div></div></li>`).join('')}</ul>`:'<p class="sub">Nothing needs attention at this level.</p>';
+  const right=`<div class="stack"><section class="panel"><h2>Needs attention</h2><p class="sub">Ranked by how much is missing or falling.</p>${attHTML}</section>
+  <section class="panel"><h2>Waiting on a decision</h2><p class="sub">Open items in ${n.name}.</p><div class="dec"><div><span>Worker candidates</span><b>${wk.cand}</b></div><div><span>Transfers in progress</span><b>${wk.trans}</b></div><div><span>Removal requests</span><b>${wk.rem}</b></div></div></section></div>`;
+  h+=`<div class="split">${left}${right}</div>`;
+
+  h+=`<section class="panel"><h2>Weekly trend</h2><p class="sub">Average attendance per reporting location, with the share of locations counted beneath it. Sums of unequal coverage would mislead, so the line uses the average.</p>${chartHTML(lv,cs)}</section>`;
+
+  h+=`<details class="assume" open><summary>Assumptions to confirm with church leaders</summary><ol>
+  <li><b>Every location is expected to report Sunday Worship each week.</b> Coverage is measured against this. The real system needs a small reporting-expectations list for it.</li>
+  <li><b>A zero is a valid report.</b> It shows as "Reported 0" and stays separate from "Not reported".</li>
+  <li><b>Pending reports stay out of totals.</b> The switch at the top shows the effect of counting them.</li>
+  <li><b>Returned reports do not count</b> until the usher resubmits.</li>
+  <li><b>Units sort by name, most unreported or biggest decline.</b> There is no attendance league table. Confirm whether leaders want one.</li>
+  <li><b>Names and phone numbers of newcomers and converts show only at Location and Group level.</b> Regions and State see counts.</li><li><b>Percentage of expected uses the church's own estimate for each location.</b> It compares attendance with the estimates of the locations that reported and have an estimate, rebuilt from totals and never averaged across children. Missing reports do not lower it; coverage shows them. Locations without an estimate are left out and counted. Above 100% is allowed. Confirm whether the estimate means expected Sunday attendance or total membership.</li><li><b>Ushers can edit a submitted report for 24 hours, up to 3 times.</b> The Group Pastor approves, and approval locks the report. This is not drawn in the prototype.</li></ol>
+  <div class="rules"><div><b>Adds up</b>Attendance, offerings, converts and newcomers sum from Location to Group to Region to State.</div><div><b>Recomputed</b>Averages and rates are rebuilt from the underlying totals at each level, never averaged across children.</div><div><b>Snapshot</b>Worker counts describe one moment and are not added across weeks.</div></div></details>`;
+
+  $('#main').innerHTML=h;
+}
+
+/* ---------- events: retreat and crusade (sample) ---------- */
+const DAYN=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const RET_PROGS=['Bible Study','Revival Service','Faith Clinic','Seminar'];
+const CRU_PROGS=['Crusade Evening','Leadership Development Meeting','Impact Academy','Global Sunday Service'];
+const SCHED={'Bible Study':[0,1,2,3,4],'Revival Service':[0,1,2,3,4],'Faith Clinic':[0,2,4],'Seminar':[1,3],'Crusade Evening':[0,1,2,3,4],'Leadership Development Meeting':[1],'Impact Academy':[3],'Global Sunday Service':[4]};
+const PF={'Bible Study':.85,'Revival Service':1,'Faith Clinic':.7,'Seminar':.6,'Crusade Evening':.9,'Leadership Development Meeting':.3,'Impact Academy':.28,'Global Sunday Service':1.15};
+const EVENTS=[
+ {id:'easter-2026',kind:'retreat',cycle:'Easter retreat',name:'Easter Retreat 2026',start:[2026,3,2],scale:1,prev:'easter-2025',recent:false},
+ {id:'dec-2025',kind:'retreat',cycle:'December retreat',name:'December Retreat 2025',start:[2025,11,26],scale:1.04,prev:null,recent:false},
+ {id:'easter-2025',kind:'retreat',cycle:'Easter retreat',name:'Easter Retreat 2025',start:[2025,3,17],scale:.93,prev:null,recent:false},
+ {id:'crusade-2026-10',kind:'crusade',cycle:'crusade',name:'Global Crusade, October 2026',start:[2026,9,21],scale:1,prev:'crusade-2026-09',recent:true},
+ {id:'crusade-2026-09',kind:'crusade',cycle:'crusade',name:'Global Crusade, September 2026',start:[2026,8,16],scale:.92,prev:null,recent:false}
+];
+function regionsIn(n){return n.level==='State'?n.children:n.level==='Region'?[n]:[];}
+function evDays(ev){const [y,m,d]=ev.start;return Array.from({length:5},(_,i)=>new Date(y,m,d+i));}
+function dayLbl(dt){return DAYN[dt.getDay()]+' '+dt.getDate()+' '+MON[dt.getMonth()];}
+function stats(items,inc,key){
+  let appr=0,pend=0,rej=0,miss=0,sum=0,n=0;
+  for(const w of items){
+    if(!w){miss++;continue;}
+    if(w.s==='approved')appr++;else if(w.s==='pending')pend++;else rej++;
+    if(counted(w,inc)){sum+=w[key];n++;}
+  }
+  return {appr,pend,rej,miss,sum,n,total:items.length,recv:appr+pend+rej};
+}
+function force(map,id,s,att,conv){const o=map[id];map[id]={s,att:o?o.att:att,conv:o&&o.conv!=null?o.conv:conv};}
+function evData(ev){
+  if(ev._d)return ev._d;
+  const retreat=ev.kind==='retreat',progs=retreat?RET_PROGS:CRU_PROGS;
+  const pPend=ev.recent?.16:.015,pRej=.03;
+  const st=r=>{const q=r();return q<pRej?'rejected':q<pRej+pPend?'pending':'approved';};
+  const d={cells:{}};
+  for(const p of progs)for(const day of SCHED[p]){
+    const key=day+'|'+p,cell={region:{},sat:{},alpha:null};
+    if(retreat){
+      for(const rg of root.children){
+        const r=rng(hash(ev.id+key+rg.id)),rep=Math.min(.97,leavesOf(rg)[0].rep+.08);
+        cell.region[rg.id]=r()<rep?{s:st(r),att:Math.round(leavesOf(rg).length*190*PF[p]*ev.scale*(.9+r()*.2))}:null;
+      }
+    }else{
+      for(const ln of leavesOf(root)){
+        const r=rng(hash(ev.id+key+ln.id));
+        if(r()<Math.min(.95,ln.rep+.03)){
+          const att=Math.round((70+Math.pow((hash(ln.id)%1000)/1000,1.5)*330)*PF[p]*ev.scale*(.88+r()*.24));
+          cell.sat[ln.id]={s:st(r),att,conv:Math.round(att*(.01+r()*.025))};
+        }else cell.sat[ln.id]=null;
+      }
+      const r=rng(hash(ev.id+key+'alpha'));
+      if(r()<.95){const att=Math.round((4200+r()*2600)*PF[p]*ev.scale);cell.alpha={s:st(r),att,conv:Math.round(att*(.012+r()*.02)*(p==='Crusade Evening'?2.4:1))};}
+    }
+    d.cells[key]=cell;
+  }
+  if(ev.id==='easter-2026'){const c=d.cells['1|Bible Study'];c.region.pat=null;force(c.region,'ofa','pending',1900);force(c.region,'omu','rejected',1500);}
+  if(ev.id==='crusade-2026-10'){d.cells['1|Crusade Evening'].alpha={s:'approved',att:5480,conv:131};}
+  ev._d=d;return d;
+}
+function retCell(ev,key,n,inc){
+  const cell=evData(ev).cells[key];
+  return stats(regionsIn(n).map(r=>cell?(cell.region[r.id]||null):null),inc,'att');
+}
+function cruCell(ev,key,n,inc,m){
+  const cell=evData(ev).cells[key],showA=n.level==='State';
+  const sat=stats(leavesOf(n).map(l=>cell?(cell.sat[l.id]||null):null),inc,m);
+  const a=cell?cell.alpha:null,aOK=showA&&!!a&&counted(a,inc);
+  let total=null,label='Satellites in this scope';
+  if(showA){
+    if(aOK&&sat.n){total=a[m]+sat.sum;label='Total participation';}
+    else if(aOK){total=a[m];label='Alpha only';}
+    else if(sat.n){total=sat.sum;label='Satellites only, no Alpha';}
+    else label='Total participation';
+  }else if(sat.n)total=sat.sum;
+  return {sat,alpha:{applicable:showA,rec:a,val:aOK?a[m]:null,state:showA&&a?a.s:null},total,label,held:!!cell&&(sat.recv>0||(showA&&!!a))};
+}
+function retSummary(ev,n,inc){
+  const regs=regionsIn(n),d=evData(ev),seen=new Set();
+  let cellsRep=0,peak=null,sum=0,cnt=0,pend=0,rej=0;
+  for(const key of Object.keys(d.cells)){
+    const items=regs.map(r=>d.cells[key].region[r.id]||null),s=stats(items,inc,'att');
+    pend+=s.pend;rej+=s.rej;sum+=s.sum;cnt+=s.n;
+    regs.forEach((r,i)=>{if(counted(items[i],inc))seen.add(r.id);});
+    if(s.n){cellsRep++;if(!peak||s.sum>peak.v){const [day,prog]=key.split('|');peak={v:s.sum,day:+day,prog};}}
+  }
+  return {regs:regs.length,cellsRep,peak,sum,cnt,avg:cnt?sum/cnt:null,pend,rej,seen:seen.size};
+}
+function cruSummary(ev,n,inc){
+  const d=evData(ev),L2=leavesOf(n).length;
+  let peakT=null,peakS=null,convA=0,convS=0,sumS=0,nS=0,covN=0,covD=0,pend=0,held=0;
+  for(const key of Object.keys(d.cells)){
+    const ca=cruCell(ev,key,n,inc,'att'),cc=cruCell(ev,key,n,inc,'conv'),[day,prog]=key.split('|');
+    if(ca.held){held++;covD+=L2;}
+    covN+=ca.sat.n;sumS+=ca.sat.sum;nS+=ca.sat.n;convS+=cc.sat.sum;
+    if(cc.alpha.val!=null)convA+=cc.alpha.val;
+    pend+=ca.sat.pend+(ca.alpha.state==='pending'?1:0);
+    if(ca.total!=null&&(!peakT||ca.total>peakT.v))peakT={v:ca.total,label:ca.label,day:+day,prog};
+    if(ca.sat.n&&(!peakS||ca.sat.sum>peakS.v))peakS={v:ca.sat.sum,day:+day,prog};
+  }
+  return {peakT,peakS,convA,convS,avg:nS?sumS/nS:null,covN,covD,held,pend,showA:n.level==='State'};
+}
+function pillOnly(w){
+  if(!w)return '<span class="pill"><i class="d none"></i>Not reported</span>';
+  if(w.s==='approved')return '<span class="pill ok"><i class="d ok"></i>Approved</span>';
+  if(w.s==='pending')return '<span class="pill warn"><i class="d half"></i>Pending review</span>';
+  return '<span class="pill bad"><i class="d bad"></i>Returned</span>';
+}
+function renderEvent(n){
+  const kind=S.view,evs=EVENTS.filter(e=>e.kind===kind),ev=EVENTS.find(e=>e.id===S.ev[kind])||evs[0];
+  const m=kind==='crusade'?S.metric:'att',inc=S.inc,days=evDays(ev),progs=kind==='retreat'?RET_PROGS:CRU_PROGS;
+  const prev=ev.prev?EVENTS.find(e=>e.id===ev.prev):null;
+  const card=(l,t,v,line)=>`<div class="card"><div class="top2"><span class="label">${l}</span><span class="tag">${t}</span></div>${v}<div class="line">${line}</div></div>`;
+  const big=v=>`<div class="val">${v}</div>`,none='<div class="val txt">No counted report</div>';
+  const dayTxt=(di,prog)=>`${prog} · Day ${di+1} · ${dayLbl(days[di])}`;
+  let h=`<section class="head"><p class="eyebrow">${kind==='retreat'?'Retreat':'Global Crusade'} · ${n.level} · <span class="mono">${n.code}</span></p><h1>${ev.name}</h1><p class="meta">${dayLbl(days[0])} to ${dayLbl(days[4])} ${days[4].getFullYear()} · ${n.name} · data as of 6 Nov 2026</p></section>`;
+  h+=`<section class="panel"><div class="tools" style="margin:0"><div class="ctl"><label for="evsel">Event</label><select id="evsel">${evs.map(e=>`<option value="${e.id}"${e.id===ev.id?' selected':''}>${e.name}</option>`).join('')}</select></div>${kind==='crusade'?`<div class="seg" role="group" aria-label="Measure"><button type="button" data-metric="att" aria-pressed="${m==='att'}">Attendance</button><button type="button" data-metric="conv" aria-pressed="${m==='conv'}">Converts</button></div>`:''}</div></section>`;
+  const selKey=S.sel[kind],[sd,sp]=selKey.split('|'),di=+sd;
+  const mxHead=`<thead><tr><th>Program</th>${days.map((dt,i)=>`<th>Day ${i+1}<span class="cell2">${dayLbl(dt)}</span></th>`).join('')}</tr></thead>`;
+  const mxBody=cellFn=>`<tbody>${progs.map(p=>`<tr><th scope="row">${p}</th>${days.map((dt,i)=>{const key=i+'|'+p;return `<td><button type="button" class="mc" data-cell="${key}" aria-pressed="${key===selKey}">${cellFn(key)}</button></td>`;}).join('')}</tr>`).join('')}</tbody>`;
+
+  if(kind==='retreat'){
+    if(!regionsIn(n).length){
+      h+=`<section class="panel"><h2>Retreat reports are made by the region</h2><p class="sub">Camp counts are reported at Region level, so there is nothing to show for ${n.name}. The Region Pastor sees the camp figures.</p></section>`;
+      $('#main').innerHTML=h;return;
+    }
+    const cur=retSummary(ev,n,inc),pv=prev?retSummary(prev,n,inc):null;
+    h+=`<section class="cards" aria-label="Retreat figures">`
+      +card('Sessions reported','Adds up',cur.cellsRep?big(cur.cellsRep):none,'Planned sessions are not defined yet')
+      +card('Peak session','Snapshot',cur.peak?big(fmt(cur.peak.v)):none,cur.peak?dayTxt(cur.peak.day,cur.peak.prog):'—')
+      +card('Average per reporting region','Recomputed',cur.avg==null?none:big(fmt(cur.avg)),pv?`${deltaHTML(cur.avg,pv.avg)} vs ${prev.name}`:`No earlier ${ev.cycle} on record`)
+      +card('Regions reporting','Recomputed',big(`${cur.seen} of ${cur.regs}`),'At least one counted session report')
+      +card('Pending review','Snapshot',big(cur.pend),'Not counted until approved')
+      +card('Returned','Snapshot',big(cur.rej),'Waiting for the usher to resubmit')
+      +`</section>`;
+    const rc=key=>{
+      const s=retCell(ev,key,n,inc);
+      if(s.n)return `<strong>${fmt(s.sum)}</strong><span class="cell2">${s.n} of ${s.total} regions${s.pend?' · '+s.pend+' pending':''}${s.rej?' · '+s.rej+' returned':''}</span>`;
+      if(s.recv)return `<span class="muted">No counted report</span><span class="cell2">${s.pend} pending${s.rej?' · '+s.rej+' returned':''}</span>`;
+      return '<span class="muted">No report</span>';
+    };
+    h+=`<section class="panel"><h2>Attendance by program and day</h2><p class="sub">Select a cell to see where its figure comes from. Planned sessions are not defined yet, so an empty cell can mean not held or not reported.</p><div class="scroll"><table class="mx">${mxHead}${mxBody(rc)}</table></div></section>`;
+    const cell=evData(ev).cells[selKey],s=retCell(ev,selKey,n,inc);
+    const rows=regionsIn(n).map(rg=>{
+      const w=cell?(cell.region[rg.id]||null):null,val=w&&w.s!=='rejected'?`<strong class="${w.s==='pending'?'pendv':''}">${fmt(w.att)}</strong>`:'<span class="muted">—</span>';
+      return n.level==='State'
+        ?`<tr class="go" data-go="${rg.id}"><td><button type="button" class="link" data-go="${rg.id}">${rg.name}</button><span class="cell2">${rg.code}</span></td><td>${pillOnly(w)}</td><td class="r">${val}</td></tr>`
+        :`<tr><td><strong>${rg.name}</strong><span class="cell2">Camp report · ${rg.code}</span></td><td>${pillOnly(w)}</td><td class="r">${val}</td></tr>`;
+    }).join('');
+    h+=`<section class="panel"><p class="dtitle">${dayTxt(di,sp)}</p><p class="sub">${s.n?`${fmt(s.sum)} counted from ${s.n} of ${s.total} ${s.total===1?'region':'regions'}.`:'No counted report for this session.'} Open a region to see its own camp report.</p><div class="scroll"><table class="dt"><thead><tr><th>Region</th><th>Camp report</th><th class="r">Attendance</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+    h+=`<details class="assume" open><summary>Assumptions to confirm</summary><ol><li><b>Retreat reports are made at Region level at the camp.</b> One report per region per session. Group and Location views have no retreat figures of their own.</li><li><b>Planned sessions are not defined.</b> The page shows sessions reported, never a missing session. An event could declare its planned sessions later.</li><li><b>Attendance is not added across sessions.</b> The same people attend several sessions, so the page shows the peak session and the average per reporting region.</li><li><b>Compare like with like.</b> Easter with Easter and December with December only.</li><li><b>Pending reports stay out of totals.</b> Use the switch at the top to see the effect.</li></ol></details>`;
+  }else{
+    const cur=cruSummary(ev,n,inc),pv=prev?cruSummary(prev,n,inc):null,cc0=cur.convA+cur.convS;
+    h+=`<section class="cards" aria-label="Crusade figures">`
+      +card('Peak session','Snapshot',cur.peakT?big(fmt(cur.peakT.v)):none,cur.peakT?`${cur.peakT.label} · ${dayTxt(cur.peakT.day,cur.peakT.prog)}`:'—')
+      +card('Peak satellite session','Snapshot',cur.peakS?big(fmt(cur.peakS.v)):none,cur.peakS?dayTxt(cur.peakS.day,cur.peakS.prog):'—')
+      +card('Converts','Adds up',cc0?big(fmt(cc0)):none,cur.showA?`Alpha ${fmt(cur.convA)} · Satellite ${fmt(cur.convS)} · total participation`:'Satellites in this scope. Alpha shows at State level')
+      +card('Satellite coverage','Recomputed',cur.covD?big((cur.covN/cur.covD*100).toFixed(0)+'%'):none,cur.covD?`${cur.covN} of ${cur.covD} location reports across ${cur.held} sessions`:'—')
+      +card('Average per reporting location','Recomputed',cur.avg==null?none:big(fmt(cur.avg)),pv?`${deltaHTML(cur.avg,pv.avg)} vs ${prev.name}`:`No earlier ${ev.cycle} on record`)
+      +card('Pending review','Snapshot',big(cur.pend),'Not counted until approved')
+      +`</section>`;
+    const cf=key=>{
+      const c=cruCell(ev,key,n,inc,m);
+      if(!c.held)return '<span class="muted">No report</span>';
+      const a=c.alpha,sat=c.sat;
+      const aTxt=!a.applicable?'<em>State level</em>':a.val!=null?fmt(a.val):(a.rec?`<em>${a.rec.s==='pending'?'pending':'returned'}</em>`:'<em>no report</em>');
+      return `<span class="ml"><i>Alpha</i><span>${aTxt}</span></span><span class="ml"><i>Satellite</i><span>${sat.n?fmt(sat.sum):'<em>no report</em>'}</span></span><span class="ml tot"><i>${c.label}</i><span>${c.total==null?'<em>none</em>':fmt(c.total)}</span></span><span class="cell2">${sat.n} of ${sat.total} locations${sat.pend?' · '+sat.pend+' pending':''}</span>`;
+    };
+    h+=`<section class="panel"><h2>${m==='att'?'Attendance':'Converts'} by program and day</h2><p class="sub">Alpha is the crusade ground. Satellites are the locations that joined. Total participation is always labelled and never shown as a bare number.</p><div class="scroll"><table class="mx">${mxHead}${mxBody(cf)}</table></div></section>`;
+    const cell=evData(ev).cells[selKey],lbl=m==='att'?'Attendance':'Converts',c0=cruCell(ev,selKey,n,inc,m);
+    let rows='';
+    if(n.level==='State'){const a=cell?cell.alpha:null;rows+=`<tr><td><strong>State crusade ground</strong><span class="cell2">Alpha</span></td><td>${pillOnly(a)}</td><td class="r">${a&&a.s!=='rejected'?fmt(a[m]):'<span class="muted">—</span>'}</td></tr>`;}
+    if(n.children.length){
+      rows+=n.children.map(c=>{
+        const st=stats(leavesOf(c).map(l=>cell?(cell.sat[l.id]||null):null),inc,m);
+        return `<tr class="go" data-go="${c.id}"><td><button type="button" class="link" data-go="${c.id}">${c.name}</button><span class="cell2">Satellites · ${st.recv} of ${st.total} reported</span></td><td>${covBar({...st,n:st.total},'sm')}</td><td class="r">${st.n?fmt(st.sum):'<span class="muted">—</span>'}</td></tr>`;
+      }).join('');
+    }else{
+      const w=cell?(cell.sat[n.id]||null):null;
+      rows+=`<tr><td><strong>${n.name}</strong><span class="cell2">Satellite</span></td><td>${pillOnly(w)}</td><td class="r">${w&&w.s!=='rejected'?fmt(w[m]):'<span class="muted">—</span>'}</td></tr>`;
+    }
+    h+=`<section class="panel"><p class="dtitle">${dayTxt(di,sp)}</p><p class="sub">${c0.total!=null?`${c0.label}: ${fmt(c0.total)}.`:'No counted report for this session.'} ${n.children.length?'Open a row to go one level down.':''}</p><div class="scroll"><table class="dt"><thead><tr><th>Source</th><th>Report</th><th class="r">${lbl}</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+    h+=`<details class="assume" open><summary>Assumptions to confirm</summary><ol><li><b>Alpha is reported at State level</b> by the assigned workers at the crusade ground. Region, Group and Location pastors see their satellites. Confirm whether regional pastors should also see Alpha.</li><li><b>Alpha and satellite sit side by side.</b> Total participation adds them and carries its label. If Alpha is missing the total says so.</li><li><b>Satellite coverage</b> counts every location in scope for each session that has a report. Planned sessions are not defined yet.</li><li><b>Converts add across sessions. Attendance does not.</b> The same people attend several nights, so attendance shows peak and average.</li><li><b>Compare with the previous crusade only.</b></li></ol></details>`;
+  }
+  $('#main').innerHTML=h;
+}
+function navTo(id){
+  if(!nodes[id]||!within(nodes[id],nodes[S.persona]))return;
+  S.scope=id;
+  try{if(location.hash.slice(1)!==id)location.hash=id;}catch(e){}
+  render();
+  try{window.scrollTo({top:0});}catch(e){}
+}
+document.addEventListener('click',e=>{
+  const go=e.target.closest('[data-go]');if(go){navTo(go.dataset.go);return;}
+  const per=e.target.closest('[data-period]');if(per){S.period=+per.dataset.period;render();return;}
+  const vw=e.target.closest('[data-view]');if(vw){S.view=vw.dataset.view;render();return;}
+  const cl=e.target.closest('[data-cell]');if(cl){S.sel[S.view]=cl.dataset.cell;render();return;}
+  const mt=e.target.closest('[data-metric]');if(mt){S.metric=mt.dataset.metric;render();}
+});
+document.addEventListener('change',e=>{
+  const id=e.target.id;
+  if(id==='persona'){S.persona=e.target.value;navTo(S.persona);}
+  else if(id==='inc'){S.inc=e.target.checked;render();}
+  else if(id==='sort'){S.sort=e.target.value;render();const s=$('#sort');if(s)s.focus();}
+  else if(id==='evsel'){S.ev[S.view]=e.target.value;render();const s=$('#evsel');if(s)s.focus();}
+});
+window.addEventListener('hashchange',()=>{
+  const h=location.hash.slice(1);
+  if(nodes[h]&&within(nodes[h],nodes[S.persona])&&h!==S.scope){S.scope=h;render();}
+});
+(function init(){const h=location.hash.slice(1);if(nodes[h])S.scope=h;render();})();
+</script>

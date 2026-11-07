@@ -7,6 +7,8 @@ from fasthtml.common import A, Div, H2, H3, H4, Label, P, Span
 
 from faststrap import Badge, BsTable, BsTBody, BsTCell, BsTHead, BsTRow, Button, Card, EmptyState, Fx, Icon
 
+from ..backend import format_scope_display_id
+
 
 def format_naira(amount: int | float | Decimal) -> str:
     value = Decimal(str(amount or 0))
@@ -59,6 +61,23 @@ def status_badge(label: str) -> Any:
     key = label.lower().replace(" ", "_")
     text = label.replace("_", " ").title()
     return Badge(text, variant=palette.get(key, "secondary"), cls="text-uppercase fw-semibold px-3 py-2")
+
+
+def active_scope_breadcrumb(path: str) -> Any:
+    """Render the selected hierarchy path before the page's scope-specific content."""
+    parts = [part for part in str(path or "").split(".") if part]
+    crumbs = []
+    for index in range(1, len(parts) + 1):
+        current = ".".join(parts[:index])
+        label = format_scope_display_id(current) or current.rsplit(".", 1)[-1]
+        crumbs.append(Span(label, aria_current="location" if index == len(parts) else None))
+        if index < len(parts):
+            crumbs.append(Span("/", aria_hidden="true", cls="text-muted px-1"))
+    return Div(
+        P("Viewing jurisdiction", cls="small text-muted mb-1"),
+        Div(*crumbs, cls="d-flex flex-wrap align-items-center small fw-semibold", aria_label="Active jurisdiction breadcrumb"),
+        cls="active-scope-breadcrumb mb-3",
+    )
 
 
 def priority_badge(label: str) -> Any:

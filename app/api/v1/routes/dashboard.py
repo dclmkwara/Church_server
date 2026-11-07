@@ -4,7 +4,7 @@ from datetime import date, timedelta
 from typing import Any, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import and_, cast, func, select, Integer, DateTime
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +21,7 @@ from app.models.programs import ProgramEvent
 from app.models.user import User, Worker
 from app.services.dashboard_service import DashboardService
 from app.services.statistics_service import StatisticsService
+from app.services.analytics.sunday_worship import SundayWorshipAnalytics
 
 router = APIRouter()
 _DASHBOARD_CACHE_TTL = 20.0
@@ -265,6 +266,7 @@ async def get_dashboard_bootstrap(
     async def _build_payload() -> dict[str, Any]:
         payload: dict[str, Any] = {
             'scope_path': effective_scope,
+            'authorized_scope_path': deps.effective_scope_path(current_user),
             'scope_kind': _scope_kind(effective_scope),
             'population_period': period,
         }
@@ -363,6 +365,60 @@ async def get_dashboard_summary(
 
 
 @router.get(
+    '/sunday-worship',
+    dependencies=[Depends(deps.PermissionChecker('statistics:read'))],
+)
+async def get_sunday_worship_overview(
+    scope_path: Optional[str] = Query(None),
+    occurrence_date: Optional[date] = Query(None),
+    include_pending: bool = Query(False),
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+):
+    """Return date-anchored Sunday Worship population coverage for an allowed scope."""
+    effective_scope = _effective_scope(current_user, scope_path)
+    if occurrence_date is not None and occurrence_date.weekday() != 6:
+        raise HTTPException(status_code=422, detail="occurrence_date must be a Sunday")
+    return await analytics_cache.get_or_set(
+        ('dashboard', 'sunday-worship', effective_scope, occurrence_date, include_pending),
+        lambda: SundayWorshipAnalytics.overview(
+            db,
+            effective_scope,
+            occurrence_date=occurrence_date,
+            include_pending=include_pending,
+        ),
+        ttl=_DASHBOARD_CACHE_TTL,
+    )
+
+
+@router.get(
+    '/sunday-worship/series',
+    dependencies=[Depends(deps.PermissionChecker('statistics:read'))],
+)
+async def get_sunday_worship_series(
+    scope_path: Optional[str] = Query(None),
+    weeks: int = Query(4, ge=4, le=8),
+    latest_date: Optional[date] = Query(None),
+    include_pending: bool = Query(False),
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+):
+    """Return weekly Sunday metrics for the scope and each direct child."""
+    effective_scope = _effective_scope(current_user, scope_path)
+    latest = latest_date or (date.today() - timedelta(days=(date.today().weekday() + 1) % 7))
+    if latest.weekday() != 6:
+        raise HTTPException(status_code=422, detail="latest_date must be a Sunday")
+    occurrence_dates = [latest - timedelta(weeks=index) for index in reversed(range(weeks))]
+    return await analytics_cache.get_or_set(
+        ('dashboard', 'sunday-worship-series', effective_scope, latest, weeks, include_pending),
+        lambda: SundayWorshipAnalytics.series(
+            db, effective_scope, occurrence_dates=occurrence_dates, include_pending=include_pending,
+        ),
+        ttl=_DASHBOARD_CACHE_TTL,
+    )
+
+
+@router.get(
     '/member-analytics',
     dependencies=[Depends(deps.PermissionChecker('statistics:read'))],
 )
@@ -438,6 +494,7 @@ async def get_program_comparison(
 async def get_worker_meeting_comparison(
     scope_path: Optional[str] = Query(None),
     location_id: Optional[str] = Query(None),
+    program_type_slug: Optional[str] = Query(None, min_length=1, max_length=120),
     limit: int = Query(6, ge=1, le=12),
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_user),
@@ -445,11 +502,12 @@ async def get_worker_meeting_comparison(
     effective_scope = _effective_scope(current_user, scope_path)
     effective_location_id = await _resolve_location_id(db, effective_scope, location_id)
     return await analytics_cache.get_or_set(
-        ('dashboard', 'worker_meeting_comparison', effective_scope, effective_location_id, limit),
+        ('dashboard', 'worker_meeting_comparison', effective_scope, effective_location_id, program_type_slug or '', limit),
         lambda: DashboardService.get_worker_meeting_comparison(
             db,
             effective_scope,
             location_id=effective_location_id,
+            program_type_slug=program_type_slug,
             limit=limit,
         ),
         ttl=_DASHBOARD_CACHE_TTL,

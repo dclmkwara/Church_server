@@ -465,8 +465,11 @@ class BackendClient:
     async def create_member(self, access_token: str, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._request("POST", "/members", access_token=access_token, json=payload)
 
-    async def list_locations(self, access_token: str, *, skip: int = 0, limit: int = 500) -> list[dict[str, Any]]:
-        return await self._request("GET", "/locations/", access_token=access_token, params={"skip": skip, "limit": limit})
+    async def list_locations(self, access_token: str, *, scope_path: str | None = None, skip: int = 0, limit: int = 500) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {"skip": skip, "limit": limit}
+        if scope_path:
+            params["scope_path"] = scope_path
+        return await self._request("GET", "/locations/", access_token=access_token, params=params)
 
     async def list_fellowships(
         self,
@@ -716,6 +719,21 @@ class BackendClient:
     async def create_count(self, access_token: str, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._request("POST", "/counts/", access_token=access_token, json=payload)
 
+    async def list_count_review_groups(self, access_token: str) -> list[dict[str, Any]]:
+        return await self._request("GET", "/counts/review/groups", access_token=access_token)
+
+    async def list_unreported_sunday_locations(self, access_token: str, occurrence_date: str) -> list[dict[str, Any]]:
+        return await self._request("GET", "/counts/review/unreported", access_token=access_token, params={"occurrence_date": occurrence_date})
+
+    async def approve_count_group(self, access_token: str, count_id: str) -> dict[str, Any]:
+        return await self._request("POST", f"/counts/review/{count_id}/approve", access_token=access_token)
+
+    async def reject_count_group(self, access_token: str, count_id: str, *, reason: str) -> dict[str, Any]:
+        return await self._request("POST", f"/counts/review/{count_id}/reject", access_token=access_token, json={"reason": reason})
+
+    async def remind_count_location(self, access_token: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return await self._request("POST", "/counts/review/remind", access_token=access_token, json=payload)
+
     async def list_offerings(self, access_token: str, *, scope_path: str | None = None, fund_type: str | None = None, location_id: str | None = None, skip: int = 0, limit: int = 200) -> list[dict[str, Any]]:
         params: dict[str, Any] = {"skip": skip, "limit": limit}
         if scope_path:
@@ -771,8 +789,10 @@ class BackendClient:
     async def create_attendance(self, access_token: str, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._request("POST", "/attendance/", access_token=access_token, json=payload)
 
-    async def get_attendance_stats(self, access_token: str, *, start_date: str | None = None, end_date: str | None = None) -> dict[str, Any]:
+    async def get_attendance_stats(self, access_token: str, *, scope_path: str | None = None, start_date: str | None = None, end_date: str | None = None) -> dict[str, Any]:
         params: dict[str, Any] = {}
+        if scope_path:
+            params["scope_path"] = scope_path
         if start_date:
             params["start_date"] = start_date
         if end_date:
@@ -848,6 +868,39 @@ class BackendClient:
             params["sections"] = sections
         return await self._request("GET", "/dashboard/bootstrap", access_token=access_token, params=params)
 
+    async def get_dashboard_sunday_worship(
+        self,
+        access_token: str,
+        *,
+        scope_path: str | None = None,
+        occurrence_date: str | None = None,
+        include_pending: bool = False,
+    ) -> dict[str, Any]:
+        """Fetch the date-anchored Sunday Worship coverage slice."""
+        params: dict[str, Any] = {"include_pending": include_pending}
+        if scope_path:
+            params["scope_path"] = scope_path
+        if occurrence_date:
+            params["occurrence_date"] = occurrence_date
+        return await self._request("GET", "/dashboard/sunday-worship", access_token=access_token, params=params)
+
+    async def get_dashboard_sunday_worship_series(
+        self,
+        access_token: str,
+        *,
+        scope_path: str | None = None,
+        weeks: int = 4,
+        include_pending: bool = False,
+        latest_date: str | None = None,
+    ) -> dict[str, Any]:
+        """Fetch all selected Sunday occurrences and direct-child rows together."""
+        params: dict[str, Any] = {"weeks": weeks, "include_pending": include_pending}
+        if scope_path:
+            params["scope_path"] = scope_path
+        if latest_date:
+            params["latest_date"] = latest_date
+        return await self._request("GET", "/dashboard/sunday-worship/series", access_token=access_token, params=params)
+
     async def get_dashboard_member_analytics(
         self,
         access_token: str,
@@ -898,6 +951,7 @@ class BackendClient:
         *,
         scope_path: str | None = None,
         location_id: str | None = None,
+        program_type_slug: str | None = None,
         limit: int = 6,
     ) -> dict[str, Any]:
         params: dict[str, Any] = {"limit": limit}
@@ -905,6 +959,8 @@ class BackendClient:
             params["scope_path"] = scope_path
         if location_id:
             params["location_id"] = location_id
+        if program_type_slug:
+            params["program_type_slug"] = program_type_slug
         return await self._request("GET", "/dashboard/worker-meeting-comparison", access_token=access_token, params=params)
 
     async def get_dashboard_newcomer_analytics(
@@ -962,16 +1018,20 @@ class BackendClient:
             params["end_date"] = end_date
         return await self._request("GET", "/reports/timeseries", access_token=access_token, params=params)
 
-    async def get_report_breakdown(self, access_token: str, *, metric: str, level: str, start_date: str | None = None, end_date: str | None = None) -> dict[str, Any]:
+    async def get_report_breakdown(self, access_token: str, *, metric: str, level: str, scope_path: str | None = None, start_date: str | None = None, end_date: str | None = None) -> dict[str, Any]:
         params: dict[str, Any] = {"metric": metric, "level": level}
+        if scope_path:
+            params["scope_path"] = scope_path
         if start_date:
             params["start_date"] = start_date
         if end_date:
             params["end_date"] = end_date
         return await self._request("GET", "/reports/by-level", access_token=access_token, params=params)
 
-    async def get_report_anomalies(self, access_token: str, *, metric: str = "counts", threshold: float = 2.0, days: int = 30, start_date: str | None = None, end_date: str | None = None) -> dict[str, Any]:
+    async def get_report_anomalies(self, access_token: str, *, metric: str = "counts", threshold: float = 2.0, days: int = 30, scope_path: str | None = None, start_date: str | None = None, end_date: str | None = None) -> dict[str, Any]:
         params: dict[str, Any] = {"metric": metric, "threshold": threshold, "days": days}
+        if scope_path:
+            params["scope_path"] = scope_path
         if start_date:
             params["start_date"] = start_date
         if end_date:
@@ -983,8 +1043,10 @@ class BackendClient:
             params=params,
         )
 
-    async def get_report_growth(self, access_token: str, *, metric: str = "counts", period: str = "weekly", months: int = 12, start_date: str | None = None, end_date: str | None = None) -> dict[str, Any]:
+    async def get_report_growth(self, access_token: str, *, metric: str = "counts", period: str = "weekly", months: int = 12, scope_path: str | None = None, start_date: str | None = None, end_date: str | None = None) -> dict[str, Any]:
         params: dict[str, Any] = {"metric": metric, "period": period, "months": months}
+        if scope_path:
+            params["scope_path"] = scope_path
         if start_date:
             params["start_date"] = start_date
         if end_date:

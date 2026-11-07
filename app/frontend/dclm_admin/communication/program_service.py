@@ -15,6 +15,7 @@ from .church_data_service import ChurchDataService
 from .people_service import PeopleService
 from .request_cache import request_cached
 from .ttl_cache import invalidate_ttl_prefix, ttl_cached
+from .active_scope import active_scope_context
 
 
 FALLBACK_PROGRAM_DOMAINS: list[dict[str, Any]] = [
@@ -239,10 +240,8 @@ class ProgramService:
 
     @staticmethod
     async def effective_scope_path(request, ctx) -> str:
-        identity = AuthService.get_identity(request)
-        if identity and identity.scope_path:
-            return identity.scope_path
-        return ctx.current_scope_path
+        scoped = active_scope_context(request, ctx)
+        return str((getattr(scoped, "query_extras", {}) or {}).get("scope_path") or getattr(scoped, "current_scope_path", ""))
 
     @staticmethod
     async def _live_maps(request, ctx) -> tuple[list[dict[str, Any]], dict[int, str], list[dict[str, Any]]]:
@@ -282,10 +281,11 @@ class ProgramService:
     @staticmethod
     async def summary(request, ctx) -> dict[str, int]:
         if await ProgramService.use_mock(request):
+            scope_path = await ProgramService.effective_scope_path(request, ctx)
             domains = await ProgramService.list_domains(request, ctx)
             types = await ProgramService.list_types(request, ctx)
             campaigns = await ProgramService.list_campaigns(request, ctx)
-            events = await ProgramService.list_events(request, ctx)
+            events = STORE.list_program_events(scope_path)
             scheduled = sum(1 for e in events if e.get("status") in ("scheduled", "active", "published"))
             return {
                 "domains": len(domains),
@@ -391,16 +391,18 @@ class ProgramService:
         status: str = "",
         location: str = "",
     ) -> list[dict[str, Any]]:
+        scope_path = await ProgramService.effective_scope_path(request, ctx)
         if await ProgramService.use_mock(request):
             return STORE.list_program_events(
-                ctx.current_scope_path,
+                scope_path,
                 search=search,
                 domain_id=domain_id,
                 type_id=type_id,
                 status=status,
                 location=location,
             )
-        _domains_raw, _domain_lookup, events = await ProgramService._live_maps(request, ctx)
+        scope_ctx = active_scope_context(request, ctx)
+        _domains_raw, _domain_lookup, events = await ProgramService._live_maps(request, scope_ctx)
         rows = events
         if search:
             term = search.lower().strip()
@@ -425,9 +427,10 @@ class ProgramService:
     @staticmethod
     async def domain_counts(request, ctx) -> dict[str, int]:
         if await ProgramService.use_mock(request):
+            scope_path = await ProgramService.effective_scope_path(request, ctx)
             domains = STORE.list_program_domains()
             types = STORE.list_program_types()
-            events = STORE.list_program_events(ctx.current_scope_path)
+            events = STORE.list_program_events(scope_path)
             campaigns = []
         else:
             domains = await ProgramService.list_domains(request, ctx)
@@ -775,16 +778,17 @@ async def _list_program_events_public(
     event_mode: str = "",
     status_value: str = "",
 ) -> list[dict[str, Any]]:
+    scope_path = await ProgramService.effective_scope_path(request, ctx)
     if await ProgramService.use_mock(request):
         return STORE.list_program_events(
-            ctx.current_scope_path,
+            scope_path,
             search=search,
             domain_id=domain_id,
             type_id=type_id,
             status=status or status_value,
             location=location,
         )
-    _domains_raw, domain_lookup, events = await ProgramService._live_maps(request, ctx)
+    _domains_raw, domain_lookup, events = await ProgramService._live_maps(request, active_scope_context(request, ctx))
     rows = events
     if search:
         term = search.lower().strip()

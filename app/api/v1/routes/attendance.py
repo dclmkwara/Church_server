@@ -226,11 +226,12 @@ async def batch_create_attendance(
 async def get_attendance_stats(
     start_date: date = None,
     end_date: date = None,
+    scope_path: str | None = None,
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Return aggregate attendance stats within scope and date range."""
-    scope_path = deps.effective_scope_path(current_user)
+    scope_path = deps.resolve_scope_path(current_user, scope_path)
     from app.models.attendance import WorkerAttendance
     query = select(
         func.count(WorkerAttendance.id).label("count"),

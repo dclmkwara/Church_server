@@ -21,6 +21,7 @@ class CountBase(BaseModel):
     girls: int = Field(0, ge=0)
     note: Optional[str] = None
     client_id: Optional[UUID] = None
+    supersedes_id: Optional[UUID] = None
     source_role: str = Field(default="regular", deprecated=True)
     campaign_code: Optional[str] = Field(None, deprecated=True)
     submission_channel: str = Field(default="admin_web")
@@ -50,6 +51,12 @@ class CountResponse(CountBase):
     program_scope_path: Optional[str] = None
     total: int
     status: str
+    approved_by_id: Optional[UUID] = None
+    approved_at: Optional[datetime] = None
+    auto_accepted: bool = False
+    rejection_reason: Optional[str] = None
+    rejected_by_id: Optional[UUID] = None
+    rejected_at: Optional[datetime] = None
     entered_by_id: UUID
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None

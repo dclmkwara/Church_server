@@ -31,8 +31,9 @@ Example hierarchy:
                         └── Fellowship: F001
 """
 import uuid
+from datetime import date
 
-from sqlalchemy import Column, String, ForeignKey, Float, UniqueConstraint
+from sqlalchemy import Column, String, ForeignKey, Float, UniqueConstraint, Boolean, Date, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from app.db.base import Base
@@ -192,6 +193,11 @@ class Location(Base, TimestampMixin, AuditMixin):
     associate_cord = Column(String, nullable=True)
     latitude = Column(Float, nullable=True)
     longitude = Column(Float, nullable=True)
+
+    # Legacy locations start active; unknown historical opening dates remain null.
+    is_active = Column(Boolean, nullable=False, default=True, server_default=text("true"), index=True)
+    opened_on = Column(Date, nullable=True, default=date.today, server_default=text("CURRENT_DATE"))
+    closed_on = Column(Date, nullable=True)
     
     # Hierarchy
     path = Column(LtreeType, nullable=False, index=True)

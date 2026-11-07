@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 
 from app.frontend.dclm_admin.communication import church_data_service, communication_service, people_service
 from app.frontend.dclm_admin.communication.church_data_service import ChurchDataService
+from app.frontend.dclm_admin.communication.dashboard_service import DashboardService
 from app.frontend.dclm_admin.communication.communication_service import CommunicationService
 from app.frontend.dclm_admin.communication.people_service import PeopleService
 from app.frontend.dclm_admin.communication.program_service import ProgramService
@@ -18,6 +19,70 @@ from app.frontend.dclm_admin.communication.workflow_service import WorkflowServi
 class _FakeRequest:
     def __init__(self):
         self.state = SimpleNamespace()
+
+
+def test_dashboard_attendance_adapter_preserves_decimal_rate_and_zero_report(monkeypatch):
+    monkeypatch.setattr(
+        DashboardService,
+        "_bootstrap_section",
+        AsyncMock(return_value={"expected": 26, "present": 8, "absent": 18, "late": 0, "excused": 0, "rate": 30.8, "opportunities": 26}),
+    )
+
+    result = DashboardService.attendance_summary_section(_FakeRequest(), SimpleNamespace())
+
+    assert result["rate"] == 30.8
+    assert result["present"] == 8
+    assert result["opportunities"] == 26
+
+
+def test_dashboard_attendance_adapter_keeps_no_submission_distinct(monkeypatch):
+    monkeypatch.setattr(
+        DashboardService,
+        "_bootstrap_section",
+        AsyncMock(return_value={"expected": 0, "present": 0, "absent": 0, "late": 0, "excused": 0, "rate": 0, "opportunities": 0}),
+    )
+
+    result = DashboardService.attendance_summary_section(_FakeRequest(), SimpleNamespace())
+
+    assert result["opportunities"] == 0
+    assert result["present"] == 0
+
+
+def test_sunday_worship_dashboard_adapter_forwards_selected_occurrence_date():
+    from app.frontend.dclm_admin.backend.client import BackendClient
+
+    client = BackendClient()
+    client._request = AsyncMock(return_value={"occurrence_date": "2026-10-25"})
+
+    result = asyncio.run(client.get_dashboard_sunday_worship(
+        "token",
+        scope_path="org.234.KW",
+        occurrence_date="2026-10-25",
+    ))
+
+    assert result["occurrence_date"] == "2026-10-25"
+    client._request.assert_awaited_once_with(
+        "GET",
+        "/dashboard/sunday-worship",
+        access_token="token",
+        params={"include_pending": False, "scope_path": "org.234.KW", "occurrence_date": "2026-10-25"},
+    )
+
+
+def test_sunday_worship_series_adapter_uses_one_grouped_endpoint():
+    from app.frontend.dclm_admin.backend.client import BackendClient
+
+    client = BackendClient()
+    client._request = AsyncMock(return_value={"scope": [], "children": []})
+    result = asyncio.run(client.get_dashboard_sunday_worship_series(
+        "token", scope_path="org.234.KW", weeks=8, latest_date="2026-11-01",
+    ))
+
+    assert result == {"scope": [], "children": []}
+    client._request.assert_awaited_once_with(
+        "GET", "/dashboard/sunday-worship/series", access_token="token",
+        params={"weeks": 8, "include_pending": False, "scope_path": "org.234.KW", "latest_date": "2026-11-01"},
+    )
 
 
 def _event_location_maps(monkeypatch):
@@ -429,9 +494,9 @@ def test_report_adapters_bind_each_view_to_the_matching_backend_endpoint(monkeyp
     client.get_report_timeseries.assert_any_await("test-token", metric="counts", scope_path=ctx.current_scope_path, start_date=(date.today() - timedelta(days=90)).isoformat(), end_date=date.today().isoformat())
     client.get_report_timeseries.assert_any_await("test-token", metric="offerings", scope_path=ctx.current_scope_path, start_date=(date.today() - timedelta(days=90)).isoformat(), end_date=date.today().isoformat())
     client.get_report_timeseries.assert_any_await("test-token", metric="attendance", scope_path=ctx.current_scope_path, start_date=(date.today() - timedelta(days=90)).isoformat(), end_date=date.today().isoformat())
-    client.get_report_breakdown.assert_any_await("test-token", metric="counts", level="group", start_date=(date.today() - timedelta(days=90)).isoformat(), end_date=date.today().isoformat())
-    client.get_report_growth.assert_awaited_once_with("test-token", metric="counts", period="weekly", start_date=(date.today() - timedelta(days=90)).isoformat(), end_date=date.today().isoformat())
-    client.get_report_anomalies.assert_awaited_once_with("test-token", metric="counts", start_date=(date.today() - timedelta(days=90)).isoformat(), end_date=date.today().isoformat())
+    client.get_report_breakdown.assert_any_await("test-token", metric="counts", level="group", scope_path=ctx.current_scope_path, start_date=(date.today() - timedelta(days=90)).isoformat(), end_date=date.today().isoformat())
+    client.get_report_growth.assert_awaited_once_with("test-token", metric="counts", period="weekly", scope_path=ctx.current_scope_path, start_date=(date.today() - timedelta(days=90)).isoformat(), end_date=date.today().isoformat())
+    client.get_report_anomalies.assert_awaited_once_with("test-token", metric="counts", scope_path=ctx.current_scope_path, start_date=(date.today() - timedelta(days=90)).isoformat(), end_date=date.today().isoformat())
     client.refresh_reports.assert_awaited_once_with("test-token")
     client.export_report_csv.assert_awaited_once()
 
@@ -460,9 +525,9 @@ def test_count_overview_groups_complementary_usher_rows_for_one_service(monkeypa
     rendered = asyncio.run(_counts_table(_FakeRequest(), ctx))
     markup = to_xml(rendered)
 
-    assert "Combined Total" in markup
+    assert "Approved total" in markup
     assert "75" in markup
-    assert "2 usher section(s)" in markup
+    assert "2 submission(s)" in markup
     assert "North aisle" in markup
     assert "South aisle" in markup
     assert len(rows) == 2

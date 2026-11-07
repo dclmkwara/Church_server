@@ -3,17 +3,19 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from fasthtml.common import Div, Form, H2, H4, P, Span
-from faststrap import Button, PlaceholderCard, Select as FsSelect, Spinner, ToggleGroup
+from fasthtml.common import Div, Form, H2, H4, Input, Label, Link, P, Script, Span, Title
+from faststrap import Badge, Button, PlaceholderCard, Select as FsSelect, Spinner, ToggleGroup
 from starlette.requests import Request
 
 from ..auth_context import build_context
 from ..communication.dashboard_service import DashboardService
+from ..communication.active_scope import active_scope_context
 from ..components.chartjs import bar_chart as _bar_chart
 from ..components.chartjs import donut_chart as _donut_chart
 from ..components.chartjs import sparkline_chart as _sparkline
 from ..components.shell import primary_button, shell_layout
 from ..components.ui import activity_feed, empty_state, page_stack, quick_actions, section_card, stat_card
+from .analytics_dashboard import render_analytics_dashboard
 
 PANEL_COPY = {
     "congregation": (
@@ -21,8 +23,8 @@ PANEL_COPY = {
         "Directory totals and member mix.",
     ),
     "population": (
-        "Attendance mix",
-        "Average attendance per dated program occurrence in the selected reporting period.",
+        "Sunday Worship population",
+        "Latest Sunday occurrence, with received, pending, late, missing, and combined coverage shown separately.",
     ),
     "workers": (
         "Workers and attendance",
@@ -63,7 +65,7 @@ PROFILE_SECTIONS = {
 
 SECTION_BOOTSTRAP_KEYS = {
     "congregation": ("summary", "member_analytics"),
-    "population": ("summary", "population_statistics"),
+    "population": ("summary",),
     "workers": ("worker_analytics", "attendance_summary"),
     "newcomers": ("newcomer_analytics",),
     "programs": ("program_comparison",),
@@ -114,6 +116,18 @@ def _safe_float(value: Any) -> float:
         return float(value or 0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _sunday_population_label(payload: dict[str, Any]) -> str:
+    """Keep unavailable, absent, and explicitly reported zero values distinct."""
+    if payload.get("error") or payload.get("unavailable"):
+        return "Unavailable"
+    if _safe_int(payload.get("n_expected")) == 0:
+        return "No locations"
+    total = payload.get("total")
+    if total is None:
+        return "No counted report"
+    return "Reported 0" if _safe_int(total) == 0 else f"{_safe_int(total):,}"
 
 
 def _trend_label(points: list[tuple[str, int]]) -> str:
@@ -339,11 +353,7 @@ async def _section_snapshot(request: Request, ctx, section_key: str) -> dict[str
         )
         return {"summary": summary, "member_mix": member_mix}
     if section_key == "population":
-        summary, population_mix = await asyncio.gather(
-            DashboardService.summary_metrics(request, ctx),
-            DashboardService.population_mix(request, ctx),
-        )
-        return {"summary": summary, "population_mix": population_mix}
+        return {"sunday_worship": await DashboardService.sunday_worship_overview(request, ctx)}
     if section_key == "workers":
         worker_mix, attendance_summary = await asyncio.gather(
             DashboardService.worker_mix(request, ctx),
@@ -408,44 +418,96 @@ async def _congregation_panel(snapshot: dict[str, Any], *, view: str) -> Any:
 
 
 async def _population_panel(snapshot: dict[str, Any], *, view: str) -> Any:
-    population_mix = snapshot["population_mix"]
-    if view == "summary":
-        return _mix_rows(
-            [
-                ("Average attendance", str(_safe_int(population_mix.get("total"))), "Location counts with matching program metadata and date are combined before averaging."),
-                ("Men to women", f"{population_mix.get('percentage_men', 0)}% / {population_mix.get('percentage_women', 0)}%", "Recorded attendance mix across count records."),
-                ("Adults to youths to children", f"{population_mix.get('percentage_adults', 0)}% / {population_mix.get('percentage_youths', 0)}% / {population_mix.get('percentage_children', 0)}%", "Age-group balance in service attendance."),
-            ]
-        )
+    """Render the B1 Sunday-only population metrics and their distinct states."""
+    result = snapshot.get("sunday_worship") or {}
+    if result.get("error") or result.get("unavailable"):
+        message = result.get("message") or result.get("error") or "The report could not be loaded."
+        return empty_state("exclamation-circle", "Sunday Worship data unavailable", message)
+    expected = _safe_int(result.get("n_expected"))
+    received = _safe_int(result.get("n_received"))
+    counted = _safe_int(result.get("n_counted"))
+    total = result.get("total")
+    occurrence = str(result.get("occurrence_date") or "Date unavailable")
+    if expected == 0:
+        return empty_state("geo-alt", "No active locations in this scope", "No location is currently expected to report Sunday Worship here.")
+    if total is None:
+        total_label = "No counted report"
+        total_note = "No approved Sunday count is available for this occurrence. Pending reports are excluded by default."
+    elif _safe_int(total) == 0:
+        total_label = "Reported 0"
+        total_note = "A received, counted report explicitly recorded zero people."
+    else:
+        total_label = f"{_safe_int(total):,}"
+        total_note = "Approved location reports; a combined report is counted once at its reporting scope."
 
-    gender_rows = _service_gender_rows(population_mix)
-    age_rows = _service_age_rows(population_mix)
-    total_label = str(_safe_int(population_mix.get("total")))
-    return _chart_grid(
-        _chart_tile(
-            "Service gender mix",
-            _donut_chart(gender_rows, label="Service population gender mix", total_label="Attendance"),
-            _chart_legend(gender_rows),
-            f"Average attendance is {total_label} people per dated program occurrence.",
+    coverage = result.get("coverage") or {}
+    state_labels = (
+        ("approved", "Approved", "success"),
+        ("pending", "Pending review", "warning"),
+        ("returned", "Returned", "danger"),
+        ("awaiting", "Awaiting", "info"),
+        ("late", "Late", "warning"),
+        ("missing", "Missing", "secondary"),
+        ("combined", "Covered by combined meeting", "primary"),
+        ("superseded", "Local report superseded", "secondary"),
+    )
+    badges = [
+        Badge(f"{label}: {_safe_int(coverage.get(key))}", variant=tone, cls="border")
+        for key, label, tone in state_labels
+        if _safe_int(coverage.get(key)) > 0
+    ]
+    metric_cards = Div(
+        stat_card("Counted population", total_label, total_note, "people", tone="primary"),
+        stat_card("Locations received", f"{received} / {expected}", f"{counted} location units currently included in the total.", "geo-alt", tone="success"),
+        stat_card("Occurrence date", occurrence, "Latest Sunday Worship occurrence in Africa/Lagos time.", "calendar-event", tone="info"),
+        cls="metrics-grid",
+    )
+    state_strip = Div(
+        P("Coverage states", cls="small fw-semibold text-body-emphasis mb-2"),
+        Div(*badges, cls="d-flex flex-wrap gap-2") if badges else P("No report states to display.", cls="small text-muted mb-0"),
+        P("Combined is a scope marker. Superseded local reports are excluded from totals.", cls="small text-muted mt-2 mb-0"),
+        cls="coverage-state-strip p-3 border rounded-3 bg-body-tertiary",
+    )
+    if view == "summary" or total is None or _safe_int(total) == 0:
+        return Div(metric_cards, state_strip, cls="d-grid gap-3")
+
+    categories = result.get("categories") or {}
+    gender_rows = _service_gender_rows(categories)
+    age_rows = _service_age_rows(categories)
+    return Div(
+        metric_cards,
+        state_strip,
+        _chart_grid(
+            _chart_tile(
+                "Sunday Worship by gender",
+                _donut_chart(gender_rows, label="Sunday Worship population by gender", total_label="People"),
+                _chart_legend(gender_rows),
+                "Shown only when a counted report exists and the total is nonzero.",
+            ),
+            _chart_tile(
+                "Sunday Worship by age group",
+                _bar_chart(age_rows, label="Sunday Worship population by age group"),
+                _chart_legend(age_rows),
+                "Adult, youth, and children categories from counted Sunday Worship reports.",
+            ),
         ),
-        _chart_tile(
-            "Age-group turnout",
-            _bar_chart(age_rows, label="Service age-group turnout"),
-            _chart_legend(age_rows),
-            "Age-group turnout from recorded service counts.",
-        ),
+        cls="d-grid gap-3",
     )
 
 
 async def _workers_panel(snapshot: dict[str, Any], *, view: str) -> Any:
     worker_mix = snapshot["worker_mix"]
     attendance_summary = snapshot["attendance_summary"]
+    attendance_received = _safe_int(attendance_summary.get("opportunities")) > 0
+    attendance_rate = f"{attendance_summary.get('rate', 0)}%" if attendance_received else "No submission"
+    present_label = str(attendance_summary.get("present", 0)) if attendance_received else "—"
+    late_label = str(attendance_summary.get("late", 0)) if attendance_received else "—"
     if view == "summary":
         return _mix_rows(
             [
                 ("Total workers", str(worker_mix["total"]), f"{worker_mix['active']} active and {worker_mix['inactive']} not currently active."),
                 ("Male to female", f"{worker_mix['male']} / {worker_mix['female']}", f"{worker_mix['male_ratio']}% male and {worker_mix['female_ratio']}% female."),
-                ("Attendance health", f"{attendance_summary.get('present', 0)} present / {attendance_summary.get('late', 0)} late", f"{attendance_summary.get('rate', 0)}% attendance rate."),
+                ("Attendance health", f"{present_label} present / {late_label} late", f"{attendance_rate} attendance rate."),
             ]
         )
 
@@ -454,10 +516,10 @@ async def _workers_panel(snapshot: dict[str, Any], *, view: str) -> Any:
         {"label": "Female workers", "value": worker_mix["female"], "display": f"{worker_mix['female']} ({_format_percent(worker_mix['female_ratio'])})", "color": CHART_PALETTE["success"]},
     ]
     attendance_rows = [
-        {"label": "Present", "value": attendance_summary.get("present", 0), "display": str(attendance_summary.get("present", 0)), "color": CHART_PALETTE["success"]},
-        {"label": "Late", "value": attendance_summary.get("late", 0), "display": str(attendance_summary.get("late", 0)), "color": CHART_PALETTE["warning"]},
-        {"label": "Absent", "value": attendance_summary.get("absent", 0), "display": str(attendance_summary.get("absent", 0)), "color": CHART_PALETTE["danger"]},
-        {"label": "Excused", "value": attendance_summary.get("excused", 0), "display": str(attendance_summary.get("excused", 0)), "color": CHART_PALETTE["purple"]},
+        {"label": "Present", "value": attendance_summary.get("present", 0) if attendance_received else 0, "display": str(attendance_summary.get("present", 0)) if attendance_received else "No submission", "color": CHART_PALETTE["success"]},
+        {"label": "Late", "value": attendance_summary.get("late", 0) if attendance_received else 0, "display": str(attendance_summary.get("late", 0)) if attendance_received else "No submission", "color": CHART_PALETTE["warning"]},
+        {"label": "Absent", "value": attendance_summary.get("absent", 0) if attendance_received else 0, "display": str(attendance_summary.get("absent", 0)) if attendance_received else "No submission", "color": CHART_PALETTE["danger"]},
+        {"label": "Excused", "value": attendance_summary.get("excused", 0) if attendance_received else 0, "display": str(attendance_summary.get("excused", 0)) if attendance_received else "No submission", "color": CHART_PALETTE["purple"]},
     ]
     return _chart_grid(
         _chart_tile(
@@ -470,7 +532,7 @@ async def _workers_panel(snapshot: dict[str, Any], *, view: str) -> Any:
             "Worker meeting posture",
             _bar_chart(attendance_rows, label="Worker attendance posture"),
             _chart_legend(attendance_rows),
-            f"Worker attendance rate: {attendance_summary.get('rate', 0)}%.",
+            f"Worker attendance rate: {attendance_rate}.",
         ),
     )
 
@@ -795,8 +857,7 @@ async def _autoload_section_snapshot(request: Request, ctx, section_key: str, *,
         member_mix = await DashboardService.member_mix(request, ctx)
         return {"summary": summary, "member_mix": member_mix}
     if section_key == "population":
-        population_mix = await DashboardService.population_mix(request, ctx)
-        return {"summary": summary, "population_mix": population_mix}
+        return {"sunday_worship": await DashboardService.sunday_worship_overview(request, ctx)}
     if section_key == "workers":
         worker_mix, attendance_summary = await asyncio.gather(
             DashboardService.worker_mix(request, ctx),
@@ -874,14 +935,23 @@ def _section_grid(ctx, profile: str) -> list[Any]:
     return blocks
 
 
-async def _section_grid_with_priority_content(request: Request, ctx, profile: str, *, summary: dict[str, Any]) -> list[Any]:
+async def _section_grid_with_priority_content(
+    request: Request,
+    ctx,
+    profile: str,
+    *,
+    summary: dict[str, Any],
+    sunday_worship: dict[str, Any],
+) -> list[Any]:
     config = PROFILE_SECTIONS[profile]
     ordered_sections = list(config["autoload"]) + list(config["deferred"])
+    async def load_section(section_key: str) -> dict[str, Any]:
+        if section_key == "population":
+            return {"sunday_worship": sunday_worship}
+        return await _autoload_section_snapshot(request, ctx, section_key, summary=summary)
+
     autoload_snapshots = await asyncio.gather(
-        *[
-            _autoload_section_snapshot(request, ctx, section_key, summary=summary)
-            for section_key in config["autoload"]
-        ]
+        *[load_section(section_key) for section_key in config["autoload"]]
     )
     autoload_map = dict(zip(config["autoload"], autoload_snapshots))
 
@@ -937,18 +1007,25 @@ def _dashboard_loading_content(ctx) -> Any:
 
 
 async def _dashboard_content(request: Request, ctx) -> Any:
+    ctx = active_scope_context(request, ctx)
     profile = _dashboard_profile(ctx)
     DashboardService.configure_bootstrap_sections(request, _bootstrap_keys_for_profile(profile))
     summary = (await _summary_snapshot(request, ctx))["summary"]
+    sunday_worship = await DashboardService.sunday_worship_overview(request, ctx)
     payload = await DashboardService.bootstrap_payload(request, ctx) or {}
-    current_scope = str(payload.get("scope_path") or await DashboardService.scope_path(request, ctx))
+    current_scope = await DashboardService.scope_path(request, ctx)
+    authorized_scope = str(payload.get("authorized_scope_path") or ctx.query_extras.get("home_path") or ctx.profile.root_path or current_scope)
+    normalize = lambda value: ".".join(part.strip().lower() for part in str(value or "").split(".") if part.strip())
+    if current_scope != authorized_scope and not normalize(current_scope).startswith(f"{normalize(authorized_scope)}."):
+        authorized_scope = current_scope
     selected_scope_values = request.query_params.getlist("scope_path")
     selected_scope = str((selected_scope_values[-1] if selected_scope_values else None) or current_scope)
     children = payload.get("scope_children") if isinstance(payload.get("scope_children"), list) else []
     period = str(request.query_params.get("period") or "recent")
     if period not in {"recent", "month", "quarter", "year"}:
         period = "recent"
-    scope_options = [(current_scope, f"Current level ({current_scope.split('.')[-1]})", selected_scope == current_scope)]
+    scope_options = [(authorized_scope, f"Your maximum scope ({authorized_scope.split('.')[-1]})", selected_scope == authorized_scope)]
+    scope_options.append((current_scope, f"Selected level ({current_scope.split('.')[-1]})", selected_scope == current_scope)) if current_scope != authorized_scope else None
     scope_options.extend(
         (str(row.get("path") or ""), f"{row.get('name') or row.get('code') or 'Child scope'} ({row.get('code') or ''})", selected_scope == row.get("path"))
         for row in children if row.get("path")
@@ -957,22 +1034,41 @@ async def _dashboard_content(request: Request, ctx) -> Any:
         ("recent", "Last 30 days"), ("month", "This month"), ("quarter", "This quarter"), ("year", "This year")
     )]
     dashboard_filters = Form(
+        Input(type="hidden", name="profile", value=ctx.profile.key),
         FsSelect("scope_path", *scope_options, label="Dashboard level", cls="mb-0"),
         FsSelect("period", *period_options, label="Population reporting period", cls="mb-0"),
-        P("The level selector shows this jurisdiction and its direct children. The period applies to the population average and child comparison.", cls="small text-muted mb-0"),
-        hx_get=ctx.url_for("/dashboard/content"),
-        hx_trigger="change",
-        hx_target="#dashboard-content",
-        hx_swap="innerHTML",
+        Label(
+            Input(
+                type="checkbox",
+                name="include_pending",
+                value="true",
+                checked=str(ctx.query_extras.get("include_pending") or "").lower() == "true",
+                cls="form-check-input me-2",
+                id="include-pending-counts",
+            ),
+            "Include pending counts",
+            fr="include-pending-counts",
+            cls="form-check-label small text-muted",
+        ),
+        P("The level selector shows this jurisdiction and its direct children. Sunday Worship always shows the latest occurrence; the period filter applies to other summaries.", cls="small text-muted mb-0"),
+        Button("Apply view", type="submit", variant="primary", size="sm", cls="justify-self-start"),
+        action="/dashboard",
+        method="get",
         cls="dashboard-filter-bar d-grid gap-3 mb-3",
     )
 
     if profile == "local":
+        sunday_value = _sunday_population_label(sunday_worship)
+        sunday_note = (
+            f"{_safe_int(sunday_worship.get('n_received'))} of {_safe_int(sunday_worship.get('n_expected'))} locations received; {sunday_worship.get('occurrence_date') or 'date unavailable'}."
+            if not sunday_worship.get("error") and not sunday_worship.get("unavailable")
+            else "Latest Sunday Worship population report."
+        )
         metrics = [
             stat_card("Members", str(summary["members_total"]), "People listed in this branch.", "person-vcard", tone="primary"),
             stat_card("Workers", str(summary["workers_total"]), "Workers serving in this branch.", "people", tone="success"),
             stat_card("Newcomers", str(summary["newcomers_total"]), "Recent newcomer and convert records.", "person-hearts", tone="warning"),
-            stat_card("Latest count", str(summary["latest_total"]), "Most recent attendance record.", "bar-chart", tone="info"),
+            stat_card("Sunday Worship population", sunday_value, sunday_note, "bar-chart", tone="info"),
         ]
     elif profile == "state":
         metrics = [
@@ -980,6 +1076,13 @@ async def _dashboard_content(request: Request, ctx) -> Any:
             stat_card("Workers", str(summary["workers_total"]), "Workers serving across this level.", "people", tone="success"),
             stat_card("Pending reviews", str(summary["pending_items"]), "Requests waiting for review.", "inbox", tone="warning"),
             stat_card("Reporting branches", str(summary["locations_reporting"]), "Reporting branches.", "geo-alt", tone="info"),
+            stat_card(
+                "Sunday Worship population",
+                _sunday_population_label(sunday_worship),
+                f"{_safe_int(sunday_worship.get('n_received'))} of {_safe_int(sunday_worship.get('n_expected'))} locations received; {sunday_worship.get('occurrence_date') or 'date unavailable'}.",
+                "bar-chart",
+                tone="primary",
+            ),
         ]
     else:
         metrics = [
@@ -1004,7 +1107,9 @@ async def _dashboard_content(request: Request, ctx) -> Any:
         },
     ]
 
-    section_blocks = await _section_grid_with_priority_content(request, ctx, profile, summary=summary)
+    section_blocks = await _section_grid_with_priority_content(
+        request, ctx, profile, summary=summary, sunday_worship=sunday_worship
+    )
 
     return page_stack(
         _dashboard_intro(),
@@ -1018,26 +1123,30 @@ async def _dashboard_content(request: Request, ctx) -> Any:
 def register_dashboard_routes(app) -> None:
     @app.get("/dashboard")
     async def dashboard(request: Request):
-        ctx = build_context(request)
-        return shell_layout(
-            ctx,
-            request_path=request.url.path,
-            active_key="dashboard",
-            title="",
-            subtitle="",
-            primary_action=primary_button("Inbox", href=ctx.url_for("/inbox")),
-            content=_dashboard_loading_content(ctx),
-            show_shell_intro=False,
+        ctx = active_scope_context(request, build_context(request))
+        return (
+            *shell_layout(
+                ctx,
+                request_path=request.url.path,
+                active_key="dashboard",
+                title="Analytics Dashboard",
+                subtitle="",
+                primary_action=None,
+                content=await render_analytics_dashboard(request, ctx),
+                show_shell_intro=False,
+            ),
+            # Keep this analytics surface in the established light DCLM palette.
+            Script("document.documentElement.setAttribute('data-bs-theme','light');"),
         )
 
     @app.get("/dashboard/content")
     async def dashboard_content(request: Request):
-        ctx = build_context(request)
-        return await _dashboard_content(request, ctx)
+        ctx = active_scope_context(request, build_context(request))
+        return await render_analytics_dashboard(request, ctx)
 
     @app.get("/dashboard/sections/{section_key}")
     async def dashboard_section(request: Request, section_key: str, view: str = "chart"):
-        ctx = build_context(request)
+        ctx = active_scope_context(request, build_context(request))
         if section_key not in PANEL_COPY:
             return empty_state("x-circle", "Unknown dashboard section", "This dashboard section is not available.")
         DashboardService.configure_bootstrap_sections(request, SECTION_BOOTSTRAP_KEYS.get(section_key, ("summary",)))

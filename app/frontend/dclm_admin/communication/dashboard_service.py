@@ -15,6 +15,7 @@ from .report_service import ReportService
 from .request_cache import request_cached
 from .ttl_cache import ttl_cached
 from .workflow_service import WorkflowService
+from .active_scope import active_scope_context
 
 FULL_BOOTSTRAP_SECTIONS = (
     "summary",
@@ -44,6 +45,13 @@ def _safe_int(value: Any) -> int:
         return int(value or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _safe_float(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _age_group_from_dob(value: Any) -> str:
@@ -114,15 +122,8 @@ class DashboardService:
 
     @staticmethod
     async def scope_path(request, ctx) -> str:
-        query_params = getattr(request, "query_params", {})
-        values = query_params.getlist("scope_path") if hasattr(query_params, "getlist") else []
-        requested = str((values[-1] if values else query_params.get("scope_path")) or "").strip()
-        if requested:
-            return requested
-        identity = AuthService.get_identity(request)
-        if identity and identity.scope_path:
-            return identity.scope_path
-        return ctx.current_scope_path
+        scoped = active_scope_context(request, ctx)
+        return str((getattr(scoped, "query_extras", {}) or {}).get("scope_path") or getattr(scoped, "current_scope_path", ""))
 
     @staticmethod
     async def scope_display_id(request, ctx) -> str:
@@ -209,7 +210,7 @@ class DashboardService:
         if ctx.current_scope_kind != "location":
             return None
 
-        cache_key = ("live_location_id", ctx.current_scope_path)
+        cache_key = ("live_location_id", await DashboardService.scope_path(request, ctx))
         state = getattr(request, "state", None)
         if state is not None:
             bucket = getattr(state, "_dclm_request_cache", None)
@@ -230,17 +231,18 @@ class DashboardService:
     @staticmethod
     async def _dashboard_snapshot(request, ctx) -> list[dict[str, Any]]:
         if await DashboardService.use_mock(request):
-            return STORE.list_church_members(ctx.current_scope_path)
+            return STORE.list_church_members(await DashboardService.scope_path(request, ctx))
         try:
             client = async_client(get_api_client())
             access_token = AuthService.get_access_token(request)
             rows = await client.list_members(access_token, scope_path=await DashboardService.scope_path(request, ctx))
             return [_normalize_member(row) for row in rows]
         except BackendClientError:
-            return STORE.list_church_members(ctx.current_scope_path)
+            return STORE.list_church_members(await DashboardService.scope_path(request, ctx))
 
     @staticmethod
     async def church_stats(request, ctx) -> dict[str, Any]:
+        ctx = active_scope_context(request, ctx)
         payload = await DashboardService._bootstrap_section(request, ctx, "summary")
         if payload:
             pending_items = payload.get("pending_items")
@@ -604,6 +606,24 @@ class DashboardService:
         return ranked[:limit]
 
     @staticmethod
+    async def meeting_program_metrics(request, ctx, *, program_type_slug: str) -> dict[str, Any]:
+        """Return records for one meeting type, keeping its page independent."""
+        if not await DashboardService.live_enabled(request):
+            return {"ranking": [], "monthly_trend": [], "unavailable": True}
+        try:
+            client = async_client(get_api_client())
+            access_token = AuthService.get_access_token(request)
+            return await client.get_dashboard_worker_meeting_comparison(
+                access_token,
+                scope_path=await DashboardService.scope_path(request, ctx),
+                location_id=await DashboardService.live_location_id(request, ctx),
+                program_type_slug=program_type_slug,
+                limit=1,
+            )
+        except BackendClientError as exc:
+            return {"ranking": [], "monthly_trend": [], "error": str(exc)}
+
+    @staticmethod
     async def attendance_analytics(request, ctx) -> dict[str, Any]:
         payload = await DashboardService._bootstrap_section(request, ctx, "newcomer_analytics")
         if payload:
@@ -661,8 +681,9 @@ class DashboardService:
 
     @staticmethod
     async def summary(request, ctx) -> list[dict[str, str]]:
+        scope_path = await DashboardService.scope_path(request, ctx)
         if await DashboardService.use_mock(request):
-            return STORE.recent_activity(ctx.current_scope_path)
+            return STORE.recent_activity(scope_path)
         inbox = (await WorkflowService.list_inbox(request, ctx))[:6]
         tone_map = {
             "high": "danger",
@@ -682,6 +703,8 @@ class DashboardService:
 
     @staticmethod
     async def scope_snapshot(request, ctx) -> list[dict[str, Any]]:
+        scope_path = await DashboardService.scope_path(request, ctx)
+        ctx = active_scope_context(request, ctx)
         payload = await DashboardService._bootstrap_rows(request, ctx, "scope_snapshot")
         if payload is not None:
             rows = []
@@ -701,7 +724,7 @@ class DashboardService:
         if await DashboardService.use_mock(request):
             group_by = "location" if ctx.level <= 2 else ("group" if ctx.level == 3 else ("region" if ctx.level == 4 else "state"))
             rows = []
-            for row in STORE.scope_breakdown(ctx.current_scope_path, group_by=group_by)[:5]:
+            for row in STORE.scope_breakdown(scope_path, group_by=group_by)[:5]:
                 rows.append(
                     {
                         "label": row["label"],
@@ -746,12 +769,13 @@ class DashboardService:
 
     @staticmethod
     async def church_statistics_section(request, ctx) -> dict[str, Any]:
+        scope_path = await DashboardService.scope_path(request, ctx)
         payload = await DashboardService._bootstrap_section(request, ctx, "church_statistics")
         if payload:
             return payload
         if not await DashboardService.live_enabled(request):
             return {
-                "total_locations": len(STORE.visible_locations(ctx.current_scope_path)),
+                "total_locations": len(STORE.visible_locations(scope_path)),
                 "total_groups": 0,
                 "total_regions": 0,
                 "total": (await ChurchDataService.count_summary(request, ctx))["latest_total"],
@@ -765,11 +789,12 @@ class DashboardService:
 
     @staticmethod
     async def user_statistics_section(request, ctx) -> dict[str, Any]:
+        scope_path = await DashboardService.scope_path(request, ctx)
         payload = await DashboardService._bootstrap_section(request, ctx, "user_statistics")
         if payload:
             return payload
         if not await DashboardService.live_enabled(request):
-            users = STORE.list_users(ctx.current_scope_path)
+            users = STORE.list_users(scope_path)
             active = sum(1 for row in users if row.get("status") == "active")
             return {
                 "active_user": active,
@@ -793,9 +818,47 @@ class DashboardService:
                 "absent": _safe_int(payload.get("absent")),
                 "late": _safe_int(payload.get("late")),
                 "excused": _safe_int(payload.get("excused")),
-                "rate": _safe_int(payload.get("rate")),
+                "rate": _safe_float(payload.get("rate")),
+                "opportunities": _safe_int(payload.get("opportunities")),
             }
         return await ReportService.attendance_summary(request, ctx)
+
+    @staticmethod
+    async def sunday_worship_overview(request, ctx, *, occurrence_date: str | None = None, scope_path: str | None = None) -> dict[str, Any]:
+        """Fetch the live Sunday Worship metric without fabricating demo results."""
+        if not await DashboardService.live_enabled(request):
+            return {"unavailable": True, "message": "Sunday Worship reporting requires the live backend."}
+        try:
+            client = async_client(get_api_client())
+            access_token = AuthService.get_access_token(request)
+            extras = getattr(ctx, "query_extras", {}) or {}
+            return await client.get_dashboard_sunday_worship(
+                access_token,
+                scope_path=scope_path or await DashboardService.scope_path(request, ctx),
+                occurrence_date=occurrence_date,
+                include_pending=str(extras.get("include_pending") or "").lower() == "true",
+            )
+        except BackendClientError as exc:
+            return {"error": str(exc)}
+
+    @staticmethod
+    async def sunday_worship_series(request, ctx, *, weeks: int = 4, scope_path: str | None = None, latest_date: str | None = None) -> dict[str, Any]:
+        """Fetch a scope's selected Sunday series and direct children in one call."""
+        if not await DashboardService.live_enabled(request):
+            return {"unavailable": True, "message": "Sunday Worship reporting requires the live backend."}
+        try:
+            client = async_client(get_api_client())
+            access_token = AuthService.get_access_token(request)
+            extras = getattr(ctx, "query_extras", {}) or {}
+            return await client.get_dashboard_sunday_worship_series(
+                access_token,
+                scope_path=scope_path or await DashboardService.scope_path(request, ctx),
+                weeks=weeks,
+                include_pending=str(extras.get("include_pending") or "").lower() == "true",
+                latest_date=latest_date,
+            )
+        except BackendClientError as exc:
+            return {"error": str(exc)}
 
 async def _newcomer_analytics_public(request, ctx) -> dict[str, Any]:
     payload = await DashboardService._bootstrap_section(request, ctx, "newcomer_analytics")

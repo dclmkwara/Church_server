@@ -20,13 +20,13 @@ from .people_service import PeopleService
 from .request_cache import request_cached
 from .ttl_cache import ttl_cached
 from .workflow_service import WorkflowService
+from .active_scope import active_scope_context
 
 
 def _scope_path(request, ctx) -> str:
-    identity = AuthService.get_identity(request)
-    if identity and identity.scope_path:
-        return identity.scope_path
-    return str(getattr(ctx, "current_scope_path", "") or "")
+    scoped = active_scope_context(request, ctx)
+    extras = getattr(scoped, "query_extras", {}) or {}
+    return str(extras.get("scope_path") or getattr(scoped, "current_scope_path", ""))
 
 
 def _report_date_window(request) -> tuple[str, str]:
@@ -299,8 +299,9 @@ class ReportService:
     @staticmethod
     async def use_mock(request, ctx) -> dict[str, Any]:
         if await ReportService.use_mock(request):
-            summary = STORE.dashboard_summary(ctx.current_scope_path, ctx.level)
-            counts_summary = STORE.counts_summary(ctx.current_scope_path)
+            scope_path = _scope_path(request, ctx)
+            summary = STORE.dashboard_summary(scope_path, ctx.level)
+            counts_summary = STORE.counts_summary(scope_path)
             return {
                 "workers_total": summary["workers_total"],
                 "pending_items": summary["pending_items"],
@@ -318,7 +319,7 @@ class ReportService:
     @staticmethod
     async def summary_rows(request, ctx) -> list[dict[str, Any]]:
         if await ReportService.use_mock(request):
-            return STORE.list_counts(ctx.current_scope_path)[:8]
+            return STORE.list_counts(_scope_path(request, ctx))[:8]
         client = async_client(get_api_client())
         access_token = AuthService.get_access_token(request)
         try:
@@ -341,7 +342,7 @@ class ReportService:
     @staticmethod
     async def financial_summary(request, ctx) -> dict[str, Any]:
         if not await ReportService.live_enabled(request):
-            return STORE.finance_summary(ctx.current_scope_path)
+            return STORE.finance_summary(_scope_path(request, ctx))
         today = date.today()
         rows = await ReportService.financial_rows(request, ctx)
         month_key = today.strftime("%Y-%m")
@@ -360,7 +361,7 @@ class ReportService:
     @staticmethod
     async def financial_rows(request, ctx) -> list[dict[str, Any]]:
         if await ReportService.use_mock(request):
-            return STORE.list_finance(ctx.current_scope_path)[:8]
+            return STORE.list_finance(_scope_path(request, ctx))[:8]
         client = async_client(get_api_client())
         access_token = AuthService.get_access_token(request)
         try:
@@ -382,12 +383,16 @@ class ReportService:
 
     @staticmethod
     async def attendance_summary(request, ctx) -> dict[str, Any]:
-        return await ChurchDataService.attendance_summary(request, ctx) if await ReportService.live_enabled(request) else STORE.attendance_summary(ctx.current_scope_path)
+        summary = await ChurchDataService.attendance_summary(request, ctx) if await ReportService.live_enabled(request) else STORE.attendance_summary(_scope_path(request, ctx))
+        summary = dict(summary)
+        if "opportunities" not in summary:
+            summary["opportunities"] = int(summary.get("expected") or 0)
+        return summary
 
     @staticmethod
     async def attendance_rows(request, ctx) -> list[dict[str, Any]]:
         if await ReportService.use_mock(request):
-            return STORE.list_attendance(ctx.current_scope_path)[:8]
+            return STORE.list_attendance(_scope_path(request, ctx))[:8]
         client = async_client(get_api_client())
         access_token = AuthService.get_access_token(request)
         try:
@@ -403,7 +408,7 @@ class ReportService:
     async def counts_series(request, ctx) -> list[tuple[str, int]]:
         if await ReportService.use_mock(request):
             bucket: dict[str, int] = {}
-            for row in STORE.list_counts(ctx.current_scope_path):
+            for row in STORE.list_counts(_scope_path(request, ctx)):
                 bucket[row["date"]] = bucket.get(row["date"], 0) + row["total"]
             return sorted(bucket.items())
         client = async_client(get_api_client())
@@ -428,7 +433,7 @@ class ReportService:
     async def finance_series(request, ctx) -> list[tuple[str, int]]:
         if await ReportService.use_mock(request):
             bucket: dict[str, int] = {}
-            for row in STORE.list_finance(ctx.current_scope_path):
+            for row in STORE.list_finance(_scope_path(request, ctx)):
                 bucket[row["date"]] = bucket.get(row["date"], 0) + int(row["amount"])
             return sorted(bucket.items())
         client = async_client(get_api_client())
@@ -453,7 +458,7 @@ class ReportService:
     async def attendance_series(request, ctx) -> list[tuple[str, int]]:
         if await ReportService.use_mock(request):
             bucket: dict[str, int] = {}
-            for row in STORE.list_attendance(ctx.current_scope_path):
+            for row in STORE.list_attendance(_scope_path(request, ctx)):
                 bucket[row["date"]] = bucket.get(row["date"], 0) + 1
             return sorted(bucket.items())
         client = async_client(get_api_client())
@@ -488,7 +493,7 @@ class ReportService:
                 lambda: ttl_cached(
                     ("reports", "breakdown", "counts", _scope_path(request, ctx), level, *_date_cache_key(request)),
                     45.0,
-                    lambda: client.get_report_breakdown(access_token, metric="counts", level=level, start_date=_report_date_window(request)[0], end_date=_report_date_window(request)[1]),
+                    lambda: client.get_report_breakdown(access_token, metric="counts", level=level, scope_path=_scope_path(request, ctx), start_date=_report_date_window(request)[0], end_date=_report_date_window(request)[1]),
                 ),
             )
             finance = await ReportService._cached_payload(
@@ -497,7 +502,7 @@ class ReportService:
                 lambda: ttl_cached(
                     ("reports", "breakdown", "offerings", _scope_path(request, ctx), level, *_date_cache_key(request)),
                     45.0,
-                    lambda: client.get_report_breakdown(access_token, metric="offerings", level=level, start_date=_report_date_window(request)[0], end_date=_report_date_window(request)[1]),
+                    lambda: client.get_report_breakdown(access_token, metric="offerings", level=level, scope_path=_scope_path(request, ctx), start_date=_report_date_window(request)[0], end_date=_report_date_window(request)[1]),
                 ),
             )
             attendance = await ReportService._cached_payload(
@@ -506,7 +511,7 @@ class ReportService:
                 lambda: ttl_cached(
                     ("reports", "breakdown", "attendance", _scope_path(request, ctx), level, *_date_cache_key(request)),
                     45.0,
-                    lambda: client.get_report_breakdown(access_token, metric="attendance", level=level, start_date=_report_date_window(request)[0], end_date=_report_date_window(request)[1]),
+                    lambda: client.get_report_breakdown(access_token, metric="attendance", level=level, scope_path=_scope_path(request, ctx), start_date=_report_date_window(request)[0], end_date=_report_date_window(request)[1]),
                 ),
             )
         except BackendClientError as exc:
@@ -528,7 +533,7 @@ class ReportService:
                 lambda: ttl_cached(
                     ("reports", "growth", "counts", _scope_path(request, ctx), *_date_cache_key(request)),
                     45.0,
-                    lambda: client.get_report_growth(access_token, metric="counts", period="weekly", start_date=_report_date_window(request)[0], end_date=_report_date_window(request)[1]),
+                    lambda: client.get_report_growth(access_token, metric="counts", period="weekly", scope_path=_scope_path(request, ctx), start_date=_report_date_window(request)[0], end_date=_report_date_window(request)[1]),
                 ),
             )
         except BackendClientError as exc:
@@ -557,7 +562,7 @@ class ReportService:
                 lambda: ttl_cached(
                     ("reports", "anomalies", "counts", _scope_path(request, ctx), *_date_cache_key(request)),
                     45.0,
-                    lambda: client.get_report_anomalies(access_token, metric="counts", start_date=_report_date_window(request)[0], end_date=_report_date_window(request)[1]),
+                    lambda: client.get_report_anomalies(access_token, metric="counts", scope_path=_scope_path(request, ctx), start_date=_report_date_window(request)[0], end_date=_report_date_window(request)[1]),
                 ),
             )
         except BackendClientError:
@@ -613,8 +618,9 @@ async def _report_live_enabled(request) -> bool:
 
 
 async def _summary_metrics_public(request, ctx) -> dict[str, Any]:
+    scope_path = _scope_path(request, ctx)
     if await _report_use_mock(request):
-        summary = STORE.dashboard_summary(ctx.current_scope_path, ctx.level)
+        summary = STORE.dashboard_summary(scope_path, ctx.level)
         counts_summary = await ChurchDataService.count_summary(request, ctx)
         return {
             "workers_total": summary["workers_total"],

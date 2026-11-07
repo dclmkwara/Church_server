@@ -15,6 +15,7 @@ from faststrap import Button, PlaceholderCard, Spinner
 from ..backend import BackendClientError
 from ..auth_context import build_context
 from ..communication import ReportService
+from ..communication.active_scope import active_scope_context
 from ..communication.count_aggregation import aggregate_count_submissions
 from ..components.chartjs import sparkline_chart as _sparkline
 from ..components.feedback import simple_toast_response
@@ -60,10 +61,11 @@ def _trend_label(points: list[tuple[str, int]]) -> str:
 
 
 async def _summary_rows(request: Request, ctx) -> list[dict[str, Any]]:
+    ctx = active_scope_context(request, ctx)
     start, end = _report_window(request)
     if await ReportService.live_enabled(request):
         return await ReportService.summary_rows(request, ctx)
-    rows = aggregate_count_submissions(STORE.list_counts(ctx.current_scope_path))
+    rows = aggregate_count_submissions(STORE.list_counts(_report_scope_path(request, ctx)))
     rows = [row for row in rows if start <= str(row.get("date") or "") <= end]
     for row in rows:
         row["submitted_by"] = f"{row['submissions']} usher section(s)"
@@ -71,47 +73,52 @@ async def _summary_rows(request: Request, ctx) -> list[dict[str, Any]]:
 
 
 async def _financial_rows(request: Request, ctx) -> list[dict[str, Any]]:
+    ctx = active_scope_context(request, ctx)
     if await ReportService.live_enabled(request):
         return await ReportService.financial_rows(request, ctx)
     start, end = _report_window(request)
-    return [row for row in STORE.list_finance(ctx.current_scope_path) if start <= str(row.get("date") or "")[:10] <= end][:8]
+    return [row for row in STORE.list_finance(_report_scope_path(request, ctx)) if start <= str(row.get("date") or "")[:10] <= end][:8]
 
 
 async def _attendance_rows(request: Request, ctx) -> list[dict[str, Any]]:
+    ctx = active_scope_context(request, ctx)
     if await ReportService.live_enabled(request):
         return await ReportService.attendance_rows(request, ctx)
     start, end = _report_window(request)
-    return [row for row in STORE.list_attendance(ctx.current_scope_path) if start <= str(row.get("date") or "")[:10] <= end][:8]
+    return [row for row in STORE.list_attendance(_report_scope_path(request, ctx)) if start <= str(row.get("date") or "")[:10] <= end][:8]
 
 
 async def _counts_series(request: Request, ctx) -> list[tuple[str, int]]:
+    ctx = active_scope_context(request, ctx)
     start, end = _report_window(request)
     if await ReportService.live_enabled(request):
         return await ReportService.counts_series(request, ctx)
     bucket: dict[str, int] = defaultdict(int)
-    for row in STORE.list_counts(ctx.current_scope_path):
+    for row in STORE.list_counts(_report_scope_path(request, ctx)):
         if start <= row["date"][:10] <= end:
             bucket[row["date"][:10]] += row["total"]
     return sorted(bucket.items())
 
 
 async def _finance_series(request: Request, ctx) -> list[tuple[str, int]]:
+    ctx = active_scope_context(request, ctx)
     start, end = _report_window(request)
     if await ReportService.live_enabled(request):
         return await ReportService.finance_series(request, ctx)
     bucket: dict[str, int] = defaultdict(int)
-    for row in STORE.list_finance(ctx.current_scope_path):
+    for row in STORE.list_finance(_report_scope_path(request, ctx)):
         if start <= row["date"][:10] <= end:
             bucket[row["date"][:10]] += int(row["amount"])
     return sorted(bucket.items())
 
 
 async def _attendance_series(request: Request, ctx) -> list[tuple[str, int]]:
+    ctx = active_scope_context(request, ctx)
     start, end = _report_window(request)
     if await ReportService.live_enabled(request):
         return await ReportService.attendance_series(request, ctx)
     bucket: dict[str, int] = defaultdict(int)
-    for row in STORE.list_attendance(ctx.current_scope_path):
+    for row in STORE.list_attendance(_report_scope_path(request, ctx)):
         if start <= row["date"][:10] <= end:
             bucket[row["date"][:10]] += 1
     return sorted(bucket.items())
@@ -131,22 +138,24 @@ def _next_level_key(scope_kind: str) -> str:
 
 
 async def _breakdown_rows(request: Request, ctx) -> list[dict[str, Any]]:
+    ctx = active_scope_context(request, ctx)
     if await ReportService.live_enabled(request):
         return await ReportService.breakdown_rows(request, ctx)
     level_key = _next_level_key(ctx.current_scope_kind)
-    labels = sorted({row[level_key] for row in STORE.visible_locations(ctx.current_scope_path)})
-    count_rows = STORE.list_counts(ctx.current_scope_path)
-    finance_rows = STORE.list_finance(ctx.current_scope_path)
-    attendance_rows = STORE.list_attendance(ctx.current_scope_path)
+    scope_path = _report_scope_path(request, ctx)
+    labels = sorted({row[level_key] for row in STORE.visible_locations(scope_path)})
+    count_rows = STORE.list_counts(scope_path)
+    finance_rows = STORE.list_finance(scope_path)
+    attendance_rows = STORE.list_attendance(scope_path)
 
     breakdown = []
     for label in labels:
         counts_total = sum(row["total"] for row in count_rows if row.get(level_key) == label or row["location"] == label)
-        finance_total = sum(row["amount"] for row in finance_rows if row["location"] == label or any(loc[level_key] == label and loc["location"] == row["location"] for loc in STORE.visible_locations(ctx.current_scope_path)))
+        finance_total = sum(row["amount"] for row in finance_rows if row["location"] == label or any(loc[level_key] == label and loc["location"] == row["location"] for loc in STORE.visible_locations(scope_path)))
         attendance_total = sum(
             1
             for row in attendance_rows
-            if row["location"] == label or any(loc[level_key] == label and loc["location"] == row["location"] for loc in STORE.visible_locations(ctx.current_scope_path))
+            if row["location"] == label or any(loc[level_key] == label and loc["location"] == row["location"] for loc in STORE.visible_locations(scope_path))
         )
         breakdown.append(
             {
@@ -159,11 +168,16 @@ async def _breakdown_rows(request: Request, ctx) -> list[dict[str, Any]]:
     return breakdown
 
 
+def _report_scope_path(request: Request, ctx) -> str:
+    return active_scope_context(request, ctx).current_scope_path
+
+
 async def _growth_rows(request: Request, ctx) -> list[dict[str, Any]]:
+    ctx = active_scope_context(request, ctx)
     if await ReportService.live_enabled(request):
         return await ReportService.growth_rows(request, ctx)
     bucket: dict[str, int] = defaultdict(int)
-    for row in STORE.list_counts(ctx.current_scope_path):
+    for row in STORE.list_counts(_report_scope_path(request, ctx)):
         iso = date.fromisoformat(row["date"]).isocalendar()
         bucket[f"{iso.year}-W{iso.week:02d}"] += row["total"]
     points = sorted(bucket.items())
@@ -177,10 +191,11 @@ async def _growth_rows(request: Request, ctx) -> list[dict[str, Any]]:
 
 
 async def _anomaly_rows(request: Request, ctx) -> list[dict[str, Any]]:
+    ctx = active_scope_context(request, ctx)
     if await ReportService.live_enabled(request):
         return await ReportService.anomaly_rows(request, ctx)
     rows: list[dict[str, Any]] = []
-    count_rows = STORE.list_counts(ctx.current_scope_path)
+    count_rows = STORE.list_counts(_report_scope_path(request, ctx))
     if count_rows:
         average = sum(row["total"] for row in count_rows) / len(count_rows)
         deviation = pstdev(row["total"] for row in count_rows)
@@ -193,7 +208,7 @@ async def _anomaly_rows(request: Request, ctx) -> list[dict[str, Any]]:
                         "status": "warning",
                     }
                 )
-    finance_rows = STORE.list_finance(ctx.current_scope_path)
+    finance_rows = STORE.list_finance(_report_scope_path(request, ctx))
     if finance_rows:
         average_amount = sum(row["amount"] for row in finance_rows) / len(finance_rows)
         for row in finance_rows:
@@ -577,6 +592,8 @@ async def _reports_content(request: Request, ctx, active_tab: str) -> Div:
                     Div(Label("To", fr="report-end-date", cls="form-label"), Input(type="date", id="report-end-date", name="end_date", value=end_date, cls="form-control"), cls="col-12 col-md-4"),
                     Div(Button("Apply dates", variant="primary", size="md", type="submit"), cls="col-12 col-md-4 d-flex align-items-end"),
                     Input(type="hidden", name="profile", value=ctx.profile.key),
+                    Input(type="hidden", name="tab", value=active_tab),
+                    Input(type="hidden", name="tab", value=active_tab),
                     *[
                         Input(type="hidden", name=name, value=value)
                         for name, value in ctx.query_extras.items()
@@ -587,6 +604,7 @@ async def _reports_content(request: Request, ctx, active_tab: str) -> Div:
                     hx_get=ctx.url_for("/reports/content", tab="summary", start_date=start_date, end_date=end_date),
                     hx_target="#reports-content",
                     hx_swap="outerHTML",
+                    hx_push_url="true",
                     cls="row g-3 align-items-end mb-3",
                 ),
                 tab_nav,
@@ -600,7 +618,7 @@ async def _reports_content(request: Request, ctx, active_tab: str) -> Div:
 def register_report_routes(app) -> None:
     @app.get("/reports")
     async def reports_page(request: Request, tab: str = "summary", start_date: str = "", end_date: str = ""):
-        ctx = build_context(request)
+        ctx = active_scope_context(request, build_context(request))
         if ctx.level < 2 or not ctx.has_permission("reports:read"):
             body = page_stack(section_card(
                 "Reports",
@@ -651,7 +669,7 @@ def register_report_routes(app) -> None:
 
     @app.get("/reports/content")
     async def reports_content(request: Request, tab: str = "summary"):
-        ctx = build_context(request)
+        ctx = active_scope_context(request, build_context(request))
         if ctx.level < 2 or not ctx.has_permission("reports:read"):
             return Div(
                 section_card(

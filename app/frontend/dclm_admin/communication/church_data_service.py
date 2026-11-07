@@ -15,6 +15,7 @@ from .people_service import PeopleService
 from .pagination import fetch_all_pages
 from .request_cache import request_cached
 from .ttl_cache import invalidate_ttl_prefix
+from app.utils.count_sections import legacy_section_label
 
 
 PAYMENT_METHOD_LABELS = {
@@ -62,8 +63,11 @@ def _normalize_count(row: dict[str, Any], *, event_map: dict[str, dict[str, Any]
         "count_id": str(row.get("id") or ""),
         "submitted_at": str(row.get("created_at") or ""),
         "event_id": str(row.get("event_id") or ""),
-        "event_title": event["title"] if event else str(row.get("event_id") or "Unknown event"),
-        "date": str((event or {}).get("date") or str(row.get("created_at") or "")[:10]),
+        "event_title": event["title"] if event else str(row.get("program_type") or row.get("event_id") or "Unknown program"),
+        "date": str((event or {}).get("date") or str(row.get("date") or str(row.get("created_at") or "")[:10])[:10]),
+        "program_type": str(row.get("program_type") or (event or {}).get("program_type_name") or ""),
+        "program_level": str(row.get("program_level") or ""),
+        "program_scope_path": str(row.get("program_scope_path") or ""),
         "location": (location or {}).get("location_name") or str(row.get("location_id") or ""),
         "location_id": str(row.get("location_id") or ""),
         "adult_male": int(row.get("adult_male") or 0),
@@ -73,6 +77,14 @@ def _normalize_count(row: dict[str, Any], *, event_map: dict[str, dict[str, Any]
         "boys": int(row.get("boys") or 0),
         "girls": int(row.get("girls") or 0),
         "total": int(row.get("total") or 0),
+        "status": str(row.get("status") or "pending").lower(),
+        "supersedes_id": str(row.get("supersedes_id") or ""),
+        "rejection_reason": str(row.get("rejection_reason") or ""),
+        "rejected_by_id": str(row.get("rejected_by_id") or ""),
+        "rejected_at": str(row.get("rejected_at") or ""),
+        "approved_by_id": str(row.get("approved_by_id") or ""),
+        "approved_at": str(row.get("approved_at") or ""),
+        "auto_accepted": bool(row.get("auto_accepted")),
         "submitted_by": str(row.get("entered_by_id") or "Recorded in backend"),
         "note": str(row.get("note") or ""),
         "usher_section": str(row.get("usher_section") or _section_from_note(row.get("note"))),
@@ -85,10 +97,8 @@ def _normalize_count(row: dict[str, Any], *, event_map: dict[str, dict[str, Any]
 
 
 def _section_from_note(value: Any) -> str:
-    note = str(value or "")
-    if not note.startswith("Section: "):
-        return ""
-    return note.removeprefix("Section: ").split(" | ", 1)[0]
+    """Read the interim note prefix until B5 adds real count section columns."""
+    return legacy_section_label(value)
 
 
 def _normalize_offering(row: dict[str, Any], *, event_map: dict[str, dict[str, Any]], location_map: dict[str, dict[str, Any]]) -> dict[str, Any]:
@@ -183,12 +193,12 @@ class ChurchDataService:
 
     @staticmethod
     async def list_events(request, ctx) -> list[dict[str, Any]]:
+        scope_path = await ChurchDataService._scope_path(request, ctx)
         if await ChurchDataService.use_mock(request):
             return [
                 {"event_id": row["event_id"], "title": row["title"], "date": row.get("date", ""), "path": row.get("path", "")}
-                for row in STORE.list_program_events(ctx.current_scope_path)
+                for row in STORE.list_program_events(scope_path)
             ]
-        scope_path = await ChurchDataService._scope_path(request, ctx)
 
         async def load_rows() -> list[dict[str, Any]]:
             client = async_client(get_api_client())
@@ -209,6 +219,49 @@ class ChurchDataService:
     @staticmethod
     async def count_summary(request, ctx) -> dict[str, Any]:
         return await _count_summary_public(request, ctx)
+
+    @staticmethod
+    async def list_count_review_groups(request) -> list[dict[str, Any]]:
+        if await ChurchDataService.use_mock(request):
+            raise BackendClientError("Count review requires a live pastor account.")
+        client = async_client(get_api_client())
+        return await client.list_count_review_groups(AuthService.get_access_token(request))
+
+    @staticmethod
+    async def list_unreported_sunday_locations(request, occurrence_date: str) -> list[dict[str, Any]]:
+        if await ChurchDataService.use_mock(request):
+            raise BackendClientError("Count reminders require a live pastor account.")
+        client = async_client(get_api_client())
+        return await client.list_unreported_sunday_locations(AuthService.get_access_token(request), occurrence_date)
+
+    @staticmethod
+    async def approve_count_group(request, count_id: str) -> dict[str, Any]:
+        if await ChurchDataService.use_mock(request):
+            raise BackendClientError("Count review is unavailable in demo mode.")
+        client = async_client(get_api_client())
+        result = await client.approve_count_group(AuthService.get_access_token(request), count_id)
+        invalidate_ttl_prefix(("church_data", "raw_counts"))
+        invalidate_ttl_prefix(("dashboard", "bootstrap"))
+        invalidate_ttl_prefix(("reports",))
+        return result
+
+    @staticmethod
+    async def reject_count_group(request, count_id: str, *, reason: str) -> dict[str, Any]:
+        if await ChurchDataService.use_mock(request):
+            raise BackendClientError("Count review is unavailable in demo mode.")
+        client = async_client(get_api_client())
+        result = await client.reject_count_group(AuthService.get_access_token(request), count_id, reason=reason)
+        invalidate_ttl_prefix(("church_data", "raw_counts"))
+        invalidate_ttl_prefix(("dashboard", "bootstrap"))
+        invalidate_ttl_prefix(("reports",))
+        return result
+
+    @staticmethod
+    async def remind_count_location(request, payload: dict[str, Any]) -> dict[str, Any]:
+        if await ChurchDataService.use_mock(request):
+            raise BackendClientError("Count reminders require a live pastor account.")
+        client = async_client(get_api_client())
+        return await client.remind_count_location(AuthService.get_access_token(request), payload)
 
     @staticmethod
     async def list_finance(request, ctx, *, fund_type: str = "", location: str = "", method: str = "") -> list[dict[str, Any]]:
@@ -296,9 +349,10 @@ class ChurchDataService:
         gender: str = "",
         record_type: str = "",
     ) -> list[dict[str, Any]]:
+        scope_path = await ChurchDataService._scope_path(request, ctx)
         if await ChurchDataService.use_mock(request):
             return STORE.list_records(
-                ctx.current_scope_path,
+                scope_path,
                 search=search,
                 status=status,
                 location=location,
@@ -307,7 +361,6 @@ class ChurchDataService:
             )
         client = async_client(get_api_client())
         access_token = AuthService.get_access_token(request)
-        scope_path = await ChurchDataService._scope_path(request, ctx)
         events = await ChurchDataService.list_events(request, ctx)
         event_map = {row["event_id"]: row for row in events}
         locations = await PeopleService.list_locations(request, ctx)
@@ -377,9 +430,10 @@ class ChurchDataService:
         unit: str = "",
         event_id: str = "",
     ) -> list[dict[str, Any]]:
+        scope_path = await ChurchDataService._scope_path(request, ctx)
         if await ChurchDataService.use_mock(request):
             return STORE.list_attendance(
-                ctx.current_scope_path,
+                scope_path,
                 status=status,
                 location=location,
                 unit=unit,
@@ -387,7 +441,6 @@ class ChurchDataService:
             )
         client = async_client(get_api_client())
         access_token = AuthService.get_access_token(request)
-        scope_path = await ChurchDataService._scope_path(request, ctx)
         events = await ChurchDataService.list_events(request, ctx)
         event_map = {row["event_id"]: row for row in events}
         locations = await PeopleService.list_locations(request, ctx)
@@ -425,11 +478,14 @@ class ChurchDataService:
 
     @staticmethod
     async def attendance_summary(request, ctx) -> dict[str, Any]:
+        scope_path = await ChurchDataService._scope_path(request, ctx)
         if not await ChurchDataService.live_enabled(request):
-            return STORE.attendance_summary(ctx.current_scope_path)
+            summary = STORE.attendance_summary(scope_path)
+            summary["opportunities"] = int(summary.get("records") or 0)
+            return summary
         client = async_client(get_api_client())
         access_token = AuthService.get_access_token(request)
-        return await client.get_attendance_stats(access_token)
+        return await client.get_attendance_stats(access_token, scope_path=scope_path)
 
     @staticmethod
     async def _get_attendance_entry_legacy(request, ctx, attendance_id: str) -> dict[str, Any] | None:
@@ -444,10 +500,11 @@ async def _church_data_scope_path(request, ctx) -> str:
 
 
 async def _list_events_public(request, ctx) -> list[dict[str, Any]]:
+    scope_path = await _church_data_scope_path(request, ctx)
     if await ChurchDataService.use_mock(request):
         return [
             {"event_id": row["event_id"], "title": row["title"], "date": row.get("date", ""), "path": row.get("path", "")}
-            for row in STORE.list_program_events(ctx.current_scope_path)
+            for row in STORE.list_program_events(scope_path)
         ]
     client = async_client(get_api_client())
     access_token = AuthService.get_access_token(request)
@@ -468,9 +525,9 @@ async def _event_and_location_maps(request, ctx) -> tuple[dict[str, dict[str, An
 
 
 async def _list_count_submissions_public(request, ctx, *, location: str = "", event_id: str = "") -> list[dict[str, Any]]:
-    if await ChurchDataService.use_mock(request):
-        return STORE.list_counts(ctx.current_scope_path, location=location, event_title=event_id)
     scope_path = await _church_data_scope_path(request, ctx)
+    if await ChurchDataService.use_mock(request):
+        return STORE.list_counts(scope_path, location=location, event_title=event_id)
 
     async def load_counts():
         client = async_client(get_api_client())
@@ -490,17 +547,18 @@ async def _list_count_submissions_public(request, ctx, *, location: str = "", ev
 
 
 async def _count_summary_public(request, ctx) -> dict[str, Any]:
+    scope_path = await _church_data_scope_path(request, ctx)
     if await ChurchDataService.use_mock(request):
-        rows = STORE.list_counts(ctx.current_scope_path)
+        rows = STORE.list_counts(scope_path)
         return summarize_count_submissions(rows)
     rows = await _list_count_submissions_public(request, ctx)
     return summarize_count_submissions(rows)
 
 
 async def _list_finance_public(request, ctx, *, fund_type: str = "", location: str = "", method: str = "") -> list[dict[str, Any]]:
-    if await ChurchDataService.use_mock(request):
-        return STORE.list_finance(ctx.current_scope_path, fund_type=fund_type, location=location, method=method)
     scope_path = await _church_data_scope_path(request, ctx)
+    if await ChurchDataService.use_mock(request):
+        return STORE.list_finance(scope_path, fund_type=fund_type, location=location, method=method)
 
     async def load_offerings():
         client = async_client(get_api_client())
@@ -528,8 +586,9 @@ async def _list_finance_public(request, ctx, *, fund_type: str = "", location: s
 
 
 async def _finance_summary_public(request, ctx) -> dict[str, Any]:
+    scope_path = await _church_data_scope_path(request, ctx)
     if await ChurchDataService.use_mock(request):
-        return STORE.finance_summary(ctx.current_scope_path)
+        return STORE.finance_summary(scope_path)
     rows = await _list_finance_public(request, ctx)
     today = date.today()
     month_prefix = today.strftime("%Y-%m")
@@ -579,11 +638,11 @@ async def _list_records_public(
     gender: str = "",
     record_type: str = "",
 ) -> list[dict[str, Any]]:
+    scope_path = await _church_data_scope_path(request, ctx)
     if await ChurchDataService.use_mock(request):
-        return STORE.list_records(ctx.current_scope_path, search=search, status=status, location=location, gender=gender, record_type=record_type)
+        return STORE.list_records(scope_path, search=search, status=status, location=location, gender=gender, record_type=record_type)
     client = async_client(get_api_client())
     access_token = AuthService.get_access_token(request)
-    scope_path = await _church_data_scope_path(request, ctx)
     event_map, location_map = await _event_and_location_maps(request, ctx)
     rows = [
         _normalize_record(row, event_map=event_map, location_map=location_map)
@@ -626,11 +685,11 @@ async def _create_count_public(request, payload: dict[str, Any]) -> dict[str, An
 
 
 async def _list_attendance_public(request, ctx, *, status: str = "", location: str = "", unit: str = "", event_id: str = "") -> list[dict[str, Any]]:
+    scope_path = await _church_data_scope_path(request, ctx)
     if await ChurchDataService.use_mock(request):
-        return STORE.list_attendance(ctx.current_scope_path, status=status, location=location, unit=unit, event_title=event_id)
+        return STORE.list_attendance(scope_path, status=status, location=location, unit=unit, event_title=event_id)
     client = async_client(get_api_client())
     access_token = AuthService.get_access_token(request)
-    scope_path = await _church_data_scope_path(request, ctx)
     event_map, location_map = await _event_and_location_maps(request, ctx)
     rows = [
         _normalize_attendance(row, event_map=event_map, location_map=location_map)
@@ -648,11 +707,12 @@ async def _list_attendance_public(request, ctx, *, status: str = "", location: s
 
 
 async def _attendance_summary_public(request, ctx) -> dict[str, Any]:
+    scope_path = await _church_data_scope_path(request, ctx)
     if await ChurchDataService.use_mock(request):
-        return STORE.attendance_summary(ctx.current_scope_path)
+        return STORE.attendance_summary(scope_path)
     client = async_client(get_api_client())
     access_token = AuthService.get_access_token(request)
-    return await client.get_attendance_stats(access_token)
+    return await client.get_attendance_stats(access_token, scope_path=scope_path)
 
 
 async def _create_attendance_public(request, payload: dict[str, Any]) -> dict[str, Any] | None:

@@ -7,6 +7,7 @@ from faststrap import Badge, Button, Icon, PlaceholderCard, Spinner
 from ..backend import BackendClientError
 from ..auth_context import build_context
 from ..communication import PeopleService, WorkflowService
+from ..communication.active_scope import active_scope_context
 from ..components.feedback import simple_toast_response
 from ..components.shell import hidden_context_inputs, primary_button, shell_layout
 from ..components.ui import empty_state, filter_field as _filter_field, page_intro, page_stack, responsive_table, section_card, stat_card, status_badge
@@ -160,6 +161,7 @@ async def _worker_mobile_card(ctx, worker):
 
 
 async def _workers_table(request: Request, ctx, *, search: str = "", status: str = "", approval: str = "", oob: bool = False) -> Div:
+    ctx = active_scope_context(request, ctx)
     rows = await PeopleService.list_workers(request, ctx, search=search, status=status, approval=approval)
     if not rows:
         attrs = {"id": "workers-results"}
@@ -483,6 +485,7 @@ async def _members_table(
     fellowship_id: str = "",
     oob: bool = False,
 ) -> Div:
+    ctx = active_scope_context(request, ctx)
     rows = await PeopleService.list_members(
         request,
         ctx,
@@ -535,7 +538,7 @@ async def _members_table(
 def register_people_routes(app) -> None:
     @app.get("/people/workers")
     async def workers_page(request: Request, search: str = "", status: str = "", approval: str = ""):
-        ctx = build_context(request)
+        ctx = active_scope_context(request, build_context(request))
         filter_status = status
         filter_approval = approval
         if status in ("Pending Verification", "pending_verification"):
@@ -606,7 +609,7 @@ def register_people_routes(app) -> None:
 
     @app.get("/people/workers/list")
     async def workers_list(request: Request, search: str = "", status: str = "", approval: str = ""):
-        ctx = build_context(request)
+        ctx = active_scope_context(request, build_context(request))
         filter_status = status
         filter_approval = approval
         if status in ("Pending Verification", "pending_verification"):
@@ -1111,7 +1114,7 @@ def register_people_routes(app) -> None:
 
     @app.get("/people/members")
     async def members_page(request: Request, search: str = "", location: str = "", status: str = "", fellowship_id: str = ""):
-        ctx = build_context(request)
+        ctx = active_scope_context(request, build_context(request))
         locations = await PeopleService.list_locations(request, ctx) if await PeopleService.live_enabled(request) else [row["location"] for row in STORE.visible_locations(ctx.current_scope_path)]
         fellowships = await PeopleService.list_fellowships(request, location_id=location or None) if await PeopleService.live_enabled(request) else STORE.list_fellowships(ctx.current_scope_path, location=location)
         summary = await PeopleService.member_summary(request, ctx) if await PeopleService.live_enabled(request) else STORE.church_member_summary(ctx.current_scope_path)
@@ -1188,7 +1191,7 @@ def register_people_routes(app) -> None:
 
     @app.get("/people/members/list")
     async def members_list(request: Request, search: str = "", location: str = "", status: str = "", fellowship_id: str = ""):
-        ctx = build_context(request)
+        ctx = active_scope_context(request, build_context(request))
         return await _members_table(request, ctx, search=search, location=location, status=status, fellowship_id=fellowship_id)
 
     @app.get("/people/members/new")
@@ -1323,7 +1326,7 @@ def register_people_routes(app) -> None:
 
     @app.get("/people/officials/list")
     async def officials_list(request: Request, search: str = "", status: str = "", appointed_role: str = ""):
-        ctx = build_context(request)
+        ctx = active_scope_context(request, build_context(request))
         try:
             return await _officials_table(request, ctx, search=search, status=status, appointed_role=appointed_role)
         except BackendClientError as exc:
@@ -1669,7 +1672,7 @@ def register_people_routes(app) -> None:
 
     @app.get("/people/users/list")
     async def users_list(request: Request, search: str = "", approval: str = "", status: str = ""):
-        ctx = build_context(request)
+        ctx = active_scope_context(request, build_context(request))
         try:
             return await _users_table(request, ctx, search=search, approval=approval, status=status)
         except BackendClientError as exc:

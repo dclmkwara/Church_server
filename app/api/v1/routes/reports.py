@@ -301,6 +301,7 @@ async def get_timeseries_analysis(
 async def get_hierarchical_breakdown(
     metric: str = Query(..., description="counts, offerings, or attendance"),
     level: str = Query(..., description="location, group, region, or state"),
+    scope_path: Optional[str] = None,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     db: AsyncSession = Depends(deps.get_db),
@@ -316,7 +317,7 @@ async def get_hierarchical_breakdown(
     if not end_date:
         end_date = date.today()
 
-    effective_scope = deps.effective_scope_path(current_user)
+    effective_scope = _resolve_scope(current_user, scope_path)
 
     from sqlalchemy import select, func
     from app.models.counts import Count
@@ -398,6 +399,7 @@ async def detect_anomalies(
     metric: str = Query("counts", description="Metric to analyze"),
     threshold: float = Query(2.0, description="Standard deviations for anomaly detection"),
     days: int = Query(30, description="Days to analyze"),
+    scope_path: Optional[str] = None,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     db: AsyncSession = Depends(deps.get_db),
@@ -408,7 +410,7 @@ async def detect_anomalies(
 
     Identifies unusual patterns or outliers that may need attention.
     """
-    effective_scope = deps.effective_scope_path(current_user)
+    effective_scope = _resolve_scope(current_user, scope_path)
     start_date = start_date or date.today() - timedelta(days=days)
     end_date = end_date or date.today()
     if start_date > end_date:
@@ -463,6 +465,7 @@ async def get_growth_rate(
     metric: str = Query("counts", pattern="^(counts|offerings|attendance)$", description="Metric to analyze"),
     period: str = Query("monthly", pattern="^(daily|weekly|monthly)$", description="daily, weekly, or monthly"),
     months: int = Query(12, ge=1, le=60, description="Number of months to analyze"),
+    scope_path: Optional[str] = None,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     db: AsyncSession = Depends(deps.get_db),
@@ -473,7 +476,7 @@ async def get_growth_rate(
 
     Shows percentage change in metrics period-over-period.
     """
-    effective_scope = deps.effective_scope_path(current_user)
+    effective_scope = _resolve_scope(current_user, scope_path)
     start_date = start_date or date.today() - timedelta(days=months * 30)
     end_date = end_date or date.today()
     if start_date > end_date:

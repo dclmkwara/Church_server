@@ -22,7 +22,7 @@ Example hierarchy path:
                     └── Location: 003
                         └── Fellowship: F001
 """
-from typing import List, Any
+from typing import List, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import and_, or_, select
@@ -773,6 +773,7 @@ async def read_locations(
     limit: int = Query(100, ge=1, le=500),
     current_user: User = Depends(deps.get_current_active_user),
     group_id: str = None,
+    scope_path: Optional[str] = None,
 ) -> Any:
     """
     Retrieve locations with optional filtering by group.
@@ -796,12 +797,14 @@ async def read_locations(
         GET /api/v1/locations/?group_id=ILE
         ```
     """
+    effective_scope = deps.resolve_scope_path(current_user, scope_path)
     if group_id:
         query = (
             select(Location)
             .where(
                 Location.group_id == group_id,
                 _hierarchy_visible_filter(Location.path, current_user),
+                deps.scope_condition(Location.path, current_user, effective_scope),
             )
             .offset(skip)
             .limit(limit)
@@ -810,7 +813,7 @@ async def read_locations(
         return res.scalars().all()
     result = await db.execute(
         select(Location)
-        .where(_hierarchy_visible_filter(Location.path, current_user))
+        .where(_hierarchy_visible_filter(Location.path, current_user), deps.scope_condition(Location.path, current_user, effective_scope))
         .offset(skip)
         .limit(limit)
     )

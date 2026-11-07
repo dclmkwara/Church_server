@@ -12,6 +12,7 @@ from faststrap import Button, Icon, Input as FsInput, Select as FsSelect, Placeh
 from ..auth_context import build_context
 from ..backend import BackendClientError
 from ..communication import PeopleService, ProgramService
+from ..communication.active_scope import active_scope_context
 from ..components.chartjs import bar_chart as _bar_chart
 from ..components.chartjs import donut_chart as _donut_chart
 from ..components.feedback import simple_toast_response
@@ -89,6 +90,7 @@ def _campaign_report_toggle(ctx, campaign_id: str, current_view: str) -> Any:
 
 
 async def _scope_locations(request: Request, ctx) -> list[str]:
+    ctx = active_scope_context(request, ctx)
     rows = await PeopleService.list_locations(request, ctx)
     options = []
     for row in rows:
@@ -99,6 +101,7 @@ async def _scope_locations(request: Request, ctx) -> list[str]:
 
 
 async def _program_summary(request: Request, ctx, *, oob: bool = False) -> Div:
+    ctx = active_scope_context(request, ctx)
     summary = await ProgramService.summary(request, ctx)
     cards_data = [
         ("Domains", str(summary["domains"]), "Top-level categories", "collection", "primary"),
@@ -141,6 +144,7 @@ async def _domain_mobile_card(ctx, row):
 
 
 async def _domains_table(request: Request, ctx, *, oob: bool = False):
+    ctx = active_scope_context(request, ctx)
     rows = await ProgramService.list_domains(request, ctx)
     if not rows:
         attrs = {"id": "program-domains-results"}
@@ -200,6 +204,7 @@ async def _type_mobile_card(ctx, row):
 
 
 async def _types_table(request: Request, ctx, *, domain_id: str = "", oob: bool = False):
+    ctx = active_scope_context(request, ctx)
     rows = await ProgramService.list_types(request, ctx, domain_id=domain_id)
     if not rows:
         attrs = {"id": "program-types-results"}
@@ -283,6 +288,7 @@ async def _campaigns_table(
     status_value: str = "",
     oob: bool = False,
 ):
+    ctx = active_scope_context(request, ctx)
     rows = await ProgramService.list_campaigns(
         request,
         ctx,
@@ -374,6 +380,7 @@ async def _events_table(
     location: str = "",
     oob: bool = False,
 ):
+    ctx = active_scope_context(request, ctx)
     rows = await ProgramService.list_events(
         request,
         ctx,
@@ -1018,7 +1025,7 @@ def register_program_routes(app) -> None:
         campaign_event_mode: str = "",
         campaign_status: str = "",
     ):
-        ctx = build_context(request)
+        ctx = active_scope_context(request, build_context(request))
         body = page_stack(
             _programs_loading_shell(
                 ctx,
@@ -1064,7 +1071,7 @@ def register_program_routes(app) -> None:
         campaign_event_mode: str = "",
         campaign_status: str = "",
     ):
-        ctx = build_context(request)
+        ctx = active_scope_context(request, build_context(request))
         try:
             return await _programs_workspace(
                 request,
@@ -1087,7 +1094,7 @@ def register_program_routes(app) -> None:
 
     @app.get("/church-data/programs/types/list")
     async def types_list(request: Request, types_domain_id: str = ""):
-        ctx = build_context(request)
+        ctx = active_scope_context(request, build_context(request))
         return await _types_table(request, ctx, domain_id=types_domain_id)
 
     @app.get("/church-data/programs/campaigns/list")
@@ -1097,7 +1104,7 @@ def register_program_routes(app) -> None:
         campaign_event_mode: str = "",
         campaign_status: str = "",
     ):
-        ctx = build_context(request)
+        ctx = active_scope_context(request, build_context(request))
         domains = await ProgramService.list_domains(request, ctx)
         return await _campaigns_table(
             request,
@@ -1117,7 +1124,7 @@ def register_program_routes(app) -> None:
         status: str = "",
         location: str = "",
     ):
-        ctx = build_context(request)
+        ctx = active_scope_context(request, build_context(request))
         return await _events_table(request, ctx, search=event_search, domain_id=domain_id, type_id=type_id, status=status, location=location)
 
     @app.get("/church-data/programs/campaigns/new")

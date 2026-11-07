@@ -8,7 +8,9 @@ from faststrap import Badge, BottomNav, BottomNavItem, Drawer, Fx, Icon, Modal, 
 
 from ..auth_context import AdminContext, PROFILE_CONFIGS
 from ..backend.config import get_backend_config
+from ..communication.active_scope import scope_link
 from .feedback import toast_stack
+from .ui import active_scope_breadcrumb
 
 
 NAV_GROUPS = [
@@ -36,6 +38,9 @@ NAV_GROUPS = [
         "items": [
             {"label": "Programs", "icon": "calendar-event", "href": "/church-data/programs", "key": "programs"},
             {"label": "Program Counts", "icon": "bar-chart", "href": "/church-data/counts", "key": "counts"},
+            {"label": "Count Review", "icon": "clipboard-check", "href": "/church-data/count-review", "key": "count-review", "permission": "counts:review"},
+            {"label": "Saturday Workers Meeting", "icon": "people", "href": "/church-data/meetings/workers-saturday", "key": "workers-meeting"},
+            {"label": "Tuesday Leaders Meeting", "icon": "person-badge", "href": "/church-data/meetings/leaders-tuesday", "key": "leaders-meeting"},
             {"label": "Offerings & Tithes", "icon": "cash-stack", "href": "/church-data/finance", "key": "finance"},
             {"label": "Newcomers", "icon": "person-hearts", "href": "/church-data/newcomers", "key": "newcomers"},
             {"label": "Attendance", "icon": "clipboard-check", "href": "/church-data/attendance", "key": "attendance"},
@@ -241,6 +246,8 @@ def _sidebar(ctx: AdminContext, active_key: str) -> Any:
                 continue
             if ctx.level < item.get("min_level", 0):
                 continue
+            if item.get("permission") and not ctx.has_permission(item["permission"]):
+                continue
             if backend_mode and item["key"] in unsupported_live_keys:
                 continue
             items.append(
@@ -248,7 +255,7 @@ def _sidebar(ctx: AdminContext, active_key: str) -> Any:
                     Span(Icon(item["icon"], cls="me-3")),
                     Span(item["label"]),
                     Span(cls="spinner-border spinner-border-sm sidebar-nav-spinner"),
-                    href=ctx.url_for(item["href"]),
+                    href=scope_link(ctx, item["href"]),
                     cls=f"sidebar-link {Fx.base} {'active' if active_key == item['key'] else ''}",
                 )
             )
@@ -308,7 +315,7 @@ def _mobile_bottom_nav(ctx: AdminContext, active_key: str) -> Any:
     items = [
         BottomNavItem(
             label,
-            href=ctx.url_for(href),
+            href=scope_link(ctx, href),
             icon=icon,
             active=(active_key == key),
         )
@@ -420,6 +427,7 @@ def shell_layout(
                                 Div(primary_action, cls="d-flex align-items-center gap-2 ms-lg-auto flex-shrink-0") if primary_action else "",
                                 cls="page-command-header d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-3 mb-4 pb-3 border-bottom border-body-secondary",
                             ) if (show_shell_intro and title) or primary_action else "",
+                            active_scope_breadcrumb(ctx.current_scope_path),
                             content,
                             cls="admin-page-body",
                         ),

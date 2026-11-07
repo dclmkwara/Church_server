@@ -175,10 +175,12 @@ class DashboardService:
                 "year_events": int(s.year_events or 0), "month_turnout": int(s.month_turnout or 0), "year_turnout": int(s.year_turnout or 0)}}
 
     @staticmethod
-    async def get_worker_meeting_comparison(db, scope_path: str, *, location_id=None, limit: int = 6) -> dict[str, Any]:
+    async def get_worker_meeting_comparison(db, scope_path: str, *, location_id=None, program_type_slug: str | None = None, limit: int = 6) -> dict[str, Any]:
         filters = [_scope_filter(WorkerAttendance.path, scope_path), WorkerAttendance.is_deleted == False]
         if location_id:
             filters.append(WorkerAttendance.location_id == location_id)
+        if program_type_slug:
+            filters.append(ProgramType.slug == program_type_slug)
         rows = (await db.execute(
             select(ProgramType.slug.label("program_type"), ProgramType.name.label("program_label"),
                    func.coalesce(func.sum(_status_case(WorkerAttendance.status, "present")), 0).label("present"),
@@ -200,7 +202,28 @@ class DashboardService:
             ranking.append({"program_type": item.program_type, "label": item.program_label,
                             "present": p, "late": l, "absent": a, "records": r,
                             "attendance_rate": round(((p + l) / r) * 100, 1) if r else 0.0})
-        return {"ranking": ranking}
+        month_key = func.to_char(WorkerAttendance.date, "YYYY-MM")
+        trend_rows = await db.execute(
+            select(
+                month_key.label("period"),
+                func.coalesce(func.sum(_status_case(WorkerAttendance.status, "present")), 0).label("present"),
+                func.coalesce(func.sum(_status_case(WorkerAttendance.status, "late")), 0).label("late"),
+                func.coalesce(func.sum(_status_case(WorkerAttendance.status, "absent")), 0).label("absent"),
+                func.coalesce(func.sum(_status_case(WorkerAttendance.status, "excused")), 0).label("excused"),
+                func.count(WorkerAttendance.id).label("records"),
+            )
+            .select_from(WorkerAttendance)
+            .join(ProgramEvent, ProgramEvent.id == WorkerAttendance.event_id)
+            .join(ProgramType, ProgramType.id == ProgramEvent.program_type_id)
+            .where(and_(*filters))
+            .group_by(month_key)
+            .order_by(month_key)
+        )
+        monthly_trend = [{
+            "period": row.period, "present": int(row.present or 0), "late": int(row.late or 0),
+            "absent": int(row.absent or 0), "excused": int(row.excused or 0), "records": int(row.records or 0),
+        } for row in trend_rows]
+        return {"ranking": ranking, "monthly_trend": monthly_trend}
 
     @staticmethod
     async def get_newcomer_analytics(db, scope_path: str, *, location_id=None, months: int = 12) -> dict[str, Any]:

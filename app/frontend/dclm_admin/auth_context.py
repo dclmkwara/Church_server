@@ -309,6 +309,10 @@ class AdminContext:
     def query_dict(self) -> dict[str, str]:
         data = {"profile": self.profile.key}
         data.update(self.query_extras)
+        for key in ("scope_path", "period", "include_pending"):
+            value = self.query_extras.get(key)
+            if value:
+                data[key] = value
         for field in self.profile.selector_fields:
             value = self.selected.get(field)
             if value:
@@ -342,21 +346,18 @@ def _backend_context(source: Request | Mapping[str, Any]) -> AdminContext | None
         return None
     mapping = _mapping_from_source(source)
     identity = AuthService.get_identity(source) if isinstance(source, Request) else None
-    scope_path = str(
-        (identity.scope_path if identity else "") or mapping.get("scope_path") or mapping.get("home_path") or ""
-    ).strip()
-    if not scope_path:
+    maximum_scope_path = str((getattr(identity, "maximum_scope_path", "") if identity else "") or (identity.scope_path if identity else "") or mapping.get("home_path") or mapping.get("scope_path") or "").strip()
+    if not maximum_scope_path:
         return None
-    profile_key = str((identity.profile_key if identity else "") or mapping.get("profile") or "").strip()
-    role_score = int((identity.role_score if identity else 0) or mapping.get("role_score") or 2)
+    profile_key = str((getattr(identity, "profile_key", "") if identity else "") or mapping.get("profile") or "").strip()
+    role_score = int((getattr(identity, "role_score", 0) if identity else 0) or mapping.get("role_score") or 2)
     if not profile_key:
         profile_key = profile_key_for_score(role_score)
-    role_label = str((identity.role_name if identity else "") or mapping.get("role_label") or "Worker")
-    user_name = str((identity.display_name if identity else "") or mapping.get("user_name") or "Authenticated User")
-    # Scope metadata shown in the UI must be derived from the authenticated
-    # identity path; query parameters may carry report filters only.
-    current_scope_kind = _scope_kind_from_backend_path(scope_path, role_score)
-    current_scope_label = format_scope_display_id(scope_path) or role_label
+    role_label = str((getattr(identity, "role_name", "") if identity else "") or mapping.get("role_label") or "Worker")
+    user_name = str((getattr(identity, "display_name", "") if identity else "") or mapping.get("user_name") or "Authenticated User")
+    # Keep the identity maximum separate from the selected analytical path.
+    current_scope_kind = _scope_kind_from_backend_path(maximum_scope_path, role_score)
+    current_scope_label = format_scope_display_id(maximum_scope_path) or role_label
     profile = ProfileConfig(
         key=profile_key,
         level=max(1, min(role_score or 1, 9)),
@@ -365,25 +366,32 @@ def _backend_context(source: Request | Mapping[str, Any]) -> AdminContext | None
         mode_label=_mode_label_for_level(max(1, min(role_score or 1, 9))),
         root_kind=current_scope_kind,
         root_label=current_scope_label,
-        root_path=scope_path,
+        root_path=maximum_scope_path,
         selector_fields=(),
     )
+    # A raw query string is not trusted here. Route and service callers apply
+    # active_scope_context(), which validates a descendant before selecting it.
+    requested_path = str(mapping.get("scope_path") or maximum_scope_path)
+    active_path = requested_path if requested_path == maximum_scope_path or requested_path.startswith(f"{maximum_scope_path}.") else maximum_scope_path
+    active_kind = _scope_kind_from_backend_path(active_path, role_score)
+    active_label = format_scope_display_id(active_path) or role_label
     return AdminContext(
         profile=profile,
         selected={},
         options={},
-        current_scope_kind=current_scope_kind,
-        current_scope_label=current_scope_label,
-        current_scope_path=scope_path,
-        permissions=identity.permissions if identity else frozenset(),
+        current_scope_kind=active_kind,
+        current_scope_label=active_label,
+        current_scope_path=active_path,
+        permissions=getattr(identity, "permissions", frozenset()) if identity else frozenset(),
         query_extras={
-            "scope_path": scope_path,
-            "scope_kind": current_scope_kind,
-            "scope_label": current_scope_label,
+            "scope_kind": active_kind,
+            "scope_label": active_label,
             "user_name": user_name,
             "role_label": role_label,
             "role_score": str(profile.level),
-            "home_path": str((identity.home_path if identity else "") or mapping.get("home_path") or scope_path),
+            "home_path": maximum_scope_path,
+            "scope_path": active_path,
+            **({key: str(mapping.get(key)) for key in ("period", "include_pending") if mapping.get(key)}),
         },
     )
 
@@ -484,6 +492,8 @@ def build_context(source: Request | Mapping[str, Any]) -> AdminContext:
                 "role_label": str(mapping.get("role_label") or fallback_profile.role_label),
                 "role_score": str(mapping.get("role_score") or fallback_profile.level),
                 "home_path": str(mapping.get("home_path") or mapping.get("scope_path") or ""),
+                "scope_path": str(mapping.get("scope_path") or mapping.get("home_path") or ""),
+                **({key: str(mapping.get(key)) for key in ("period", "include_pending") if mapping.get(key)}),
             },
         )
         if isinstance(source, Request):

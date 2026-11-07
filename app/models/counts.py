@@ -38,6 +38,13 @@ class Count(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     total = Column(Integer, default=0, nullable=False)
 
     status = Column(String, default="pending", index=True)
+    approved_by_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True, index=True)
+    approved_at = Column(DateTime(timezone=True), nullable=True)
+    auto_accepted = Column(Boolean, nullable=False, default=False, server_default="false", index=True)
+    supersedes_id = Column(UUID(as_uuid=True), ForeignKey("counts.id", ondelete="SET NULL"), nullable=True, index=True)
+    rejection_reason = Column(Text, nullable=True)
+    rejected_by_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True, index=True)
+    rejected_at = Column(DateTime(timezone=True), nullable=True)
     note = Column(Text, nullable=True)
     source_role = Column(String, nullable=False, default="regular", server_default="regular", index=True)
     campaign_code = Column(String, nullable=True, index=True)
@@ -48,6 +55,9 @@ class Count(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
     event = relationship("ProgramEvent")
     assignment = relationship("EventAssignment")
     entered_by = relationship("User", foreign_keys=[entered_by_id])
+    approved_by = relationship("User", foreign_keys=[approved_by_id])
+    rejected_by = relationship("User", foreign_keys=[rejected_by_id])
+    supersedes = relationship("Count", remote_side=[id], foreign_keys=[supersedes_id], uselist=False)
 
     def calculate_total(self):
         self.total = (

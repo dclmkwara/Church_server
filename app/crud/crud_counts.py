@@ -12,6 +12,10 @@ from app.crud.idempotency import commit_idempotent, mark_existing_submission
 from app.db.filters import scope_filter
 from app.crud.workflow_rules import ensure_collection_open, load_event_campaign, require_approved_worker_user, require_event_assignment, resolve_program_context, resolve_program_level, widen_scope_for_approved_event_submission
 
+
+def _calendar_date(value):
+    return value.date() if hasattr(value, "date") else value
+
 class CRUDCount(CRUDBase[Count, CountCreate, CountUpdate]):
     async def create(self, db: AsyncSession, *, obj_in: CountCreate, user_id: UUID, require_assignment: bool = False) -> Count:
         if obj_in.client_id:
@@ -51,7 +55,28 @@ class CRUDCount(CRUDBase[Count, CountCreate, CountUpdate]):
         )
         if assignment:
             await widen_scope_for_approved_event_submission(db, event)
-        db_obj = Count(event_id=obj_in.event_id, location_id=obj_in.location_id, assignment_id=obj_in.assignment_id, path=location_path, program_scope_path=str(event.path) if event else location_path, date=event.date if event else obj_in.date, church_type=obj_in.church_type, program_level=program_level, program_domain_id=program_domain_id, program_type_id=program_type_id, program_domain=obj_in.program_domain if not event else None, program_type=obj_in.program_type if not event else None, client_id=obj_in.client_id, adult_male=obj_in.adult_male, adult_female=obj_in.adult_female, youth_male=obj_in.youth_male, youth_female=obj_in.youth_female, boys=obj_in.boys, girls=obj_in.girls, note=obj_in.note, entered_by_id=user_id, status="pending", source_role=source_role, campaign_code=campaign_code, submission_channel=obj_in.submission_channel)
+        scope_segments = {"Local": 6, "Group": 5, "Region": 4, "State": 3}
+        segment_count = scope_segments.get(program_level, len(location_path.split(".")))
+        report_scope_path = str(event.path) if event else ".".join(location_path.split(".")[:segment_count])
+        submitted_date = event.date if event else obj_in.date
+        superseded = None
+        if obj_in.supersedes_id:
+            superseded = await db.get(Count, obj_in.supersedes_id)
+            if not superseded or superseded.is_deleted or str(superseded.status).lower() != "rejected":
+                raise HTTPException(status_code=422, detail="A correction must reference a rejected count")
+            if (
+                str(superseded.location_id) != str(obj_in.location_id)
+                or _calendar_date(superseded.date) != _calendar_date(submitted_date)
+                or str(superseded.event_id or "") != str(obj_in.event_id or "")
+                or superseded.program_domain_id != program_domain_id
+                or superseded.program_type_id != program_type_id
+                or str(superseded.program_level or "").lower() != str(program_level).lower()
+                or str(superseded.program_scope_path or "") != report_scope_path
+            ):
+                raise HTTPException(status_code=422, detail="A correction must retain the rejected report's program, date, location, and reporting scope")
+        auto_accepted = str(program_level).lower() == "state"
+        accepted_at = datetime.now(UTC) if auto_accepted else None
+        db_obj = Count(event_id=obj_in.event_id, location_id=obj_in.location_id, assignment_id=obj_in.assignment_id, path=location_path, program_scope_path=report_scope_path, date=submitted_date, church_type=obj_in.church_type, program_level=program_level, program_domain_id=program_domain_id, program_type_id=program_type_id, program_domain=obj_in.program_domain if not event else None, program_type=obj_in.program_type if not event else None, client_id=obj_in.client_id, supersedes_id=obj_in.supersedes_id, adult_male=obj_in.adult_male, adult_female=obj_in.adult_female, youth_male=obj_in.youth_male, youth_female=obj_in.youth_female, boys=obj_in.boys, girls=obj_in.girls, note=obj_in.note, entered_by_id=user_id, status="approved" if auto_accepted else "pending", approved_at=accepted_at, auto_accepted=auto_accepted, source_role=source_role, campaign_code=campaign_code, submission_channel=obj_in.submission_channel)
         db_obj.calculate_total(); db.add(db_obj)
         if assignment:
             assignment.submission_completed = True; assignment.submitted_at = datetime.now(UTC); db.add(assignment)

@@ -12,6 +12,7 @@ from .auth_service import AuthService
 from .request_cache import request_cached
 from .ttl_cache import invalidate_ttl_prefix, ttl_cached
 from .pagination import fetch_all_pages
+from .active_scope import active_scope_context
 
 
 def _sort_key(row: dict[str, Any]) -> tuple[str, str]:
@@ -243,10 +244,9 @@ def _with_public_code(row: dict[str, Any]) -> dict[str, Any]:
 class PeopleService:
     @staticmethod
     async def effective_scope_path(request, ctx) -> str:
-        identity = AuthService.get_identity(request)
-        if identity and identity.scope_path:
-            return identity.scope_path
-        return ctx.current_scope_path
+        scoped = active_scope_context(request, ctx)
+        extras = getattr(scoped, "query_extras", {}) or {}
+        return str(extras.get("scope_path") or getattr(scoped, "current_scope_path", ""))
 
     @staticmethod
     async def live_enabled(request) -> bool:
@@ -262,9 +262,9 @@ class PeopleService:
 
     @staticmethod
     async def list_workers(request, ctx, *, search: str = "", status: str = "", approval: str = "") -> list[dict[str, Any]]:
-        if await PeopleService.use_mock(request):
-            return [_with_public_code(row) for row in STORE.list_workers(ctx.current_scope_path, search=search, status=status, approval=approval)]
         scope_path = await PeopleService.effective_scope_path(request, ctx)
+        if await PeopleService.use_mock(request):
+            return [_with_public_code(row) for row in STORE.list_workers(scope_path, search=search, status=status, approval=approval)]
 
         async def load_rows() -> list[dict[str, Any]]:
             client = async_client(get_api_client())
@@ -299,8 +299,9 @@ class PeopleService:
 
     @staticmethod
     async def list_users(request, ctx, *, search: str = "", approval: str = "", status: str = "") -> list[dict[str, Any]]:
+        scope_path = await PeopleService.effective_scope_path(request, ctx)
         if await PeopleService.use_mock(request):
-            return [_with_public_code(row) for row in STORE.list_users(ctx.current_scope_path, search=search, approval=approval, status=status)]
+            return [_with_public_code(row) for row in STORE.list_users(scope_path, search=search, approval=approval, status=status)]
         return await _list_user_accounts(request, ctx, search=search, approval=approval, status=status)
 
     @staticmethod
@@ -342,16 +343,16 @@ class PeopleService:
 
     @staticmethod
     async def list_official_appointments(request, ctx, *, search: str = "", status: str = "", appointed_role: str = "") -> list[dict[str, Any]]:
+        scope_path = await PeopleService.effective_scope_path(request, ctx)
         if await PeopleService.use_mock(request):
             return STORE.list_official_appointments(
-                ctx.current_scope_path,
+                scope_path,
                 search=search,
                 status=status,
                 appointed_role=appointed_role,
             )
         client = async_client(get_api_client())
         access_token = AuthService.get_access_token(request)
-        scope_path = await PeopleService.effective_scope_path(request, ctx)
 
         async def load_rows() -> list[dict[str, Any]]:
             return [
@@ -376,7 +377,7 @@ class PeopleService:
     @staticmethod
     async def official_appointment_summary(request, ctx) -> dict[str, int]:
         if await PeopleService.use_mock(request):
-            return STORE.official_appointment_summary(ctx.current_scope_path)
+            return STORE.official_appointment_summary(await PeopleService.effective_scope_path(request, ctx))
         rows = await PeopleService.list_official_appointments(request, ctx)
         scopes = {row["assigned_scope_path"] for row in rows if row.get("assigned_scope_path")}
         return {
@@ -502,9 +503,10 @@ class PeopleService:
         return _normalize_worker(result)
     @staticmethod
     async def list_members_legacy(request, ctx, *, search: str = "", location_id: str = "", status: str = "", fellowship_id: str = "") -> list[dict[str, Any]]:
+        scope_path = await PeopleService.effective_scope_path(request, ctx)
         if await PeopleService.use_mock(request):
             rows = STORE.list_church_members(
-                ctx.current_scope_path,
+                scope_path,
                 search=search,
                 location=location_id,
                 status=status,
@@ -513,7 +515,6 @@ class PeopleService:
             return rows
         client = async_client(get_api_client())
         access_token = AuthService.get_access_token(request)
-        scope_path = await PeopleService.effective_scope_path(request, ctx)
         fellowships = await PeopleService.list_fellowships(request, location_id=location_id or None)
         fellowship_lookup = {row["fellowship_id"]: row for row in fellowships}
         async def load_members() -> list[dict[str, Any]]:
@@ -552,7 +553,7 @@ class PeopleService:
     @staticmethod
     async def member_summary(request, ctx) -> dict[str, int]:
         if await PeopleService.use_mock(request):
-            return STORE.church_member_summary(ctx.current_scope_path)
+            return STORE.church_member_summary(await PeopleService.effective_scope_path(request, ctx))
         rows = await PeopleService.list_members(request, ctx)
         represented = {row["fellowship_id"] for row in rows if row.get("fellowship_id")}
         return {
@@ -731,9 +732,9 @@ async def _get_worker_by_id(request, worker_id: str) -> dict[str, Any] | None:
 
 
 async def _list_user_accounts(request, ctx, *, search: str = "", approval: str = "", status: str = "") -> list[dict[str, Any]]:
-    if await PeopleService.use_mock(request):
-        return [_with_public_code(row) for row in STORE.list_users(ctx.current_scope_path, search=search, approval=approval, status=status)]
     scope_path = await PeopleService.effective_scope_path(request, ctx)
+    if await PeopleService.use_mock(request):
+        return [_with_public_code(row) for row in STORE.list_users(scope_path, search=search, approval=approval, status=status)]
     client = async_client(get_api_client())
     access_token = AuthService.get_access_token(request)
     loc_rows = await PeopleService.list_locations(request, ctx)
@@ -782,6 +783,7 @@ async def _create_user_account(request, payload: dict[str, Any]) -> dict[str, An
 
 
 async def _list_locations(request, ctx) -> list[dict[str, Any]]:
+    scope_path = await PeopleService.effective_scope_path(request, ctx)
     if await PeopleService.use_mock(request):
         return [
             {
@@ -791,13 +793,12 @@ async def _list_locations(request, ctx) -> list[dict[str, Any]]:
                 "group_id": "",
                 "church_type": row.get("church_type", ""),
             }
-            for row in STORE.visible_locations(ctx.current_scope_path)
+            for row in STORE.visible_locations(scope_path)
         ]
-    scope_path = await PeopleService.effective_scope_path(request, ctx)
     client = async_client(get_api_client())
     access_token = AuthService.get_access_token(request)
     try:
-        source = await fetch_all_pages(lambda skip, limit: client.list_locations(access_token, skip=skip, limit=limit))
+        source = await fetch_all_pages(lambda skip, limit: client.list_locations(access_token, scope_path=scope_path, skip=skip, limit=limit))
         rows = [_normalize_location(row) for row in source]
     except BackendClientError:
         raise
@@ -819,9 +820,9 @@ async def _list_fellowships(request, *, location_id: str | None = None) -> list[
 
 
 async def _list_members(request, ctx, *, search: str = "", location_id: str = "", status: str = "", fellowship_id: str = "") -> list[dict[str, Any]]:
-    if await PeopleService.use_mock(request):
-        return STORE.list_church_members(ctx.current_scope_path, search=search, location=location_id, status=status, fellowship_id=fellowship_id)
     scope_path = await PeopleService.effective_scope_path(request, ctx)
+    if await PeopleService.use_mock(request):
+        return STORE.list_church_members(scope_path, search=search, location=location_id, status=status, fellowship_id=fellowship_id)
     client = async_client(get_api_client())
     access_token = AuthService.get_access_token(request)
     fellowships = await _list_fellowships(request, location_id=location_id or None)
@@ -841,8 +842,9 @@ async def _list_members(request, ctx, *, search: str = "", location_id: str = ""
 
 
 async def _member_summary(request, ctx) -> dict[str, int]:
+    scope_path = await PeopleService.effective_scope_path(request, ctx)
     if await PeopleService.use_mock(request):
-        return STORE.church_member_summary(ctx.current_scope_path)
+        return STORE.church_member_summary(scope_path)
     rows = await _list_members(request, ctx)
     represented = {row["fellowship_id"] for row in rows if row.get("fellowship_id")}
     return {
@@ -853,9 +855,9 @@ async def _member_summary(request, ctx) -> dict[str, int]:
 
 
 async def _list_official_appointments(request, ctx, *, search: str = "", status: str = "", appointed_role: str = "") -> list[dict[str, Any]]:
-    if await PeopleService.use_mock(request):
-        return STORE.list_official_appointments(ctx.current_scope_path, search=search, status=status, appointed_role=appointed_role)
     scope_path = await PeopleService.effective_scope_path(request, ctx)
+    if await PeopleService.use_mock(request):
+        return STORE.list_official_appointments(scope_path, search=search, status=status, appointed_role=appointed_role)
     client = async_client(get_api_client())
     access_token = AuthService.get_access_token(request)
     rows = [
@@ -873,8 +875,9 @@ async def _list_official_appointments(request, ctx, *, search: str = "", status:
 
 
 async def _official_appointment_summary(request, ctx) -> dict[str, int]:
+    scope_path = await PeopleService.effective_scope_path(request, ctx)
     if await PeopleService.use_mock(request):
-        return STORE.official_appointment_summary(ctx.current_scope_path)
+        return STORE.official_appointment_summary(scope_path)
     rows = await _list_official_appointments(request, ctx)
     scopes = {row["assigned_scope_path"] for row in rows if row.get("assigned_scope_path")}
     return {

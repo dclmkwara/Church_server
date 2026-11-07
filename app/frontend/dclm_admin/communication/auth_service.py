@@ -11,6 +11,7 @@ from starlette.responses import Response
 
 from ..backend import BackendClientError, get_backend_config, profile_key_for_score
 from .api_client import get_api_client
+from app.core.security import create_admin_access_id
 
 
 @dataclass(frozen=True)
@@ -24,20 +25,25 @@ class AuthIdentity:
     role_name: str
     scope_path: str
     home_path: str
+    maximum_scope_path: str = ""
 
     @property
     def display_name(self) -> str:
+        """Return the display name persisted with this authenticated identity."""
         return str(self.user.get("name") or self.user.get("email") or "Authenticated User")
 
     @property
     def email(self) -> str:
+        """Return the email persisted with this authenticated identity."""
         return str(self.user.get("email") or "")
 
     @property
     def permissions(self) -> frozenset[str]:
+        """Return the backend permissions cached for this session."""
         return frozenset(str(permission) for permission in (self.user.get("permissions") or []))
 
     def has_permission(self, permission: str) -> bool:
+        """Check whether the authenticated identity carries a permission."""
         return permission in self.permissions
 
 
@@ -71,8 +77,10 @@ class AuthService:
 
     @classmethod
     def _identity_from_payload(cls, *, tokens: dict[str, Any], user: dict[str, Any]) -> AuthIdentity:
+        """Separate assigned hierarchy from the role-derived maximum scope."""
         role_score, role_name = cls._best_role(user)
-        home_path = str(user.get("path") or "")
+        assigned_path = str(user.get("path") or "")
+        home_path = create_admin_access_id(assigned_path, role_score or 2) if assigned_path else ""
         return AuthIdentity(
             user_id=str(user.get("user_id") or ""),
             access_token=str(tokens.get("access_token") or ""),
@@ -83,6 +91,7 @@ class AuthService:
             role_name=role_name,
             scope_path=home_path,
             home_path=home_path,
+            maximum_scope_path=home_path,
         )
 
     @classmethod
@@ -130,8 +139,9 @@ class AuthService:
         response.set_cookie(config.profile_cookie_name, identity.profile_key, **cookie_args)
         response.set_cookie(config.role_score_cookie_name, str(identity.role_score), **cookie_args)
         response.set_cookie(config.role_name_cookie_name, identity.role_name, **cookie_args)
-        response.set_cookie(config.scope_cookie_name, identity.scope_path, **cookie_args)
-        response.set_cookie(config.home_cookie_name, identity.home_path, **cookie_args)
+        response.set_cookie(config.scope_cookie_name, identity.maximum_scope_path or identity.scope_path, **cookie_args)
+        response.set_cookie(config.home_cookie_name, str(identity.user.get("path") or identity.home_path), **cookie_args)
+        response.set_cookie("dclm_admin_maximum_scope", identity.maximum_scope_path or identity.home_path, **cookie_args)
         response.set_cookie(config.display_name_cookie_name, identity.display_name, **cookie_args)
         response.set_cookie(config.email_cookie_name, identity.email, **cookie_args)
         response.set_cookie(
@@ -156,6 +166,7 @@ class AuthService:
             config.display_name_cookie_name,
             config.email_cookie_name,
             "dclm_admin_permissions",
+            "dclm_admin_maximum_scope",
             cls._refresh_cookie_name(),
         ]:
             response.delete_cookie(cookie_name, path="/")
@@ -194,14 +205,18 @@ class AuthService:
         role_score = int(cls._cookie_value(request, config.role_score_cookie_name, "0") or 0)
         role_name = cls._cookie_value(request, config.role_name_cookie_name, "Worker") or "Worker"
         scope_path = cls._cookie_value(request, config.scope_cookie_name, "") or ""
-        home_path = cls._cookie_value(request, config.home_cookie_name, "") or ""
+        maximum_scope_path = cls._cookie_value(request, "dclm_admin_maximum_scope", "") or ""
+        assigned_path = cls._cookie_value(request, config.home_cookie_name, "") or ""
+        home_path = assigned_path
+        if not maximum_scope_path and assigned_path:
+            maximum_scope_path = create_admin_access_id(assigned_path, role_score or 2)
         try:
             permissions = json.loads(cls._cookie_value(request, "dclm_admin_permissions", "[]") or "[]")
             if not isinstance(permissions, list) or any(not isinstance(item, str) for item in permissions):
                 permissions = []
         except (TypeError, ValueError):
             permissions = []
-        user = {"name": display_name, "email": email, "path": home_path, "permissions": permissions}
+        user = {"name": display_name, "email": email, "path": assigned_path, "permissions": permissions}
         return AuthIdentity(
             user_id=user_id,
             access_token=access_token,
@@ -212,6 +227,7 @@ class AuthService:
             role_name=role_name,
             scope_path=scope_path,
             home_path=home_path,
+            maximum_scope_path=maximum_scope_path,
         )
 
     @classmethod

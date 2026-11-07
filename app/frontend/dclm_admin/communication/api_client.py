@@ -218,8 +218,8 @@ class APIClient:
     async def create_member(self, access_token: str, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._backend_client.create_member(access_token, payload)
 
-    async def list_locations(self, access_token: str, *, skip: int = 0, limit: int = 500) -> list[dict[str, Any]]:
-        return await self._backend_client.list_locations(access_token, skip=skip, limit=limit)
+    async def list_locations(self, access_token: str, *, scope_path: str | None = None, skip: int = 0, limit: int = 500) -> list[dict[str, Any]]:
+        return await self._backend_client.list_locations(access_token, scope_path=scope_path, skip=skip, limit=limit)
 
     async def list_fellowships(
         self,
@@ -445,6 +445,21 @@ class APIClient:
     async def create_count(self, access_token: str, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._backend_client.create_count(access_token, payload)
 
+    async def list_count_review_groups(self, access_token: str) -> list[dict[str, Any]]:
+        return await self._backend_client.list_count_review_groups(access_token)
+
+    async def list_unreported_sunday_locations(self, access_token: str, occurrence_date: str) -> list[dict[str, Any]]:
+        return await self._backend_client.list_unreported_sunday_locations(access_token, occurrence_date)
+
+    async def approve_count_group(self, access_token: str, count_id: str) -> dict[str, Any]:
+        return await self._backend_client.approve_count_group(access_token, count_id)
+
+    async def reject_count_group(self, access_token: str, count_id: str, *, reason: str) -> dict[str, Any]:
+        return await self._backend_client.reject_count_group(access_token, count_id, reason=reason)
+
+    async def remind_count_location(self, access_token: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return await self._backend_client.remind_count_location(access_token, payload)
+
     async def list_offerings(self, access_token: str, *, scope_path: str | None = None, fund_type: str | None = None, location_id: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
         return await self._backend_client.list_offerings(access_token, scope_path=scope_path, fund_type=fund_type, location_id=location_id, limit=limit)
 
@@ -469,8 +484,8 @@ class APIClient:
     async def create_attendance(self, access_token: str, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._backend_client.create_attendance(access_token, payload)
 
-    async def get_attendance_stats(self, access_token: str, *, start_date: str | None = None, end_date: str | None = None) -> dict[str, Any]:
-        return await self._backend_client.get_attendance_stats(access_token, start_date=start_date, end_date=end_date)
+    async def get_attendance_stats(self, access_token: str, *, scope_path: str | None = None, start_date: str | None = None, end_date: str | None = None) -> dict[str, Any]:
+        return await self._backend_client.get_attendance_stats(access_token, scope_path=scope_path, start_date=start_date, end_date=end_date)
 
     async def get_population_statistics(
         self,
@@ -529,6 +544,39 @@ class APIClient:
             sections=sections,
         )
 
+    async def get_dashboard_sunday_worship(
+        self,
+        access_token: str,
+        *,
+        scope_path: str | None = None,
+        occurrence_date: str | None = None,
+        include_pending: bool = False,
+    ) -> dict[str, Any]:
+        return await self._backend_client.get_dashboard_sunday_worship(
+            access_token,
+            scope_path=scope_path,
+            occurrence_date=occurrence_date,
+            include_pending=include_pending,
+        )
+
+    async def get_dashboard_sunday_worship_series(
+        self,
+        access_token: str,
+        *,
+        scope_path: str | None = None,
+        weeks: int = 4,
+        include_pending: bool = False,
+        latest_date: str | None = None,
+    ) -> dict[str, Any]:
+        """Forward the grouped Sunday series request to the backend adapter."""
+        return await self._backend_client.get_dashboard_sunday_worship_series(
+            access_token,
+            scope_path=scope_path,
+            weeks=weeks,
+            include_pending=include_pending,
+            latest_date=latest_date,
+        )
+
     async def get_dashboard_member_analytics(
         self,
         access_token: str,
@@ -574,12 +622,14 @@ class APIClient:
         *,
         scope_path: str | None = None,
         location_id: str | None = None,
+        program_type_slug: str | None = None,
         limit: int = 6,
     ) -> dict[str, Any]:
         return await self._backend_client.get_dashboard_worker_meeting_comparison(
             access_token,
             scope_path=scope_path,
             location_id=location_id,
+            program_type_slug=program_type_slug,
             limit=limit,
         )
 
@@ -610,8 +660,8 @@ class APIClient:
     async def get_report_timeseries(self, access_token: str, *, metric: str, interval: str = "daily", scope_path: str | None = None, start_date: str | None = None, end_date: str | None = None) -> dict[str, Any]:
         return await self._backend_client.get_report_timeseries(access_token, metric=metric, interval=interval, scope_path=scope_path, start_date=start_date, end_date=end_date)
 
-    async def get_report_breakdown(self, access_token: str, *, metric: str, level: str, start_date: str | None = None, end_date: str | None = None) -> dict[str, Any]:
-        return await self._backend_client.get_report_breakdown(access_token, metric=metric, level=level, start_date=start_date, end_date=end_date)
+    async def get_report_breakdown(self, access_token: str, *, metric: str, level: str, scope_path: str | None = None, start_date: str | None = None, end_date: str | None = None) -> dict[str, Any]:
+        return await self._backend_client.get_report_breakdown(access_token, metric=metric, level=level, scope_path=scope_path, start_date=start_date, end_date=end_date)
 
     async def get_report_anomalies(
         self,
@@ -620,6 +670,7 @@ class APIClient:
         metric: str = "counts",
         threshold: float = 2.0,
         days: int = 30,
+        scope_path: str | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
     ) -> dict[str, Any]:
@@ -628,6 +679,7 @@ class APIClient:
             metric=metric,
             threshold=threshold,
             days=days,
+            scope_path=scope_path,
             start_date=start_date,
             end_date=end_date,
         )
@@ -639,6 +691,7 @@ class APIClient:
         metric: str = "counts",
         period: str = "monthly",
         months: int = 12,
+        scope_path: str | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
     ) -> dict[str, Any]:
@@ -647,6 +700,7 @@ class APIClient:
             metric=metric,
             period=period,
             months=months,
+            scope_path=scope_path,
             start_date=start_date,
             end_date=end_date,
         )
