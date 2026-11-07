@@ -126,13 +126,16 @@ class DashboardService:
             func.count(Worker.worker_id).label("total"),
             func.coalesce(func.sum(_status_case(Worker.gender, "Male")), 0).label("male"),
             func.coalesce(func.sum(_status_case(Worker.gender, "Female")), 0).label("female"),
-            func.coalesce(func.sum(_status_case(Worker.status, "Active")), 0).label("active"),
-            func.coalesce(func.sum(_status_case(Worker.status, "Inactive")), 0).label("inactive"),
-            func.coalesce(func.sum(_status_case(Worker.status, "Suspended")), 0).label("suspended"),
+            func.coalesce(func.sum(cast(case((and_(func.lower(Worker.status) == "active", Worker.approval_status == "approved"), 1), else_=0), Integer)), 0).label("active"),
+            func.coalesce(func.sum(cast(case((and_(func.lower(Worker.status) == "suspended", Worker.approval_status == "approved"), 1), else_=0), Integer)), 0).label("suspended"),
             func.coalesce(func.sum(_status_case(Worker.approval_status, "pending_verification")), 0).label("pending_verification"),
         ).where(and_(*filters))
         row = (await db.execute(stmt)).one()
-        return {k: int(getattr(row, k) or 0) for k in ("total", "male", "female", "active", "inactive", "suspended", "pending_verification")}
+        data = {k: int(getattr(row, k) or 0) for k in ("total", "male", "female", "active", "suspended", "pending_verification")}
+        # Keep the dashboard status categories mutually exclusive and complete;
+        # inactive, rejected, and other legacy statuses are the remainder.
+        data["inactive"] = max(data["total"] - data["active"] - data["suspended"] - data["pending_verification"], 0)
+        return data
 
     @staticmethod
     async def get_program_comparison(db, scope_path: str, *, location_id=None, limit: int = 6) -> dict[str, Any]:

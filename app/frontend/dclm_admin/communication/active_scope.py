@@ -76,8 +76,13 @@ def active_scope_context(request: Any, ctx: Any) -> Any:
         extras.pop("period", None)
     if active.include_pending:
         extras["include_pending"] = "true"
+    elif query.get("include_pending") is not None:
+        extras["include_pending"] = "false"
     else:
         extras.pop("include_pending", None)
+    weeks = str(query.get("weeks") or "").strip()
+    if weeks in {"4", "8"}:
+        extras["weeks"] = weeks
     return replace(
         ctx,
         current_scope_path=active.path,
@@ -107,7 +112,10 @@ def scope_link(ctx: Any, path: str, **overrides: str | None) -> str:
     current_path = str(getattr(ctx, "current_scope_path", "") or "")
     if current_path and current_path != extras.get("home_path") and "scope_path" not in overrides:
         params["scope_path"] = current_path
-    for key in ("scope_path", "period", "include_pending"):
-        if extras.get(key) and key not in overrides:
-            params[key] = str(extras[key])
+    # Preserve explicit false values too: links must reproduce the exact view
+    # represented by the active controls, including include_pending=false.
+    for key in ("scope_path", "period", "include_pending", "weeks"):
+        value = extras.get(key)
+        if value is not None and key not in overrides:
+            params[key] = str(value)
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(params), parts.fragment))

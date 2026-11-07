@@ -10,6 +10,9 @@ from starlette.requests import Request
 from ..auth_context import build_context
 from ..communication.dashboard_service import DashboardService
 from ..communication.active_scope import active_scope_context
+from ..communication.church_data_service import ChurchDataService
+from ..communication.people_service import PeopleService
+from ..backend import BackendClientError
 from ..components.chartjs import bar_chart as _bar_chart
 from ..components.chartjs import donut_chart as _donut_chart
 from ..components.chartjs import sparkline_chart as _sparkline
@@ -1123,7 +1126,7 @@ async def _dashboard_content(request: Request, ctx) -> Any:
 def register_dashboard_routes(app) -> None:
     @app.get("/dashboard")
     async def dashboard(request: Request):
-        ctx = active_scope_context(request, build_context(request))
+        ctx = build_context(request)
         return (
             *shell_layout(
                 ctx,
@@ -1134,6 +1137,7 @@ def register_dashboard_routes(app) -> None:
                 primary_action=None,
                 content=await render_analytics_dashboard(request, ctx),
                 show_shell_intro=False,
+                show_scope_breadcrumb=False,
             ),
             # Keep this analytics surface in the established light DCLM palette.
             Script("document.documentElement.setAttribute('data-bs-theme','light');"),
@@ -1141,8 +1145,32 @@ def register_dashboard_routes(app) -> None:
 
     @app.get("/dashboard/content")
     async def dashboard_content(request: Request):
-        ctx = active_scope_context(request, build_context(request))
+        ctx = build_context(request)
         return await render_analytics_dashboard(request, ctx)
+
+    @app.post("/dashboard/remind")
+    async def dashboard_remind(request: Request):
+        ctx = active_scope_context(request, build_context(request))
+        if not ctx.has_permission("counts:review"):
+            return Div(P("You do not have permission to remind reporting locations.", cls="small text-danger mb-0"), role="alert")
+        form = await request.form()
+        location_id = str(form.get("location_id") or "")
+        program_type_id = str(form.get("program_type_id") or "")
+        occurrence_date = str(form.get("occurrence_date") or "")
+        try:
+            # Confirm the submitted UUID is a location in the currently selected
+            # scope; backend authorization also enforces the sign-in maximum.
+            locations = await PeopleService.list_locations(request, ctx)
+            if not any(str(row.get("location_id")) == location_id for row in locations):
+                return Div(P("Reminder refused: location is outside the selected scope.", cls="small text-danger mb-0"), role="alert")
+            await ChurchDataService.remind_count_location(request, {
+                "location_id": location_id,
+                "program_type_id": program_type_id,
+                "occurrence_date": occurrence_date,
+            })
+            return Div(P("Reminder sent to active users at this location.", cls="small text-success mb-0"), role="status")
+        except BackendClientError as exc:
+            return Div(P(f"Reminder was not sent: {exc}", cls="small text-danger mb-0"), role="alert")
 
     @app.get("/dashboard/sections/{section_key}")
     async def dashboard_section(request: Request, section_key: str, view: str = "chart"):

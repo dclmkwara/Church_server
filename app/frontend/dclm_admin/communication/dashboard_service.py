@@ -417,7 +417,7 @@ class DashboardService:
             male = _safe_int(payload.get("male"))
             female = _safe_int(payload.get("female"))
             active = _safe_int(payload.get("active"))
-            inactive = _safe_int(payload.get("inactive")) + _safe_int(payload.get("suspended"))
+            inactive = _safe_int(payload.get("inactive"))
             return {
                 "total": total,
                 "male": male,
@@ -426,6 +426,7 @@ class DashboardService:
                 "female_ratio": _safe_ratio(female, total),
                 "active": active,
                 "inactive": inactive,
+                "suspended": _safe_int(payload.get("suspended")),
                 "pending_verification": _safe_int(payload.get("pending_verification")),
             }
         if await DashboardService.live_enabled(request):
@@ -441,7 +442,7 @@ class DashboardService:
                 male = _safe_int(payload.get("male"))
                 female = _safe_int(payload.get("female"))
                 active = _safe_int(payload.get("active"))
-                inactive = _safe_int(payload.get("inactive")) + _safe_int(payload.get("suspended"))
+                inactive = _safe_int(payload.get("inactive"))
                 return {
                     "total": total,
                     "male": male,
@@ -450,6 +451,7 @@ class DashboardService:
                     "female_ratio": _safe_ratio(female, total),
                     "active": active,
                     "inactive": inactive,
+                    "suspended": _safe_int(payload.get("suspended")),
                     "pending_verification": _safe_int(payload.get("pending_verification")),
                 }
             except BackendClientError:
@@ -457,7 +459,9 @@ class DashboardService:
         rows = await PeopleService.list_workers(request, ctx)
         male = sum(1 for row in rows if str(row.get("gender") or "").lower() == "male")
         female = sum(1 for row in rows if str(row.get("gender") or "").lower() == "female")
-        active = sum(1 for row in rows if str(row.get("status") or "").lower() == "active")
+        active = sum(1 for row in rows if str(row.get("status") or "").lower() == "active" and str(row.get("approval_status") or "").lower() == "approved")
+        suspended = sum(1 for row in rows if str(row.get("status") or "").lower() == "suspended" and str(row.get("approval_status") or "").lower() == "approved")
+        pending = sum(1 for row in rows if str(row.get("approval_status") or "").lower() == "pending_verification")
         total = len(rows)
         return {
             "total": total,
@@ -467,6 +471,8 @@ class DashboardService:
             "female_ratio": _safe_ratio(female, total),
             "active": active,
             "inactive": max(total - active, 0),
+            "suspended": suspended,
+            "pending_verification": pending,
         }
 
     @staticmethod

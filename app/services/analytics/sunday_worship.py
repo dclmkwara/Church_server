@@ -1,4 +1,4 @@
-﻿"""Sunday Worship population coverage and totals for the B1 analytics slice."""
+"""Sunday Worship population coverage and totals for the B1 analytics slice."""
 
 from __future__ import annotations
 
@@ -7,13 +7,13 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Iterable
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import String, and_, cast, func, literal, or_, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
 from app.db.filters import scope_filter, scope_or_ancestor_filter
 from app.models.counts import Count
-from app.models.location import Group, Location, Region
+from app.models.location import Group, Location, Region, State
 from app.models.programs import ProgramEvent, ProgramType
 
 from .program_config import (
@@ -153,6 +153,7 @@ def _build_overview(
     received_units: set[str] = set()
     counted_units: set[str] = set()
     included_combined_count_scopes: set[str] = set()
+    unreported_location_ids: list[str] = []
 
     local_event_rows_by_location: dict[str, list[Any]] = defaultdict(list)
     for event_id, event_rows in rows_by_event.items():
@@ -183,7 +184,10 @@ def _build_overview(
                     if count_scope is not None:
                         included_combined_count_scopes.add(count_scope)
             else:
-                coverage[receipt_state(occurrence_date, now, received=False)] += 1
+                state = receipt_state(occurrence_date, now, received=False)
+                coverage[state] += 1
+                if state in {"missing", "late", "awaiting"}:
+                    unreported_location_ids.append(location_id)
             continue
 
         rows = own_rows or event_rows
@@ -195,7 +199,10 @@ def _build_overview(
                 counted_units.add(location_id)
                 included_rows.extend(rows)
         else:
-            coverage[receipt_state(occurrence_date, now, received=False)] += 1
+            state = receipt_state(occurrence_date, now, received=False)
+            coverage[state] += 1
+            if state in {"missing", "late", "awaiting"}:
+                unreported_location_ids.append(location_id)
     # Include each combined report once when its reporting scope is within this view.
     selected_event_ids = {str(event.id) for event in event_for_location.values()}
     for event in combined_events:
@@ -233,6 +240,7 @@ def _build_overview(
         "total": total,
         "categories": {key: values_payload[key] for key in _CATEGORIES},
         "coverage": coverage,
+        "unreported_location_ids": unreported_location_ids,
         "additivity": "additive",
         "status_rule": "approved" if not include_pending else "approved+pending",
         "include_pending": include_pending,
@@ -384,10 +392,35 @@ class SundayWorshipAnalytics:
 
         depth = max(len([part for part in scope_path.split(".") if part]) - 1, 0)
         child_model = {2: Region, 3: Group, 4: Location}.get(depth)
-        child_result = await db.execute(
-            select(child_model).where(scope_filter(child_model.path, scope_path)).order_by(child_model.path)
-        ) if child_model else None
-        children = list(child_result.scalars().all()) if child_result is not None else []
+        hierarchy_selects = []
+        if child_model:
+            child_name = {Region: Region.region_name, Group: Group.group_name, Location: Location.location_name}[child_model]
+            child_location_id = cast(Location.location_id, String) if child_model is Location else literal("", type_=String)
+            hierarchy_selects.append(
+                select(
+                    child_model.path.label("path"), child_name.label("name"),
+                    child_location_id.label("location_id"), literal("child").label("node_type"),
+                ).where(scope_filter(child_model.path, scope_path))
+            )
+        scope_parts = [part for part in scope_path.split(".") if part]
+        ancestor_paths = [".".join(scope_parts[:node_depth]) for node_depth in range(3, len(scope_parts) + 1)]
+        for node_depth, path in enumerate(ancestor_paths, start=3):
+            node_model, name_column = {
+                3: (State, State.state_name),
+                4: (Region, Region.region_name),
+                5: (Group, Group.group_name),
+            }.get(node_depth, (Location, Location.location_name))
+            node_location_id = cast(Location.location_id, String) if node_model is Location else literal("", type_=String)
+            hierarchy_selects.append(
+                select(
+                    node_model.path.label("path"), name_column.label("name"),
+                    node_location_id.label("location_id"), literal("ancestor").label("node_type"),
+                ).where(node_model.path == path)
+            )
+        hierarchy_result = await db.execute(union_all(*hierarchy_selects).order_by("path")) if hierarchy_selects else None
+        hierarchy_rows = list(hierarchy_result.all()) if hierarchy_result is not None else []
+        children = [row for row in hierarchy_rows if row.node_type == "child"]
+        ancestors = [{"path": str(row.path), "name": str(row.name or "")} for row in hierarchy_rows if row.node_type == "ancestor"]
 
         event_result = await db.execute(
             select(ProgramEvent).options(joinedload(ProgramEvent.campaign)).where(
@@ -449,12 +482,31 @@ class SundayWorshipAnalytics:
                 count_rows=daily_counts, include_pending=include_pending,
             )
 
+        scope_history = [build(scope_path, when) for when in occurrence_dates]
+        location_by_id = {str(location.location_id): location for location in locations}
+        missing_locations = [
+            {
+                "path": str(location_by_id[location_id].path),
+                "name": str(location_by_id[location_id].location_name),
+                "location_id": location_id,
+            }
+            for location_id in scope_history[-1].get("unreported_location_ids", [])
+            if location_id in location_by_id
+        ]
         return {
-            "scope": [build(scope_path, when) for when in occurrence_dates],
+            "scope": scope_history,
+            "ancestors": ancestors,
+            "location_nodes": [
+                {"path": str(location.path), "name": str(location.location_name), "location_id": str(location.location_id)}
+                for location in locations
+            ],
+            "missing_locations": missing_locations,
+            "program_type_id": type_id,
             "children": [
                 {
                     "path": str(child.path),
-                    "name": str(getattr(child, "region_name", None) or getattr(child, "group_name", None) or getattr(child, "location_name", "")),
+                    "name": str(child.name or ""),
+                    "location_id": str(child.location_id or ""),
                     "history": [build(str(child.path), when) for when in occurrence_dates],
                 }
                 for child in children

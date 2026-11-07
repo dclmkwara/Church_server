@@ -53,7 +53,7 @@ def test_active_scope_rejects_sibling_scope(monkeypatch):
 
 def test_scope_link_retains_active_scope_and_period(monkeypatch):
     identity = SimpleNamespace(home_path="dcl.234.kw.ilr", scope_path="dcl.234.kw.ilr")
-    request = _request(b"scope_path=dcl.234.kw.ilr.ile&period=year")
+    request = _request(b"scope_path=dcl.234.kw.ilr.ile&period=year&include_pending=false&weeks=8")
     monkeypatch.setattr(auth_context, "get_backend_config", lambda: SimpleNamespace(enabled=True))
     monkeypatch.setattr(auth_context.AuthService, "get_identity", staticmethod(lambda _request: identity))
     ctx = auth_context._backend_context(request)
@@ -64,3 +64,17 @@ def test_scope_link_retains_active_scope_and_period(monkeypatch):
 
     assert query["scope_path"] == ["dcl.234.kw.ilr.ile"]
     assert query["period"] == ["year"]
+    assert query["include_pending"] == ["false"]
+    assert query["weeks"] == ["8"]
+
+
+def test_active_scope_rejects_ancestor_above_signed_in_maximum(monkeypatch):
+    identity = SimpleNamespace(home_path="dcl.234.kw.ilr", maximum_scope_path="dcl.234.kw.ilr", scope_path="dcl.234.kw.ilr")
+    request = _request(b"scope_path=dcl.234.kw")
+    ctx = SimpleNamespace(current_scope_path=identity.scope_path)
+    monkeypatch.setattr(auth_context.AuthService, "get_identity", staticmethod(lambda _request: identity))
+
+    with pytest.raises(HTTPException) as error:
+        resolve_active_scope(request, ctx)
+
+    assert error.value.status_code == 403

@@ -77,12 +77,29 @@
 .analytics-attention-title:hover { color:var(--ad-blue); }
 .analytics-attention-item p.analytics-muted { margin:3px 0 0; font-size:10px; }
 .analytics-chart { position:relative; padding-top:8px; }
-.analytics-chart-plot { height:180px; }
-.analytics-svg { width:100%; height:100%; overflow:visible; }
+.analytics-chart-plot { width:100%; height:auto; aspect-ratio:900 / 350; }
+.analytics-svg { display:block; width:100%; height:auto; overflow:visible; }
 .analytics-svg-grid { stroke:var(--ad-line); stroke-width:1; }
+.analytics-svg-coverage-grid { stroke-dasharray:3 4; }
 .analytics-svg-label { fill:var(--ad-muted); font-size:11px; }
+.analytics-svg-date { font-size:10px; }
 .analytics-svg-line { fill:none; stroke:var(--ad-blue); stroke-width:3; stroke-linejoin:round; stroke-linecap:round; }
 .analytics-svg-point { fill:var(--ad-blue); }
+.analytics-svg-bar { fill:var(--ad-green); opacity:.8; }
+.analytics-scope-breadcrumb { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:5px 0 10px; color:var(--ad-muted); font-size:12px; }
+.analytics-crumb { color:var(--ad-blue); text-decoration:none; }
+.analytics-crumb:hover { text-decoration:underline; }
+.analytics-crumb-current { color:var(--ad-ink); font-weight:700; }
+.analytics-crumb-separator { color:var(--ad-muted); }
+.analytics-error { padding:16px; border-color:#c94d4d; }
+.analytics-error-title { margin:0 0 4px; color:#a12d2d; font-weight:700; }
+.analytics-error-message { margin:0; color:var(--ad-ink); }
+.analytics-attention-copy { min-width:0; flex:1; }
+.analytics-attention-title { display:inline-block; }
+.analytics-remind-form { margin-top:5px; }
+.analytics-remind-status:empty { display:none; }
+.analytics-attention-dot.returned { background:var(--ad-red); }
+.analytics-attention-dot.decline { background:var(--ad-red); }
 .analytics-chart-bars { position:relative; inset:auto; display:flex; align-items:end; justify-content:space-around; height:30px; margin:0 2% 0 6.5%; opacity:.65; pointer-events:none; }
 .analytics-coverage-bar { position:absolute; bottom:0; width:18px; min-height:2px; background:var(--ad-green); border-radius:3px 3px 0 0; }
 .analytics-chart-dates { display:flex; justify-content:space-around; color:var(--ad-muted); font-size:10px; }
@@ -91,7 +108,7 @@
 @media(max-width:1500px) { .analytics-content-split { grid-template-columns:1fr; } }
 @media(max-width:1200px) { .analytics-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @media(max-width:900px) { .analytics-topbar,.analytics-breadcrumb,.analytics-toolbar { margin-right:18px; margin-left:18px; } .analytics-user-name { display:none; } }
-@media(max-width:620px) { .analytics-topbar { grid-template-columns:1fr auto; gap:8px; padding:9px 0; } .analytics-topbar>div:first-child { display:grid; gap:1px; } .analytics-tabs { grid-column:1/-1; grid-row:2; } .analytics-user { grid-column:2; grid-row:1; } .analytics-toolbar { flex-wrap:wrap; gap:9px; padding:10px 0; } .analytics-filter-period { margin-left:0; } .analytics-pending-switch { width:100%; } .analytics-dashboard-main { padding-top:12px; } .analytics-title { font-size:24px; } .analytics-coverage-head { display:block; } .analytics-align-right { margin-top:7px; text-align:left; } .analytics-metrics { grid-template-columns:1fr 1fr; gap:7px; } .analytics-metric { padding:10px; } .analytics-value { font-size:21px; } .analytics-kicker { font-size:9px; } .analytics-chart-plot { height:150px; } }
+@media(max-width:620px) { .analytics-topbar { grid-template-columns:1fr auto; gap:8px; padding:9px 0; } .analytics-topbar>div:first-child { display:grid; gap:1px; } .analytics-tabs { grid-column:1/-1; grid-row:2; } .analytics-user { grid-column:2; grid-row:1; } .analytics-toolbar { flex-wrap:wrap; gap:9px; padding:10px 0; } .analytics-filter-period { margin-left:0; } .analytics-pending-switch { width:100%; } .analytics-dashboard-main { padding-top:12px; } .analytics-title { font-size:24px; } .analytics-coverage-head { display:block; } .analytics-align-right { margin-top:7px; text-align:left; } .analytics-metrics { grid-template-columns:1fr 1fr; gap:7px; } .analytics-metric { padding:10px; } .analytics-value { font-size:21px; } .analytics-kicker { font-size:9px; } }
 
 /* Keep the prototype's compact analytics layout in DCLM's existing light brand palette. */
 :root { --ad-bg:#f3f6fb; --ad-panel:#ffffff; --ad-panel-2:#edf3fa; --ad-line:#d8e1ec; --ad-ink:#182b42; --ad-muted:#62758a; --ad-blue:#1d4f91; --ad-green:#22a06b; --ad-amber:#d98c12; --ad-red:#c94d4d; }

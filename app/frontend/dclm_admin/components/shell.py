@@ -346,6 +346,7 @@ def shell_layout(
     primary_action: Any | None,
     content: Any,
     show_shell_intro: bool = True,
+    show_scope_breadcrumb: bool = True,
 ) -> Any:
     sidebar = _sidebar(ctx, active_key)
     page_title = title or "DCLM Admin"
@@ -427,7 +428,7 @@ def shell_layout(
                                 Div(primary_action, cls="d-flex align-items-center gap-2 ms-lg-auto flex-shrink-0") if primary_action else "",
                                 cls="page-command-header d-flex flex-column flex-lg-row justify-content-between align-items-lg-center gap-3 mb-4 pb-3 border-bottom border-body-secondary",
                             ) if (show_shell_intro and title) or primary_action else "",
-                            active_scope_breadcrumb(ctx.current_scope_path),
+                            active_scope_breadcrumb(ctx.current_scope_path) if show_scope_breadcrumb else "",
                             content,
                             cls="admin-page-body",
                         ),
