@@ -1152,7 +1152,7 @@ def register_dashboard_routes(app) -> None:
     @app.post("/dashboard/remind")
     async def dashboard_remind(request: Request):
         ctx = active_scope_context(request, build_context(request))
-        if not ctx.has_permission("counts:review"):
+        if not ctx.has_permission("counts:remind"):
             return Div(P("You do not have permission to remind reporting locations.", cls="small text-danger mb-0"), role="alert")
         form = await request.form()
         location_id = str(form.get("location_id") or "")

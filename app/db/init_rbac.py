@@ -44,6 +44,7 @@ DEFAULT_PERMISSIONS = [
     _perm("counts:update", "Update Count", "Can edit attendance counts"),
     _perm("counts:delete", "Delete Count", "Can delete attendance counts"),
     _perm("counts:review", "Review Program Counts", "Can approve or reject count submissions within the assigned reporting level"),
+    _perm("counts:remind", "Remind Reporting Locations", "Can send a Sunday reporting reminder to eligible users at a location within scope"),
 
     # Offerings and tithes
     _perm("offerings:create", "Create Offering", "Can record offerings and tithes"),
@@ -255,7 +256,7 @@ DEFAULT_ROLES = {
 
     # Level 3: group governance
     "Group Admin": {"score_id": 3, "permissions": ADMIN_PERMS + ["users:assign_roles", "programs:create_event", "programs:assign_workers", "programs:approve_assignments"] + OFFICIAL_PERMS},
-    "Group Pastor": {"score_id": 3, "permissions": PASTOR_PERMS + ["counts:review", "users:assign_roles", "programs:create_event", "programs:assign_workers", "programs:approve_assignments"] + OFFICIAL_PERMS},
+    "Group Pastor": {"score_id": 3, "permissions": PASTOR_PERMS + ["counts:review", "counts:remind", "users:assign_roles", "programs:create_event", "programs:assign_workers", "programs:approve_assignments"] + OFFICIAL_PERMS},
 
     # Level 1: collection role at the region scope; not region governance.
     "Region Usher": {"score_id": 1, "permissions": USHER_PERMS},
@@ -267,7 +268,7 @@ DEFAULT_ROLES = {
     },
     "Region Pastor": {
         "score_id": 4,
-        "permissions": PASTOR_PERMS + ["counts:review", "users:assign_roles", "programs:create_event", "programs:assign_workers", "programs:approve_assignments"] + OFFICIAL_PERMS + REGION_HIERARCHY_PERMS
+        "permissions": PASTOR_PERMS + ["counts:review", "counts:remind", "users:assign_roles", "programs:create_event", "programs:assign_workers", "programs:approve_assignments"] + OFFICIAL_PERMS + REGION_HIERARCHY_PERMS
     },
 
     # Level 1: event capture role. Event-specific Alpha access must be granted
@@ -281,7 +282,7 @@ DEFAULT_ROLES = {
     },
     "State Overseer": {
         "score_id": 5,
-        "permissions": PASTOR_PERMS + ["counts:review", "users:assign_roles", "programs:create_event", "programs:assign_workers", "programs:approve_assignments"] + OFFICIAL_PERMS + STATE_HIERARCHY_PERMS
+        "permissions": PASTOR_PERMS + ["counts:review", "counts:remind", "users:assign_roles", "programs:create_event", "programs:assign_workers", "programs:approve_assignments"] + OFFICIAL_PERMS + STATE_HIERARCHY_PERMS
     },
 
     # Enterprise roles are seeded for the separate higher-level client, which

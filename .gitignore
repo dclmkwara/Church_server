@@ -86,3 +86,5 @@ Screenshot/
  structure.txt
  COMPREHENSIVE_PROJECT_REVIEW.md
  PROGRESS.md
+# Local pre-migration database snapshots are sensitive and must never be committed.
+output/private-backups/

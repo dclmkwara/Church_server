@@ -360,7 +360,7 @@ def _attention_panel(
                 hours_ago = max(int((datetime.now(timezone.utc) - reminded_at).total_seconds() // 3600), 0)
                 elapsed_label = "less than 1h ago" if hours_ago == 0 else f"{hours_ago}h ago"
                 action = P(f"Reminded {elapsed_label}", cls="small text-muted analytics-remind-form")
-            else:
+            elif ctx.has_permission("counts:remind"):
                 action = Form(
                     Input(type="hidden", name="location_id", value=location_id),
                     Input(type="hidden", name="program_type_id", value=str(program_type_id)),
@@ -368,6 +368,8 @@ def _attention_panel(
                     Button("Remind", type="submit", variant="outline-primary", size="sm"),
                     hx_post=scope_link(ctx, "/dashboard/remind", scope_path=scope_path), hx_target=f"#{status_id}", hx_swap="innerHTML", cls="analytics-remind-form",
                 )
+            else:
+                action = P("Reminders are unavailable for this role.", cls="small text-muted analytics-remind-form")
             title = A(str(row.get("name") or "Location"), href=href, hx_get=hx_href, hx_push_url=href, hx_target="#analytics-dashboard-body", hx_swap="outerHTML", cls="analytics-attention-title")
             items.append((60, Div(Span(cls="analytics-attention-dot missing"), Div(title, P("No Sunday Worship report received", cls="analytics-muted"), action, Div(id=status_id, role="status", cls="analytics-remind-status"), cls="analytics-attention-copy"), cls="analytics-attention-item")))
 

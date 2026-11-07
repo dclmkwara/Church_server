@@ -497,7 +497,7 @@ async def count_history(
     return {"history": [CountResponse.model_validate(row).model_dump(mode="json") for row in rows]}
 
 
-@router.post("/review/remind", dependencies=[Depends(deps.PermissionChecker("counts:review"))])
+@router.post("/review/remind", dependencies=[Depends(deps.PermissionChecker("counts:remind"))])
 async def remind_unreported_location(
     payload: CountReminder,
     db: AsyncSession = Depends(deps.get_db),

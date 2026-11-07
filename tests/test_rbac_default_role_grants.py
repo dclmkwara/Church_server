@@ -14,6 +14,22 @@ def test_count_review_permission_is_seeded_for_the_approving_pastors():
     assert "Group Admin" not in actual_roles
 
 
+def test_count_reminder_permission_is_separate_and_seeded_for_pastors_and_higher_authorities():
+    permission_names = {item["permission"] for item in DEFAULT_PERMISSIONS}
+    assert "counts:remind" in permission_names
+    required_roles = {"Group Pastor", "Region Pastor", "State Overseer"}
+    higher_authorities = {
+        name for name, role in DEFAULT_ROLES.items() if role["score_id"] >= 6
+    }
+    actual_roles = {
+        name for name, role in DEFAULT_ROLES.items()
+        if "counts:remind" in role["permissions"]
+    }
+    assert required_roles <= actual_roles
+    assert actual_roles <= required_roles | higher_authorities
+    assert not {"Location Pastor", "Group Admin", "Region Admin", "State Admin"} & actual_roles
+
+
 def test_fellowship_hierarchy_creation_is_granted_at_region_and_above():
     permission_names = {item["permission"] for item in DEFAULT_PERMISSIONS}
     assert "hierarchy:create_fellowship" in permission_names

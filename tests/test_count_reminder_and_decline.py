@@ -54,7 +54,7 @@ def test_reminder_recipient_query_limits_role_and_exact_location():
     assert "users.approval_status = 'approved'" in sql
 
 
-def test_reminder_route_requires_review_permission():
+def test_reminder_route_requires_reminder_permission():
     route = next(
         route for route in count_routes.router.routes
         if isinstance(route, APIRoute) and route.path.endswith("/review/remind")
@@ -63,7 +63,7 @@ def test_reminder_route_requires_review_permission():
         getattr(dependency.call, "required_permission", None)
         for dependency in route.dependant.dependencies
     }
-    assert "counts:review" in required
+    assert "counts:remind" in required
 
 
 def test_reminder_sends_and_audits_only_recipient_users(monkeypatch):
