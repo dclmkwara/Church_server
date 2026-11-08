@@ -4,14 +4,14 @@ import asyncio
 
 from fasthtml.common import A, Div, Form, H3, H4, Input, Label, P, Select, Option, Textarea
 from starlette.requests import Request
-from starlette.responses import RedirectResponse
+from starlette.responses import HTMLResponse, RedirectResponse
 import base64
 from faststrap import Alert, Badge, Button, Icon, PlaceholderCard, Spinner
 from ..components.bulk_import_ui import hierarchy_import_drawer, hierarchy_import_preview
 
 from ..backend import BackendClientError
 from ..auth_context import build_context
-from ..communication import FellowshipService, OrganizationService
+from ..communication import AuthService, FellowshipService, OrganizationService
 from ..components.feedback import simple_toast_response
 from ..components.shell import hidden_context_inputs, primary_button, shell_layout
 from ..components.ui import empty_state, filter_field, page_intro, page_stack, responsive_table, section_card, stat_card, status_badge
@@ -37,6 +37,14 @@ def _organization_nav(ctx, active: str):
         ],
         cls="workspace-tab-strip mb-4",
     )
+
+
+def _location_home_id(ctx, identity) -> str:
+    """Return the authenticated location UUID; hierarchy path segments are codes."""
+    if int(getattr(ctx, "level", 0) or 0) >= 3:
+        return ""
+    user = getattr(identity, "user", {}) or {}
+    return str(user.get("location_id") or "").strip()
 
 
 async def _tree_list(ctx, focus_path: str):
@@ -404,7 +412,10 @@ def register_organization_routes(app) -> None:
     async def organization_root(request: Request):
         ctx = build_context(request)
         if ctx.level < 3:
-            return RedirectResponse(ctx.url_for(f"/organization/locations/{ctx.current_scope_path.split('.')[-1]}"))
+            location_id = _location_home_id(ctx, AuthService.get_identity(request))
+            if not location_id:
+                return HTMLResponse("Location profile is unavailable for this account.", status_code=403)
+            return RedirectResponse(ctx.url_for(f"/organization/locations/{location_id}"))
         return RedirectResponse(ctx.url_for("/organization/hierarchy"))
 
     @app.get("/organization/hierarchy")

@@ -55,7 +55,7 @@ NAV_GROUPS = [
             {"label": "Organization", "icon": "geo-alt", "href": "/organization", "key": "organization"},
             {"label": "Communication", "icon": "megaphone", "href": "/communication", "key": "communication", "module": "communication"},
             {"label": "Reports", "icon": "clipboard-data", "href": "/reports", "key": "reports", "module": "reports"},
-            {"label": "Roles & Permissions", "icon": "shield-lock", "href": "/system/rbac", "key": "system", "module": "system", "min_level": 2},
+            {"label": "Roles & Permissions", "icon": "shield-lock", "href": "/system/rbac", "key": "system", "module": "system", "min_level": 5},
         ],
     },
 ]
@@ -296,7 +296,6 @@ def _sidebar(ctx: AdminContext, active_key: str) -> Any:
         *groups,
         Div(
             A(Icon("download", cls="me-2"), "Install App", href="#", data_install_trigger="sidebar", cls="btn btn-outline-light btn-sm sidebar-install-btn d-none"),
-            A("Help & Docs", href="/docs" if get_backend_config().enabled else "#", cls="sidebar-footer-link"),
             cls="mt-auto d-grid gap-2",
         ),
         cls="admin-sidebar-inner d-flex flex-column h-100",
@@ -376,7 +375,7 @@ def shell_layout(
             Drawer(sidebar, drawer_id="mobile-nav", title="DCLM Admin", placement="start", body_cls="p-0"),
             Div(
                 Div(
-                    # Left side: mobile hamburger + logo brand (shown < lg) and search form (shown md+)
+                    # Left side: mobile brand and a desktop section label.
                     Div(
                         A(
                             Img(src="/assets/img/dclm-logo.png", alt="DCLM", style="height:28px;width:auto;", cls="me-2 flex-shrink-0"),
@@ -384,16 +383,7 @@ def shell_layout(
                             href=ctx.url_for("/dashboard"),
                             cls="d-flex align-items-center text-decoration-none d-md-none me-2 topbar-mobile-brand",
                         ),
-                        Form(
-                            *hidden_context_inputs(ctx),
-                            Input(
-                                type="search",
-                                name="q",
-                                placeholder="Search people, counts, or locations...",
-                                cls="form-control admin-search-input",
-                            ),
-                            cls="admin-search-form d-none d-md-flex",
-                        ),
+                        Span("Church operations", cls="small text-secondary d-none d-md-inline ms-2"),
                         cls="d-flex align-items-center flex-grow-1 min-w-0 topbar-left-cluster",
                     ),
                     # Right side: notification + user avatar grouped together

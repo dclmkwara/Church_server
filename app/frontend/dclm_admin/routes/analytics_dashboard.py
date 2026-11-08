@@ -14,7 +14,7 @@ from ..communication.dashboard_service import DashboardService
 from ..communication.active_scope import active_scope_context, scope_link
 from ..communication.church_data_service import ChurchDataService
 from app.core import dashboard_perf
-from app.services.analytics.program_config import ATTENTION_DECLINE_PCT, ATTENTION_MIN_COMPARABLE_LOCATIONS
+from app.services.analytics.program_config import ATTENTION_DECLINE_PCT, ATTENTION_MIN_COMPARABLE_LOCATIONS, reporting_today
 from ..auth_context import build_context
 
 
@@ -37,8 +37,8 @@ def _pooled_decline(previous: dict[str, Any], current: dict[str, Any]) -> tuple[
     return len(common), 100 * (previous_total - current_total) / previous_total
 
 
-def _lagos_sunday(today: date | None = None) -> date:
-    today = today or date.today()
+def _lagos_sunday(today: date | None = None, *, now: datetime | None = None) -> date:
+    today = today or reporting_today(now)
     return today - timedelta(days=(today.weekday() + 1) % 7)
 
 
@@ -501,7 +501,7 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
                 Div(
                     _metric("Latest Sunday population", population_value, f"{_integer(current.get('n_counted'))} locations counted · {_short_date(latest)}", "Adds up"),
                     _metric("% of expected Sunday attendance", expected_value, expected_note, "Pooled"),
-                    _metric(f"Average per reporting location · {weeks} weeks", "—" if avg is None else _number(avg), "Recomputed from reported weeks; missing reports are omitted.", "Recomputed"),
+                    _metric(f"Average per reporting location · {weeks} weeks", "—" if avg is None else _number(avg), "Mean of the weekly per-location averages in this period; weeks without a counted report are excluded.", "Recomputed"),
                     _metric("Active workers", _number(active_workers), worker_note, "Snapshot"),
                     _metric("Workers’ meeting attendance rate", "Rate withheld" if expected_attendance else "No report", attendance_note, "Roster check"),
                     cls="analytics-metrics",

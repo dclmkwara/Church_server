@@ -6,7 +6,6 @@ import datetime
 from fasthtml.common import Div, Form, H3, H4, Input, Option, P, Select, Textarea
 from decimal import Decimal, InvalidOperation
 from starlette.requests import Request
-from zoneinfo import ZoneInfo
 
 from faststrap import Badge, Button, PlaceholderCard, Spinner, TabPane, Tabs
 
@@ -21,6 +20,8 @@ from ..components.shell import hidden_context_inputs, shell_layout
 from ..components.ui import empty_state, filter_field, format_naira, page_intro, page_stack, responsive_table, section_card, stat_card, status_badge
 from ..mock_data import STORE, UNITS
 from ..source_intake import reject_source_submission, source_intake_notice
+from app.core.program_page_perf import program_page_trace
+from app.services.analytics.program_config import reporting_today
 
 
 FUND_TYPES = ["offering", "tithe"]
@@ -33,6 +34,10 @@ ATTENDANCE_STATUSES = ["present", "late", "absent", "excused"]
 def _scope_path(ctx) -> str:
     """Return the selected scope or the context current path."""
     return str((getattr(ctx, "query_extras", {}) or {}).get("scope_path") or getattr(ctx, "current_scope_path", ""))
+
+
+def _can_remind_counts(ctx) -> bool:
+    return bool(ctx.has_permission("counts:remind"))
 
 PAYMENT_METHOD_VALUES = {
     "Cash": "cash",
@@ -148,8 +153,8 @@ async def _count_mobile_card(ctx, row):
 async def _count_stats(request: Request, ctx, *, oob: bool = False) -> Div:
     ctx = active_scope_context(request, ctx)
     summary = await ChurchDataService.count_summary(request, ctx)
-    _month = datetime.date.today().strftime("%B")
-    _year = datetime.date.today().year
+    _month = reporting_today().strftime("%B")
+    _year = reporting_today().year
     return _summary_grid(
         [
             ("Latest approved attendance", str(summary["latest_total"]) if summary["latest_total"] is not None else "No approved report", "Approved submissions only; pending and rejected values are excluded", "bar-chart"),
@@ -292,8 +297,9 @@ async def _count_review_workspace(request: Request, ctx, occurrence_date: str) -
     else:
         review_content = Div(*review_cards, cls="d-grid gap-3")
     reminder_rows = []
-    for row in unreported:
-        reminder_rows.append(
+    if _can_remind_counts(ctx):
+        for row in unreported:
+            reminder_rows.append(
             Div(
                 Div(H4(row["location"], cls="h6 fw-semibold mb-1"), P(f"Sunday Worship • {row['date']}", cls="small text-muted mb-0")),
                 Form(
@@ -307,11 +313,11 @@ async def _count_review_workspace(request: Request, ctx, occurrence_date: str) -
                 ),
                 cls="d-flex align-items-center justify-content-between gap-3 border rounded-3 p-3 bg-white",
             )
-        )
+            )
     reminders = Div(
         H4("Unreported Sunday Worship", cls="h6 fw-semibold"),
         P("Locations without a report and not covered by a combined event. Reminders go to active users at the location through the in-app broadcast.", cls="small text-muted"),
-        *(reminder_rows or [empty_state("geo-alt", "No uncovered locations", f"No unreported locations were found for {occurrence_date}.")]),
+        *(reminder_rows or ([empty_state("geo-alt", "No uncovered locations", f"No unreported locations were found for {occurrence_date}.")] if _can_remind_counts(ctx) else [P("Reminders are not available for this role.", cls="small text-muted")])),
         cls="d-grid gap-3 mt-4",
     )
     return Div(
@@ -328,7 +334,7 @@ async def _count_review_workspace(request: Request, ctx, occurrence_date: str) -
     )
 
 
-async def _meeting_program_page(request: Request, ctx, *, title: str, subtitle: str, program_type_slug: str, active_key: str) -> Div:
+async def _render_meeting_program_page(request: Request, ctx, *, title: str, subtitle: str, program_type_slug: str, active_key: str) -> Div:
     if not ctx.has_permission("attendance:read"):
         return shell_layout(ctx, request_path=request.url.path, active_key="attendance", title=title, subtitle=subtitle, primary_action=None, content=empty_state("shield-lock", "Attendance access required", "Your role does not include attendance reporting."), show_shell_intro=False)
     metrics = await DashboardService.meeting_program_metrics(request, ctx, program_type_slug=program_type_slug)
@@ -404,6 +410,15 @@ async def _meeting_program_page(request: Request, ctx, *, title: str, subtitle: 
     )
 
 
+async def _meeting_program_page(request: Request, ctx, *, title: str, subtitle: str, program_type_slug: str, active_key: str) -> Div:
+    page_key = "leaders" if program_type_slug == "tuesday_leaders_meeting" else "workers"
+    with program_page_trace(page_key, str(getattr(ctx, "current_scope_path", "") or "")):
+        return await _render_meeting_program_page(
+            request, ctx, title=title, subtitle=subtitle,
+            program_type_slug=program_type_slug, active_key=active_key,
+        )
+
+
 async def _finance_mobile_card(ctx, row):
     return Div(
         Div(
@@ -432,8 +447,8 @@ async def _finance_mobile_card(ctx, row):
 async def _finance_stats(request: Request, ctx, *, oob: bool = False) -> Div:
     ctx = active_scope_context(request, ctx)
     summary = await ChurchDataService.finance_summary(request, ctx) if await ChurchDataService.live_enabled(request) else STORE.finance_summary(_scope_path(ctx))
-    _month = datetime.date.today().strftime("%B")
-    _year = datetime.date.today().year
+    _month = reporting_today().strftime("%B")
+    _year = reporting_today().year
     return _summary_grid(
         [
             ("Approved this month", format_naira(summary["month_total"]), f"{_month} {_year} · {summary.get('month_approved_count', 0)} entries · event date", "cash-coin"),
@@ -629,7 +644,7 @@ async def _attendance_stats(request: Request, ctx, *, oob: bool = False) -> Div:
 
 
 async def _sunday_population_expectation_panel(request: Request, ctx) -> Div:
-    today = datetime.date.today()
+    today = reporting_today()
     latest = today - datetime.timedelta(days=(today.weekday() + 1) % 7)
     result = await DashboardService.sunday_worship_series(
         request, ctx, weeks=4, latest_date=latest.isoformat(),
@@ -748,7 +763,7 @@ def register_church_data_routes(app) -> None:
         if not ctx.has_permission("counts:review"):
             return shell_layout(ctx, request_path=request.url.path, active_key="counts", title="Count Review", subtitle="Count approvals are restricted to the accepting pastor.", primary_action=None, content=empty_state("shield-lock", "Review access required", "Your role does not approve program counts."), show_shell_intro=False)
         if not occurrence_date:
-            local_today = datetime.datetime.now(ZoneInfo("Africa/Lagos")).date()
+            local_today = reporting_today()
             occurrence_date = (local_today - datetime.timedelta(days=(local_today.weekday() - 6) % 7)).isoformat()
         content = await _count_review_workspace(request, ctx, occurrence_date)
         return shell_layout(
@@ -763,7 +778,7 @@ def register_church_data_routes(app) -> None:
         if not ctx.has_permission("counts:review"):
             return Div(P("Count review access is required.", cls="text-danger"), id="count-review-content")
         if not occurrence_date:
-            local_today = datetime.datetime.now(ZoneInfo("Africa/Lagos")).date()
+            local_today = reporting_today()
             occurrence_date = (local_today - datetime.timedelta(days=(local_today.weekday() - 6) % 7)).isoformat()
         return await _count_review_workspace(request, ctx, occurrence_date)
 
@@ -774,7 +789,7 @@ def register_church_data_routes(app) -> None:
             return Div(P("Count review access is required.", cls="text-danger"), id="count-review-content")
         try:
             await ChurchDataService.approve_count_group(request, count_id)
-            local_today = datetime.datetime.now(ZoneInfo("Africa/Lagos")).date()
+            local_today = reporting_today()
             sunday = (local_today - datetime.timedelta(days=(local_today.weekday() - 6) % 7)).isoformat()
             panel = await _count_review_workspace(request, ctx, sunday)
             return simple_toast_response(panel, "Every pending submission in this count group was approved.", title="Count approved")
@@ -792,7 +807,7 @@ def register_church_data_routes(app) -> None:
             return Div(P("Enter a reason before rejecting this count group.", cls="text-danger"), id="count-review-content")
         try:
             await ChurchDataService.reject_count_group(request, count_id, reason=reason)
-            local_today = datetime.datetime.now(ZoneInfo("Africa/Lagos")).date()
+            local_today = reporting_today()
             sunday = (local_today - datetime.timedelta(days=(local_today.weekday() - 6) % 7)).isoformat()
             panel = await _count_review_workspace(request, ctx, sunday)
             return simple_toast_response(panel, "Every pending submission in this count group was rejected with the supplied reason.", title="Count returned", variant="warning")
@@ -802,8 +817,8 @@ def register_church_data_routes(app) -> None:
     @app.post("/church-data/count-review/remind")
     async def count_review_remind(request: Request):
         ctx = build_context(request)
-        if not ctx.has_permission("counts:review"):
-            return Div(P("Count review access is required.", cls="text-danger"), id="count-review-content")
+        if not _can_remind_counts(ctx):
+            return Div(P("Count reminder access is required.", cls="text-danger"), id="count-review-content")
         form = await request.form()
         payload = {key: str(form.get(key) or "") for key in ("location_id", "program_type_id", "occurrence_date")}
         try:

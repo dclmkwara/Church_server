@@ -8,6 +8,7 @@ from typing import Any
 
 from fasthtml.common import A, Div, Form, H3, H4, Input, Label, P
 from starlette.requests import Request
+from starlette.exceptions import HTTPException
 from starlette.responses import Response
 
 from faststrap import Button, PlaceholderCard, Spinner
@@ -22,6 +23,7 @@ from ..components.feedback import simple_toast_response
 from ..components.shell import shell_layout
 from ..components.ui import empty_state, format_naira, page_intro, page_stack, responsive_table, section_card, stat_card, status_badge
 from ..mock_data import STORE
+from app.services.analytics.program_config import reporting_today
 
 
 REPORT_TABS = [
@@ -37,7 +39,7 @@ REPORT_TABS = [
 
 
 def _report_window(request: Request) -> tuple[str, str]:
-    today = date.today()
+    today = reporting_today()
     try:
         start = date.fromisoformat(request.query_params.get("start_date", "")) if request.query_params.get("start_date") else today - timedelta(days=90)
         end = date.fromisoformat(request.query_params.get("end_date", "")) if request.query_params.get("end_date") else today
@@ -46,6 +48,18 @@ def _report_window(request: Request) -> tuple[str, str]:
     if start > end:
         start, end = today - timedelta(days=90), today
     return start.isoformat(), end.isoformat()
+
+
+def _reports_unavailable_panel() -> Div:
+    return Div(
+        section_card(
+            "Reports hub",
+            "Reports, summaries, exports, and review queues.",
+            empty_state("cloud-slash", "Reports are unavailable", "The report service could not return data for this scope. Try again when the service is available."),
+        ),
+        id="reports-content",
+        role="alert",
+    )
 
 
 def _trend_label(points: list[tuple[str, int]]) -> str:
@@ -691,18 +705,13 @@ def register_report_routes(app) -> None:
                     ),
                     id="reports-content",
                 )
-            return Div(
-                section_card(
-                    "Reports hub",
-                    "Reports, summaries, exports, and review queues.",
-                    empty_state(
-                        "cloud-slash",
-                        "Reports are unavailable",
-                        "The backend could not return reports for this scope. Check service access or try again after the report service is available.",
-                    ),
-                ),
-                id="reports-content",
-            )
+            return _reports_unavailable_panel()
+        except HTTPException as exc:
+            if exc.status_code == 403:
+                return Div(section_card("Reports", "Report access is controlled by your assigned role and scope.", empty_state("shield-lock", "Access restricted", "Ask your level administrator to review the reports permission for your role.")), id="reports-content")
+            return _reports_unavailable_panel()
+        except Exception:
+            return _reports_unavailable_panel()
 
     @app.post("/reports/refresh")
     async def refresh_reports(request: Request):

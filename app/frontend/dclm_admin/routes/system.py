@@ -25,7 +25,7 @@ SYSTEM_ITEMS = [
     ("sync", "Sync Governance", "/system/sync", 5),
     ("health", "Health", "/system/health", 5),
     ("audit", "Audit Logs", "/system/audit-logs", 5),
-    ("rbac", "Roles & Permissions", "/system/rbac", 2),
+    ("rbac", "Roles & Permissions", "/system/rbac", 5),
     ("utilities", "Utilities", "/system/utilities", 5),
 ]
 
@@ -2076,7 +2076,7 @@ def register_system_routes(app) -> None:
     @app.get("/system/rbac")
     async def system_rbac_page(request: Request, family: str = "all", search: str = ""):
         ctx = build_context(request)
-        blocked = _system_guard(ctx, 2, "RBAC Studio", "RBAC Studio is available to levels 2 through 5 in this application.")
+        blocked = _system_guard(ctx, 5, "RBAC Studio", "The permission catalogue is available to State-level administration in this application.")
         body = page_stack(
             page_intro("System", "Read roles and permission families using the same backend vocabulary already normalized in the API.", scope_label=ctx.current_scope_label, scope_kind=ctx.current_scope_kind),
             _system_nav(ctx, "rbac"),
@@ -2101,7 +2101,7 @@ def register_system_routes(app) -> None:
     @app.get("/system/rbac/roles/{role_id}/drawer")
     async def system_rbac_role_drawer(request: Request, role_id: str, family: str = "all", search: str = ""):
         ctx = build_context(request)
-        if not _system_allowed(ctx, 2):
+        if not _system_allowed(ctx, 5):
             return P("This detail view is not available for the current level.", cls="text-muted")
         role = await SystemService.get_rbac_role(request, role_id) if await SystemService.live_enabled(request) else STORE.get_rbac_role(role_id)
         if role is None:
@@ -2111,7 +2111,7 @@ def register_system_routes(app) -> None:
     @app.get("/system/rbac/permissions/{permission_id}/drawer")
     async def system_rbac_permission_drawer(request: Request, permission_id: str):
         ctx = build_context(request)
-        if not _system_allowed(ctx, 2):
+        if not _system_allowed(ctx, 5):
             return P("This detail view is not available for the current level.", cls="text-muted")
         permission = await SystemService.get_rbac_permission(request, permission_id) if await SystemService.live_enabled(request) else STORE.get_rbac_permission(permission_id)
         if permission is None:
