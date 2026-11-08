@@ -91,6 +91,9 @@ class WorkerAttendanceSubmission(Base, TimestampMixin, SoftDeleteMixin, LTreePat
     program_domain = Column(String(80), nullable=True, index=True)
     program_type = Column(String(120), nullable=False, index=True)
     expected_workers_count = Column(Integer, nullable=False)
+    # Full approved roster snapshot for deduplication across multiple usher
+    # submissions. Null means a legacy row where only the count was retained.
+    expected_worker_ids = Column(JSONB, nullable=True)
     present_count = Column(Integer, nullable=False)
     present_workers = Column(JSONB, nullable=False)
     entered_by_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False, index=True)

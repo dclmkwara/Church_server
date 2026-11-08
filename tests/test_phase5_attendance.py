@@ -17,6 +17,9 @@ class _Result:
     def scalar(self):
         return self._scalar
 
+    def scalar_one(self):
+        return self._scalar
+
 
 class _AttendanceSummaryDB:
     def __init__(self):
@@ -24,10 +27,7 @@ class _AttendanceSummaryDB:
 
     async def execute(self, _statement):
         self.calls += 1
-        return _Result(row=SimpleNamespace(
-            present=30, late=0, absent=0, excused=0,
-            current_roster=10, opportunities=40, submitted_present=30,
-        ))
+        return _Result(scalar=10)
 
 
 def test_attendance_stats_route_precedes_uuid_parameter_route():
@@ -39,13 +39,23 @@ def test_attendance_stats_route_precedes_uuid_parameter_route():
     assert get_paths.index("/stats") < get_paths.index("/{attendance_id}")
 
 
-def test_attendance_summary_uses_each_meeting_roster_snapshot_in_one_query():
+def test_attendance_summary_uses_deduplicated_meeting_totals(monkeypatch):
+    async def fake_meetings(*_args, **_kwargs):
+        return {"ranking": [{
+            "expected": 20, "present": 12, "late": 2, "absent": 6,
+            "excused": 0, "meetings": 2, "legacy_roster_meetings": 0,
+        }]}
+
+    import app.api.v1.routes.dashboard as dashboard_routes
+    monkeypatch.setattr(dashboard_routes, "worker_meeting_analytics", fake_meetings)
     db = _AttendanceSummaryDB()
     summary = asyncio.run(_get_attendance_summary(db, "org.234.KW"))
 
-    assert summary["present"] == 30
+    assert summary["present"] == 12
+    assert summary["late"] == 2
     assert summary["current_roster"] == 10
-    assert summary["opportunities"] == 40
-    assert summary["expected"] == 40
-    assert summary["rate"] == 75.0
+    assert summary["opportunities"] == 20
+    assert summary["expected"] == 20
+    assert summary["rate"] == 70.0
+    assert summary["meetings_reported"] == 2
     assert db.calls == 1

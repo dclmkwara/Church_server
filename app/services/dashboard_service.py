@@ -16,12 +16,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.filters import scope_filter as _scope_filter
 from app.models.approvals import StatusChangeRequest, TransferRequest, WorkerRemovalRequest
-from app.models.attendance import WorkerAttendance, WorkerAttendanceSubmission
+from app.models.attendance import WorkerAttendance
 from app.models.church_member import ChurchMember
 from app.models.counts import Count
 from app.models.programs import ProgramDomain, ProgramEvent, ProgramType
 from app.models.records import Record
 from app.models.user import User, Worker
+from app.services.worker_meeting_analytics import worker_meeting_analytics
 
 
 def _status_case(column, expected: str):
@@ -48,15 +49,6 @@ class DashboardService:
             uf.append(User.location_id == location_id)
             tf.append(TransferRequest.from_location_id == location_id)
 
-        attendance_filters = [_scope_filter(WorkerAttendance.path, scope_path), WorkerAttendance.is_deleted.is_(False)]
-        submission_filters = [
-            _scope_filter(WorkerAttendanceSubmission.program_scope_path, scope_path),
-            WorkerAttendanceSubmission.is_deleted.is_(False),
-        ]
-        if location_id:
-            attendance_filters.append(WorkerAttendance.location_id == location_id)
-            submission_filters.append(WorkerAttendanceSubmission.location_id == location_id)
-
         # Single round-trip consolidated query: executes all summary aggregates in 1 database trip.
         # Worker status totals are included here so the dashboard does not issue
         # a second independent worker aggregate for the same scope.
@@ -75,12 +67,6 @@ class DashboardService:
             select(func.count(TransferRequest.id)).where(and_(*tf)).scalar_subquery().label("pending_transfers"),
             select(func.count(StatusChangeRequest.id)).where(and_(*sf)).scalar_subquery().label("pending_status_changes"),
             select(func.count(WorkerRemovalRequest.id)).where(and_(*rmf)).scalar_subquery().label("pending_removals"),
-            select(func.coalesce(func.sum(cast(WorkerAttendance.status == "present", Integer)), 0)).where(and_(*attendance_filters)).scalar_subquery().label("attendance_present"),
-            select(func.coalesce(func.sum(cast(WorkerAttendance.status == "late", Integer)), 0)).where(and_(*attendance_filters)).scalar_subquery().label("attendance_late"),
-            select(func.coalesce(func.sum(cast(WorkerAttendance.status == "absent", Integer)), 0)).where(and_(*attendance_filters)).scalar_subquery().label("attendance_absent"),
-            select(func.coalesce(func.sum(cast(WorkerAttendance.status == "excused", Integer)), 0)).where(and_(*attendance_filters)).scalar_subquery().label("attendance_excused"),
-            select(func.coalesce(func.sum(WorkerAttendanceSubmission.expected_workers_count), 0)).where(and_(*submission_filters)).scalar_subquery().label("attendance_opportunities"),
-            select(func.coalesce(func.sum(WorkerAttendanceSubmission.present_count), 0)).where(and_(*submission_filters)).scalar_subquery().label("attendance_submitted_present"),
         )
         row = (await db.execute(stmt)).one()
         pending_items = (
@@ -90,8 +76,13 @@ class DashboardService:
             + int(row.pending_status_changes or 0)
             + int(row.pending_removals or 0)
         )
-        opportunities = int(row.attendance_opportunities or 0)
-        submitted_present = int(row.attendance_submitted_present or 0)
+        attendance = await worker_meeting_analytics(db, scope_path, location_id=str(location_id) if location_id else None)
+        attendance_rows = attendance["ranking"]
+        opportunities = sum(int(item.get("expected") or 0) for item in attendance_rows)
+        present = sum(int(item.get("present") or 0) for item in attendance_rows)
+        late = sum(int(item.get("late") or 0) for item in attendance_rows)
+        absent = sum(int(item.get("absent") or 0) for item in attendance_rows)
+        excused = sum(int(item.get("excused") or 0) for item in attendance_rows)
         return {
             "members_total": int(row.members_total or 0), "active_members": int(row.active_members or 0),
             "workers_total": int(row.workers_total or 0), "active_workers": int(row.active_workers or 0),
@@ -108,11 +99,14 @@ class DashboardService:
                 "expected": opportunities,
                 "opportunities": opportunities,
                 "current_roster": int(row.workers_total or 0),
-                "present": int(row.attendance_present or 0),
-                "late": int(row.attendance_late or 0),
-                "absent": int(row.attendance_absent or 0),
-                "excused": int(row.attendance_excused or 0),
-                "rate": round(submitted_present * 100 / opportunities, 1) if opportunities else 0,
+                "present": present,
+                "late": late,
+                "absent": absent,
+                "excused": excused,
+                "rate": round((present + late) * 100 / opportunities, 1) if opportunities else 0,
+                "meetings_reported": sum(int(item.get("meetings") or 0) for item in attendance_rows),
+                "legacy_roster_meetings": sum(int(item.get("legacy_roster_meetings") or 0) for item in attendance_rows),
+                "deduplicated": True,
             },
         }
 
@@ -121,7 +115,8 @@ class DashboardService:
         filters = [_scope_filter(ChurchMember.path, scope_path), ChurchMember.is_deleted == False]
         if location_id:
             filters.append(ChurchMember.location_id == location_id)
-        today = date.today()
+        from app.services.analytics.program_config import reporting_today
+        today = reporting_today()
         adult_cutoff = today.replace(year=today.year - 18)
         youth_cutoff = today.replace(year=today.year - 13)
 
@@ -173,7 +168,8 @@ class DashboardService:
         filters = [_scope_filter(Count.path, scope_path), Count.is_deleted == False]
         if location_id:
             filters.append(Count.location_id == location_id)
-        today = date.today()
+        from app.services.analytics.program_config import reporting_today
+        today = reporting_today()
         year_start = date(today.year, 1, 1)
         month_start = date(today.year, today.month, 1)
 
@@ -210,61 +206,19 @@ class DashboardService:
 
     @staticmethod
     async def get_worker_meeting_comparison(db, scope_path: str, *, location_id=None, program_type_slug: str | None = None, limit: int = 6) -> dict[str, Any]:
-        filters = [_scope_filter(WorkerAttendance.path, scope_path), WorkerAttendance.is_deleted == False]
-        if location_id:
-            filters.append(WorkerAttendance.location_id == location_id)
-        if program_type_slug:
-            filters.append(ProgramType.slug == program_type_slug)
-        rows = (await db.execute(
-            select(ProgramType.slug.label("program_type"), ProgramType.name.label("program_label"),
-                   func.coalesce(func.sum(_status_case(WorkerAttendance.status, "present")), 0).label("present"),
-                   func.coalesce(func.sum(_status_case(WorkerAttendance.status, "late")), 0).label("late"),
-                   func.coalesce(func.sum(_status_case(WorkerAttendance.status, "absent")), 0).label("absent"),
-                   func.count(WorkerAttendance.id).label("records"))
-            .select_from(WorkerAttendance)
-            .join(ProgramEvent, ProgramEvent.id == WorkerAttendance.event_id)
-            .join(ProgramType, ProgramType.id == ProgramEvent.program_type_id)
-            .where(and_(*filters))
-            .group_by(ProgramType.slug, ProgramType.name)
-            .order_by((func.coalesce(func.sum(_status_case(WorkerAttendance.status, "present")), 0)
-                       + func.coalesce(func.sum(_status_case(WorkerAttendance.status, "late")), 0)).desc())
-            .limit(limit)
-        ))
-        ranking = []
-        for item in rows:
-            p, l, a, r = int(item.present or 0), int(item.late or 0), int(item.absent or 0), int(item.records or 0)
-            ranking.append({"program_type": item.program_type, "label": item.program_label,
-                            "present": p, "late": l, "absent": a, "records": r,
-                            "attendance_rate": round(((p + l) / r) * 100, 1) if r else 0.0})
-        month_key = func.to_char(WorkerAttendance.date, "YYYY-MM")
-        trend_rows = await db.execute(
-            select(
-                month_key.label("period"),
-                func.coalesce(func.sum(_status_case(WorkerAttendance.status, "present")), 0).label("present"),
-                func.coalesce(func.sum(_status_case(WorkerAttendance.status, "late")), 0).label("late"),
-                func.coalesce(func.sum(_status_case(WorkerAttendance.status, "absent")), 0).label("absent"),
-                func.coalesce(func.sum(_status_case(WorkerAttendance.status, "excused")), 0).label("excused"),
-                func.count(WorkerAttendance.id).label("records"),
-            )
-            .select_from(WorkerAttendance)
-            .join(ProgramEvent, ProgramEvent.id == WorkerAttendance.event_id)
-            .join(ProgramType, ProgramType.id == ProgramEvent.program_type_id)
-            .where(and_(*filters))
-            .group_by(month_key)
-            .order_by(month_key)
+        return await worker_meeting_analytics(
+            db, scope_path, location_id=str(location_id) if location_id else None,
+            program_type_slug=program_type_slug,
         )
-        monthly_trend = [{
-            "period": row.period, "present": int(row.present or 0), "late": int(row.late or 0),
-            "absent": int(row.absent or 0), "excused": int(row.excused or 0), "records": int(row.records or 0),
-        } for row in trend_rows]
-        return {"ranking": ranking, "monthly_trend": monthly_trend}
 
     @staticmethod
     async def get_newcomer_analytics(db, scope_path: str, *, location_id=None, months: int = 12) -> dict[str, Any]:
         filters = [_scope_filter(Record.path, scope_path), Record.is_deleted == False]
         if location_id:
             filters.append(Record.location_id == location_id)
-        trend_start = date.today() - timedelta(days=months * 31)
+        from app.services.analytics.program_config import reporting_today
+        from app.services.analytics.program_config import reporting_today
+        trend_start = reporting_today() - timedelta(days=months * 31)
 
         summary_r = await db.execute(select(
             func.coalesce(func.sum(_status_case(Record.record_type, "newcomer")), 0).label("newcomers_total"),

@@ -15,6 +15,7 @@ from .report_service import ReportService
 from .request_cache import request_cached
 from .workflow_service import WorkflowService
 from .active_scope import active_scope_context
+from app.services.analytics.program_config import reporting_today
 
 FULL_BOOTSTRAP_SECTIONS = (
     "summary",
@@ -61,7 +62,8 @@ def _age_group_from_dob(value: Any) -> str:
         born = datetime.fromisoformat(raw[:10]).date()
     except ValueError:
         return "unknown"
-    years = date.today().year - born.year - ((date.today().month, date.today().day) < (born.month, born.day))
+    today = reporting_today()
+    years = today.year - born.year - ((today.month, today.day) < (born.month, born.day))
     if years >= 18:
         return "adults"
     if years >= 13:

@@ -82,6 +82,7 @@ class WorkerAttendanceSubmissionResponse(BaseModel):
     program_domain: Optional[str]
     program_type: str
     expected_workers_count: int
+    expected_worker_ids: Optional[list[UUID]] = None
     present_count: int
     present_workers: list[AttendancePresentWorker]
     entered_by_id: UUID

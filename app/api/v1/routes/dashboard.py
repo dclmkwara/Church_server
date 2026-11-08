@@ -30,6 +30,8 @@ from app.models.user import User, Worker
 from app.services.dashboard_service import DashboardService
 from app.services.statistics_service import StatisticsService
 from app.services.analytics.sunday_worship import SundayWorshipAnalytics
+from app.services.analytics.program_config import reporting_today
+from app.services.worker_meeting_analytics import worker_meeting_analytics
 
 _DASHBOARD_CACHE_TTL = 20.0
 
@@ -377,60 +379,35 @@ async def _resolve_location_id(
 
 
 async def _get_attendance_summary(db: AsyncSession, scope_path: str, *, location_id: Optional[str] = None) -> dict[str, Any]:
-    filters = [_scope_filter(WorkerAttendance.path, scope_path), WorkerAttendance.is_deleted == False]
-    worker_filters = [_scope_filter(Worker.path, scope_path), Worker.is_deleted == False]
+    totals = await worker_meeting_analytics(db, scope_path, location_id=location_id)
+    items = totals["ranking"]
+    opportunities = sum(int(row.get("expected") or 0) for row in items)
+    present = sum(int(row.get("present") or 0) for row in items)
+    late = sum(int(row.get("late") or 0) for row in items)
+    absent = sum(int(row.get("absent") or 0) for row in items)
+    excused = sum(int(row.get("excused") or 0) for row in items)
+    worker_filters = [_scope_filter(Worker.path, scope_path), Worker.is_deleted.is_(False)]
     if location_id:
-        filters.append(WorkerAttendance.location_id == location_id)
         worker_filters.append(Worker.location_id == location_id)
-
-    attendance_stmt = select(
-        func.coalesce(func.sum(cast(WorkerAttendance.status == 'present', Integer)), 0).label('present'),
-        func.coalesce(func.sum(cast(WorkerAttendance.status == 'late', Integer)), 0).label('late'),
-        func.coalesce(func.sum(cast(WorkerAttendance.status == 'absent', Integer)), 0).label('absent'),
-        func.coalesce(func.sum(cast(WorkerAttendance.status == 'excused', Integer)), 0).label('excused'),
-    ).where(and_(*filters))
-    expected_stmt = select(func.count(Worker.worker_id)).where(and_(*worker_filters)).scalar_subquery()
-    attendance_stmt = attendance_stmt.subquery()
-    submission_filters = [
-        _scope_filter(WorkerAttendanceSubmission.program_scope_path, scope_path),
-        WorkerAttendanceSubmission.is_deleted.is_(False),
-    ]
-    if location_id:
-        submission_filters.append(WorkerAttendanceSubmission.location_id == location_id)
-    submission_stmt = select(
-        func.coalesce(func.sum(WorkerAttendanceSubmission.expected_workers_count), 0).label('opportunities'),
-        func.coalesce(func.sum(WorkerAttendanceSubmission.present_count), 0).label('submitted_present'),
-    ).where(and_(*submission_filters)).subquery()
-    stmt = select(
-        attendance_stmt.c.present, attendance_stmt.c.late, attendance_stmt.c.absent, attendance_stmt.c.excused,
-        expected_stmt.label('current_roster'), submission_stmt.c.opportunities, submission_stmt.c.submitted_present,
-    ).select_from(attendance_stmt.join(submission_stmt, true()))
-    row = (await db.execute(stmt)).one()
-    expected = int(row.current_roster or 0)
-    present = int(row.present or 0)
-    late = int(row.late or 0)
-    absent = int(row.absent or 0)
-    excused = int(row.excused or 0)
-    # A current worker snapshot is not the denominator for a historical period.
-    # Use the roster size captured with each usher submission so every meeting
-    # contributes its own attendance opportunity count.
-    opportunities = int(row.opportunities or 0)
-    submitted_present = int(row.submitted_present or 0)
-    rate = round((submitted_present / opportunities) * 100, 1) if opportunities else 0
+    current_roster = int((await db.execute(select(func.count(Worker.worker_id)).where(and_(*worker_filters)))).scalar_one())
+    rate = round(((present + late) / opportunities) * 100, 1) if opportunities else 0
     return {
         'expected': opportunities,
-        'current_roster': expected,
+        'current_roster': current_roster,
         'opportunities': opportunities,
         'present': present,
         'late': late,
         'absent': absent,
         'excused': excused,
         'rate': rate,
+        'meetings_reported': sum(int(row.get("meetings") or 0) for row in items),
+        'legacy_roster_meetings': sum(int(row.get("legacy_roster_meetings") or 0) for row in items),
+        'deduplicated': True,
     }
 
 
 async def _get_timeseries(db: AsyncSession, scope_path: str, *, metric: str) -> list[dict[str, Any]]:
-    start_date = date.today() - timedelta(days=90)
+    start_date = reporting_today() - timedelta(days=90)
     if metric == 'counts':
         period = func.date_trunc('day', Count.date).label('period')
         stmt = select(
@@ -491,7 +468,7 @@ async def _get_scope_snapshot(db: AsyncSession, scope_path: str, *, date_filter:
 
 
 def _period_start(period: str, today: date | None = None) -> date:
-    today = today or date.today()
+    today = today or reporting_today()
     if period == 'month':
         return today.replace(day=1)
     if period == 'quarter':
@@ -681,7 +658,8 @@ async def get_sunday_worship_series(
 ):
     """Return weekly Sunday metrics for the scope and each direct child."""
     effective_scope = _effective_scope(current_user, scope_path)
-    latest = latest_date or (date.today() - timedelta(days=(date.today().weekday() + 1) % 7))
+    today = reporting_today()
+    latest = latest_date or (today - timedelta(days=(today.weekday() + 1) % 7))
     if latest.weekday() != 6:
         raise HTTPException(status_code=422, detail="latest_date must be a Sunday")
     occurrence_dates = [latest - timedelta(weeks=index) for index in reversed(range(weeks))]
@@ -704,7 +682,8 @@ async def get_sunday_worship_dashboard_payload(
 ) -> dict[str, Any]:
     """Fetch the headline summary and dashboard series under one auth/session."""
     effective_scope = _effective_scope(current_user, scope_path)
-    latest = latest_date or (date.today() - timedelta(days=(date.today().weekday() + 1) % 7))
+    today = reporting_today()
+    latest = latest_date or (today - timedelta(days=(today.weekday() + 1) % 7))
     if latest.weekday() != 6:
         raise HTTPException(status_code=422, detail="latest_date must be a Sunday")
     occurrence_dates = [latest - timedelta(weeks=index) for index in reversed(range(weeks))]
@@ -743,7 +722,8 @@ async def get_sunday_worship_dashboard_panels(
 ) -> dict[str, Any]:
     """Load the deferred trend/table and (when allowed) review queue together."""
     effective_scope = _effective_scope(current_user, scope_path)
-    latest = latest_date or (date.today() - timedelta(days=(date.today().weekday() + 1) % 7))
+    today = reporting_today()
+    latest = latest_date or (today - timedelta(days=(today.weekday() + 1) % 7))
     if latest.weekday() != 6:
         raise HTTPException(status_code=422, detail="latest_date must be a Sunday")
     occurrence_dates = [latest - timedelta(weeks=index) for index in reversed(range(weeks))]
@@ -777,7 +757,7 @@ async def list_expected_population(
 ) -> dict[str, Any]:
     """Return scoped estimates; report calculations resolve the version effective on their date."""
     effective_scope = deps.effective_scope_path(current_user)
-    date_limit = as_of or date.today()
+    date_limit = as_of or reporting_today()
     estimate_join = LocationExpectedPopulation.location_id == Location.location_id
     if not include_history:
         estimate_join = and_(estimate_join, LocationExpectedPopulation.effective_from <= date_limit)

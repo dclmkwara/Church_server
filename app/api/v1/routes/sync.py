@@ -481,12 +481,13 @@ async def process_attendance_submissions(
                 detail = "One or more selected workers are no longer approved within this meeting scope. Refresh the roster and try again." if broad_event else "One or more selected workers are no longer approved at this location. Refresh the roster and try again."
                 raise HTTPException(status_code=422, detail=detail)
 
-            roster_count_result = await db.execute(select(func.count(Worker.worker_id)).where(
+            roster_result = await db.execute(select(Worker.worker_id).where(
                 scope_filter(Worker.path, roster_path),
                 Worker.is_deleted.is_(False),
                 Worker.approval_status == "approved",
-            ))
-            actual_roster_count = int(roster_count_result.scalar_one())
+            ).order_by(Worker.worker_id))
+            expected_worker_ids = [str(worker_id) for worker_id in roster_result.scalars().all()]
+            actual_roster_count = len(expected_worker_ids)
             if item.expected_workers_count != actual_roster_count:
                 raise HTTPException(status_code=409, detail="The approved worker roster changed. Refresh the roster before submitting attendance.")
 
@@ -516,6 +517,7 @@ async def process_attendance_submissions(
                 program_type_id=program_type_id,
                 program_domain=item.program_domain, program_type=item.program_type,
                 expected_workers_count=actual_roster_count,
+                expected_worker_ids=expected_worker_ids,
                 present_count=len(workers),
                 present_workers=[{
                     "worker_id": str(workers[worker_id].worker_id),
@@ -904,6 +906,7 @@ async def get_incremental_changes(
                 date=submission.date.isoformat(),
                 present_count=submission.present_count,
                 expected_workers_count=submission.expected_workers_count,
+                expected_worker_ids=submission.expected_worker_ids,
                 present_workers=submission.present_workers,
                 entered_by_id=str(submission.entered_by_id),
                 submitted_by_worker_id=str(submission.submitted_by_worker_id) if submission.submitted_by_worker_id else None,

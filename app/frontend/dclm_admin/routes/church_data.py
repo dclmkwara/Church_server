@@ -343,10 +343,10 @@ async def _render_meeting_program_page(request: Request, ctx, *, title: str, sub
         item = rows[0]
         cards = await _summary_grid(
             [
-                ("Present records", str(item.get("present", 0)), "Stored worker attendance rows marked present", "person-check"),
-                ("Late records", str(item.get("late", 0)), "Stored worker attendance rows marked late", "clock"),
-                ("Absent records", str(item.get("absent", 0)), "Stored worker attendance rows marked absent", "person-x"),
-                ("Attendance records", str(item.get("records", 0)), "Individual rows currently stored for this program type", "clipboard-data"),
+                ("Present workers", str(item.get("present", 0)), "Distinct workers marked present, counted once per meeting", "person-check"),
+                ("Late workers", str(item.get("late", 0)), "Distinct workers marked late, counted once per meeting", "clock"),
+                ("Attendance rate", f"{item.get('attendance_rate')}%" if item.get("attendance_rate") is not None else "No roster snapshot", "Present and late workers divided by the expected roster IDs for each meeting", "percent"),
+                ("Meetings reported", str(item.get("meetings", 0)), "Distinct meeting occurrences with an attendance submission", "clipboard-data"),
             ],
             grid_id=f"{active_key}-stats", grid_cls="counts-stat-grid",
         )
@@ -355,18 +355,18 @@ async def _render_meeting_program_page(request: Request, ctx, *, title: str, sub
     monthly = metrics.get("monthly_trend") or []
     if monthly:
         trend_rows = [
-            [row["period"], row["present"], row["late"], row["absent"], row["excused"], row["records"]]
+            [row["period"], row["present"], row["late"], row["absent"], row["excused"], row["expected"], f"{row['attendance_rate']}%" if row.get("attendance_rate") is not None else "No roster snapshot", row["meetings"]]
             for row in monthly
         ]
         trend_table = responsive_table(
-            ["Month", "Present records", "Late", "Absent", "Excused", "Total records"],
+            ["Month", "Present workers", "Late", "Absent", "Excused", "Expected roster places", "Attendance rate", "Meetings reported"],
             trend_rows, [], results_id=f"{active_key}-trend",
         )
     else:
         trend_table = empty_state("calendar3", "No monthly trend yet", "Monthly rows appear after attendance is submitted for this meeting type.")
     leaders_panel = Div()
     if program_type_slug == "tuesday_leaders_meeting":
-        raw_rows = await ChurchDataService.list_attendance(request, ctx)
+        raw_rows = await ChurchDataService.list_attendance(request, ctx, resolve_events=False)
         leader_rows = [
             row for row in raw_rows
             if "leader" in str(row.get("program_type") or "").casefold()
@@ -389,6 +389,7 @@ async def _render_meeting_program_page(request: Request, ctx, *, title: str, sub
         leaders_panel = section_card(
             "Meetings received",
             "Coverage is not defined. Home location comes from each stored worker attendance row; reported entries are shown without a unique-worker claim.",
+            P("Raw records, not unique attendees. Summary metrics above deduplicate workers within each meeting.", cls="small text-warning-emphasis mb-2"),
             meeting_table,
         )
     body = page_stack(
@@ -396,12 +397,12 @@ async def _render_meeting_program_page(request: Request, ctx, *, title: str, sub
         leaders_panel,
         section_card(
             "Attendance trend",
-            f"Monthly records for {title}; this page filters strictly to program type {program_type_slug}.",
+            f"Monthly deduplicated meeting metrics for {title}; this page filters strictly to program type {program_type_slug}.",
             trend_table,
         ),
         section_card(
             "How to read these figures",
-            "These are stored attendance rows. The current system can receive repeated full-roster submissions for one meeting, so a unique-worker attendance rate is withheld until roster snapshot deduplication is completed.",
+            "People are deduplicated within each meeting using the captured roster IDs. A worker may be counted again at a later meeting. Legacy meetings without roster IDs use the largest saved roster count once and are marked as legacy in the data.",
         ),
     )
     return shell_layout(
