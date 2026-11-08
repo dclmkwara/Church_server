@@ -1,6 +1,8 @@
 """Central code-level definitions for church standing programs and thresholds."""
 
 from dataclasses import dataclass
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 
 # Shared dashboard attention policy. Values compare pooled totals for the same
@@ -48,3 +50,16 @@ AWAITING_HOURS_AFTER_OCCURRENCE = 10
 MISSING_HOURS_AFTER_OCCURRENCE = 24
 PENDING_ACCEPTOR_ALERT_HOURS = 10
 PENDING_NEXT_LEVEL_ALERT_HOURS = 24
+
+
+def reporting_now(now: datetime | None = None) -> datetime:
+    """Return an instant normalized to the church reporting timezone."""
+    instant = now or datetime.now(ZoneInfo(REPORTING_TIMEZONE))
+    if instant.tzinfo is None:
+        instant = instant.replace(tzinfo=ZoneInfo(REPORTING_TIMEZONE))
+    return instant.astimezone(ZoneInfo(REPORTING_TIMEZONE))
+
+
+def reporting_today(now: datetime | None = None) -> date:
+    """Return the current church reporting date in Africa/Lagos."""
+    return reporting_now(now).date()

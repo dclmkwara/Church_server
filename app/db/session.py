@@ -98,6 +98,12 @@ def _dashboard_query_timer_start(conn, cursor, statement, parameters, context, e
     # Do not retain SQL or pay timing overhead outside the explicitly enabled
     # dashboard trace. SQL text is recorded only for these development timings.
     try:
+        from app.core.program_page_perf import current_trace as current_program_trace
+        if current_program_trace() is not None:
+            context._dclm_program_page_query_started = time.perf_counter()
+    except Exception:
+        pass
+    try:
         from app.core.dashboard_perf import current_trace
         if current_trace() is not None:
             context._dclm_dashboard_query_started = time.perf_counter()
@@ -107,6 +113,13 @@ def _dashboard_query_timer_start(conn, cursor, statement, parameters, context, e
 
 @event.listens_for(engine.sync_engine, "after_cursor_execute")
 def _dashboard_query_timer_finish(conn, cursor, statement, parameters, context, executemany) -> None:
+    program_started = getattr(context, "_dclm_program_page_query_started", None)
+    if program_started is not None:
+        try:
+            from app.core.program_page_perf import record_database_query
+            record_database_query((time.perf_counter() - program_started) * 1000)
+        finally:
+            context._dclm_program_page_query_started = None
     started = getattr(context, "_dclm_dashboard_query_started", None)
     if started is None:
         return

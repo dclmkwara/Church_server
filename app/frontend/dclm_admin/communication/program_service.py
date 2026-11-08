@@ -13,6 +13,8 @@ from .auth_service import AuthService
 from .pagination import fetch_all_pages
 from .church_data_service import ChurchDataService
 from .people_service import PeopleService
+from .organization_service import OrganizationService
+from .organization_service import _flatten_tree as _flatten_hierarchy_tree, _roll_up as _roll_up_hierarchy_tree
 from .request_cache import request_cached
 from .ttl_cache import invalidate_ttl_prefix, ttl_cached
 from .active_scope import active_scope_context
@@ -356,6 +358,31 @@ class ProgramService:
         )
 
     @staticmethod
+    async def list_analytics_campaigns(request, ctx, *, domain_slug: str, event_mode: str) -> list[dict[str, Any]]:
+        """Read campaign selector rows directly without loading event/type catalogs."""
+        if await ProgramService.use_mock(request):
+            return await ProgramService.list_campaigns(request, ctx, domain_slug=domain_slug, event_mode=event_mode)
+        client = async_client(get_api_client())
+        access_token = AuthService.get_access_token(request)
+        scope_path = await ProgramService.effective_scope_path(request, ctx)
+        domain_names = {str(row["slug"]): str(row["name"]) for row in FALLBACK_PROGRAM_DOMAINS}
+
+        async def load_rows() -> list[dict[str, Any]]:
+            raw_rows = await client.list_program_campaigns(
+                access_token, scope_path=scope_path, program_domain=domain_slug,
+                event_mode=event_mode, limit=500,
+            )
+            return [
+                {
+                    **_normalize_campaign(row, {}),
+                    "domain_name": domain_names.get(domain_slug, domain_slug.replace("_", " ").title()),
+                }
+                for row in raw_rows
+            ]
+
+        return await request_cached(request, ("programs", "analytics_campaigns", scope_path, domain_slug, event_mode), load_rows)
+
+    @staticmethod
     async def list_types(request, ctx, *, domain_id: str = "") -> list[dict[str, Any]]:
         if await ProgramService.use_mock(request):
             return STORE.list_program_types(domain_id=domain_id)
@@ -527,9 +554,7 @@ class ProgramService:
             return {
                 "events": [],
                 "event_count": 0,
-                "total_population": 0,
-                "alpha_population": 0,
-                "satellite_population": 0,
+        "records_submitted": 0,
                 "converts": 0,
                 "newcomers": 0,
                 "segment_breakdown": [],
@@ -554,7 +579,6 @@ class ProgramService:
             assignment_rows = []
             for event in event_rows:
                 assignment_rows.extend(await ProgramService.list_assignments(request, ctx, event["event_id"], worker_lookup=worker_lookup))
-        segment_totals: dict[str, int] = {}
         summary_by_event: list[dict[str, Any]] = []
         for event in event_rows:
             event_counts = [row for row in count_rows if row["event_id"] == event["event_id"]]
@@ -565,9 +589,6 @@ class ProgramService:
             ]
             event_assignments = [row for row in assignment_rows if row["event_id"] == event["event_id"]]
             population = sum(int(row["total"]) for row in event_counts)
-            audience_segment = str(event.get("audience_segment") or "")
-            if audience_segment:
-                segment_totals[audience_segment] = segment_totals.get(audience_segment, 0) + population
             summary_by_event.append(
                 {
                     "event_id": event["event_id"],
@@ -579,7 +600,7 @@ class ProgramService:
                     "satellite_population": sum(int(row["total"]) for row in event_counts if row.get("source_role") == "satellite"),
                     "converts": sum(1 for row in event_records if row["record_type"] == "convert"),
                     "newcomers": sum(1 for row in event_records if row["record_type"] == "newcomer"),
-                    "audience_segment": audience_segment,
+                    "audience_segment": str(event.get("audience_segment") or ""),
                     "assignment_total": len(event_assignments),
                     "assignment_submitted": sum(1 for row in event_assignments if row["submission_completed"]),
                 }
@@ -593,15 +614,9 @@ class ProgramService:
         return {
             "events": summary_by_event,
             "event_count": len(event_rows),
-            "total_population": sum(int(row["total"]) for row in count_rows),
-            "alpha_population": sum(int(row["total"]) for row in count_rows if row.get("source_role") == "alpha"),
-            "satellite_population": sum(int(row["total"]) for row in count_rows if row.get("source_role") == "satellite"),
+            "records_submitted": len(count_rows) + len(record_rows),
             "converts": sum(1 for row in record_rows if row["record_type"] == "convert"),
             "newcomers": sum(1 for row in record_rows if row["record_type"] == "newcomer"),
-            "segment_breakdown": [
-                {"segment": segment, "population": total}
-                for segment, total in sorted(segment_totals.items())
-            ],
             "assignments_total": assignments_total,
             "assignments_approved": assignments_approved,
             "assignments_pending_approval": assignments_pending_approval,
@@ -858,12 +873,9 @@ async def _campaign_activity_public(request, ctx, campaign_id: str) -> dict[str,
         return {
             "events": [],
             "event_count": 0,
-            "total_population": 0,
-            "alpha_population": 0,
-            "satellite_population": 0,
+            "records_submitted": 0,
             "converts": 0,
             "newcomers": 0,
-            "segment_breakdown": [],
             "assignments_total": 0,
             "assignments_approved": 0,
             "assignments_pending_approval": 0,
@@ -880,16 +892,12 @@ async def _campaign_activity_public(request, ctx, campaign_id: str) -> dict[str,
     for event in event_rows:
         assignment_rows.extend(await maybe_await(ProgramService.list_assignments(request, ctx, event["event_id"], worker_lookup=worker_lookup)))
 
-    segment_totals: dict[str, int] = {}
     summary_by_event: list[dict[str, Any]] = []
     for event in event_rows:
         event_counts = [row for row in count_rows if row["event_id"] == event["event_id"]]
         event_records = [row for row in record_rows if row.get("event_id") == event["event_id"] or row.get("service") == event["title"]]
         event_assignments = [row for row in assignment_rows if row["event_id"] == event["event_id"]]
         population = sum(int(row["total"]) for row in event_counts)
-        audience_segment = str(event.get("audience_segment") or "")
-        if audience_segment:
-            segment_totals[audience_segment] = segment_totals.get(audience_segment, 0) + population
         summary_by_event.append(
             {
                 "event_id": event["event_id"],
@@ -901,7 +909,7 @@ async def _campaign_activity_public(request, ctx, campaign_id: str) -> dict[str,
                 "satellite_population": sum(int(row["total"]) for row in event_counts if row.get("source_role") == "satellite"),
                 "converts": sum(1 for row in event_records if row["record_type"] == "convert"),
                 "newcomers": sum(1 for row in event_records if row["record_type"] == "newcomer"),
-                "audience_segment": audience_segment,
+                "audience_segment": str(event.get("audience_segment") or ""),
                 "assignment_total": len(event_assignments),
                 "assignment_submitted": sum(1 for row in event_assignments if row["submission_completed"]),
             }
@@ -913,12 +921,9 @@ async def _campaign_activity_public(request, ctx, campaign_id: str) -> dict[str,
     return {
         "events": summary_by_event,
         "event_count": len(event_rows),
-        "total_population": sum(int(row["total"]) for row in count_rows),
-        "alpha_population": sum(int(row["total"]) for row in count_rows if row.get("source_role") == "alpha"),
-        "satellite_population": sum(int(row["total"]) for row in count_rows if row.get("source_role") == "satellite"),
+        "records_submitted": len(count_rows) + len(record_rows),
         "converts": sum(1 for row in record_rows if row["record_type"] == "convert"),
         "newcomers": sum(1 for row in record_rows if row["record_type"] == "newcomer"),
-        "segment_breakdown": [{"segment": segment, "population": total} for segment, total in sorted(segment_totals.items())],
         "assignments_total": assignments_total,
         "assignments_approved": assignments_approved,
         "assignments_pending_approval": sum(1 for row in assignment_rows if row["status"] == "pending"),
@@ -931,7 +936,7 @@ async def _campaign_activity_public(request, ctx, campaign_id: str) -> dict[str,
 async def _program_occurrences_public(
     request, ctx, *, domain: str | None = None, program_type: str | None = None,
     program_level: str | None = None, event_id: str | None = None,
-    campaign_id: str | None = None,
+    campaign_id: str | None = None, compare_campaign_id: str | None = None,
     date_from: str | None = None, date_to: str | None = None,
     include_pending: bool = False,
 ) -> dict[str, Any]:
@@ -942,10 +947,10 @@ async def _program_occurrences_public(
     access_token = AuthService.get_access_token(request)
     return await request_cached(
         request,
-        ("programs", "occurrences", scope_path, domain, program_type, program_level, event_id, campaign_id, date_from, date_to, include_pending),
+        ("programs", "occurrences", scope_path, domain, program_type, program_level, event_id, campaign_id, compare_campaign_id, date_from, date_to, include_pending),
         lambda: client.get_program_occurrences(
             access_token, scope_path=scope_path, domain=domain, program_type=program_type,
-            program_level=program_level, event_id=event_id, campaign_id=campaign_id, date_from=date_from,
+            program_level=program_level, event_id=event_id, campaign_id=campaign_id, compare_campaign_id=compare_campaign_id, date_from=date_from,
             date_to=date_to, include_pending=include_pending,
         ),
     )
@@ -959,6 +964,24 @@ ProgramService.approve_assignment = staticmethod(ProgramService.approve_event_as
 ProgramService.reject_assignment = staticmethod(ProgramService.reject_event_assignment)
 ProgramService.campaign_activity = staticmethod(_campaign_activity_public)
 ProgramService.occurrences = staticmethod(_program_occurrences_public)
+
+async def _program_hierarchy_tree_public(request, ctx) -> list[dict[str, Any]]:
+    if await ProgramService.use_mock(request):
+        return await OrganizationService.list_hierarchy_tree(request, ctx)
+    return await _hierarchy_tree_only(request, ctx)
+
+async def _hierarchy_tree_only(request, ctx) -> list[dict[str, Any]]:
+    client = async_client(get_api_client())
+    token = AuthService.get_access_token(request)
+    scope_path = await ProgramService.effective_scope_path(request, ctx)
+    rows = await request_cached(
+        request,
+        ("programs", "hierarchy_tree", scope_path),
+        lambda: client.list_hierarchy_tree(token),
+    )
+    return _roll_up_hierarchy_tree(_flatten_hierarchy_tree(rows))
+
+ProgramService.hierarchy_tree = staticmethod(_program_hierarchy_tree_public)
 ProgramService._mock_campaigns = staticmethod(ProgramService._mock_events)
 
 dual_mode_class(ProgramService)

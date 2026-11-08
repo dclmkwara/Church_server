@@ -90,7 +90,7 @@ Fixed, never edited in the app. A change is a code change.
 
 Leaders Meeting and Workers Meeting are separate programs with separate statistics and separate pages. Never merge them.
 
-Event programs (Global Crusade monthly; Easter Retreat and December Retreat once a year each; Conferences irregular) have no expectation table. Expected reporters come from `ProgramEvent` plus approved `EventAssignment`; with no assignments, coverage is "unknown", never 100%.
+Event programs (Global Crusade monthly; Easter Retreat and December Retreat once a year each; Conferences irregular) have no expectation table. Approved `ProgramEvent` rows define the scheduled sessions. Expected reporters follow the domain rules below: Retreat uses the region holding the session; Crusade uses each active location as a satellite plus one State-level Alpha reporter. Other event types may use approved `EventAssignment` rows.
 
 ### States and time windows
 
@@ -224,25 +224,26 @@ One shared template with a `DomainPageConfig` (domain key, obligation source, KP
 
 Held twice a year, five to six days, region by region at a camp. Reports are Region-level with the region as scope and the venue kept separate. Inside the retreat run programs such as Bible Study, Revival Service, Faith Clinic and Seminars, each its own program type.
 
-- Event selector (default latest past event). A matrix of program-type rows by day columns; each column header shows day number and date. A cell shows counted attendance, "n of m regions", and pending or returned counts, or "No report".
-- Selecting a cell shows the by-region breakdown for that program and day; opening a region shows its own camp report. This answers: "what was the population of the Bible Study on day 2 of the last retreat".
+- Event selector defaults to the latest past Easter retreat. Approved ProgramEvent rows define scheduled sessions. A matrix of program-type rows by day columns; each column header shows day number and date. A cell shows counted attendance, "Regions reporting: n of m", and pending or returned state, or "No report". Future scheduled sessions are upcoming; a past session without a counted report follows the shared late/missing windows. Missing is never zero; a submitted zero reads "Reported 0".
+- Selecting a cell shows the by-region breakdown for that program and day; opening a region shows its own camp report. This answers: "what was the population of the Bible Study on day 2 of the last retreat". Retreat's expected reporter is the region that holds each scheduled session; show "Regions reporting: n of m". Retreat drill-down stops at Region with the note "Retreat is reported at region level."
 - Event and date identify the retreat and the day. The five parameters identify the program and the reporting unit. Day number is derived from the event start date.
-- Compare Easter with the previous Easter and December with the previous December only. Show the delta only when both exist.
-- Do not invent expected sessions. Show "sessions reported" and "planned sessions not defined". An event may declare its planned sessions in a later slice.
+- "Compare with" lists other campaigns of the same event kind in scope and defaults to the previous campaign by date. Compare the same program type and campaign-relative day, using only reporters with counted reports in both; do not average percentages. Show "No comparison" if the prior campaign has no matching counted report.
+- The denominator is the number of approved ProgramEvent rows in the selected campaign. No separate expectation rows are created.
 - Region-level Sunday Worship at camp replaces local reports under the combined-meeting rule.
 - Group and Location views have no retreat figures of their own; show an explanation.
-- Cards: sessions reported, peak session, average per reporting region (delta), regions reporting, pending, returned. No card sums attendance across sessions.
+- Cards: peak pooled program/day cell, mean of counted pooled program/day cells, and sessions reported of approved scheduled sessions. The State cell asks the population for Bible Study on day 2 of the latest Easter Retreat. No card sums attendance across sessions or days.
 
 ### Crusade page
 
 Held monthly, several days, with its own programs (Crusade Evening, Leadership Development Meeting, Impact Academy, Global Sunday Service). The crusade ground is the **Alpha** location: assigned workers record physical attendance and converts. Every church location joining from elsewhere is a **satellite** and reports as a normal local program.
 
 - Same event selector and day-by-program matrix. Attendance and Converts toggle.
-- Each cell shows Alpha, Satellite and a labelled "Total participation" (or "Alpha only", "Satellites only, no Alpha", "Total participation" with no number when nothing is counted), plus "n of m locations".
-- Alpha is reported at State level. Region, Group and Location pastors see their satellites; Alpha shows at State level only. **Confirm with church leadership whether regional pastors should also see Alpha.**
-- Expected satellites: every eligible location in scope, for any session that has a report. Expected Alpha reporters: approved `EventAssignment`; with none, coverage is "unknown".
-- Cards: peak session (labelled total), peak satellite session, converts (Alpha plus satellite, labelled), satellite coverage, average per reporting location (delta against the previous crusade), pending. Converts add across sessions; attendance does not.
-- Selecting a cell shows Alpha, then children by scope (satellite coverage bar and counted figure); opening a child goes one level down; at Location it shows that location's own report.
+- At State, each counted cell shows Alpha, Satellites and a labelled "Total participation". Below State, show satellite figures only. An uncounted cell shows its state instead of a zero. Coverage is labelled "Locations reporting: n of m"; Alpha is shown separately as 0 or 1 of 1 at State.
+- Alpha is reported at State level. Region, Group and Location pastors see satellite data only; Alpha details are hidden below State.
+- For every approved scheduled Crusade session, each active location in scope on that date (respecting opening/closing dates) is expected to report as a satellite. Show "Locations reporting: n of m". Church leadership confirmed every location participates; do not show an assumption caveat. Alpha is one expected State-level reporter. Future sessions are upcoming; past unreported sessions follow the shared late/missing windows. Missing is never zero; a submitted zero reads "Reported 0".
+- "Compare with" lists other Crusade campaigns in scope and defaults to the previous by date. Compare the same program type and campaign-relative day, and pool only the same location reporters with counted reports in both campaigns. Do not average percentages. Show "No comparison" where there is no matching counted report.
+- Cards: peak and mean of counted session totals, sessions reported of approved scheduled sessions, and converts. State attendance cards say "total participation" and describe Alpha plus satellite calculation; lower scopes say "satellite participation". Convert records can be counted across the campaign; attendance is never summed across sessions or days.
+- Selecting a cell shows Alpha separately at State, then children by scope (satellite coverage and counted figures); opening a child drills State -> Region -> Group -> Location. Scope links retain campaign, comparison campaign, program, day/session, period and include-pending state.
 
 ## C8. API contract (adapt to existing routers)
 
@@ -283,10 +284,13 @@ GET /api/v1/analytics/domains/{domain}?scope_path=...
 | Retreat is region-level at a camp; Crusade has Alpha and satellite | Confirmed |
 | Rejection creates a linked new submission | Superseded by the edit window (v2.1). Old path kept for rows already rejected |
 | State-level reports auto-accepted | Default |
-| Alpha visibility below State | Default: State only. Confirm |
+| Alpha visibility below State | Confirmed: State only |
 | Person-level data at Location and Group only | Default. Confirm |
 | Fellowship: one report per location per Sunday, six categories like counts | Church wants it; needs a schema and Field Utility change (slice B6) |
-| Whether every location reports as a satellite for each crusade session | Default yes. Confirm |
+| Every active location participates in every Crusade session | Confirmed by church leadership; expected satellite denominator uses location lifecycle dates |
+| Approved ProgramEvent rows define scheduled sessions; future is upcoming and past unreported sessions use shared late/missing windows | Confirmed for B3 |
+| Retreat expected reporter is the region holding the session; retreat drill-down stops at Region | Confirmed for B3 |
+| Compare event campaigns using same program/day and only common counted reporters; no mean of percentages | Confirmed for B3 |
 
 ---
 

@@ -175,6 +175,10 @@ class BackendClient:
 
         request_headers = dict(headers or {})
         dashboard_call_token = None
+        program_page_timed = False
+        program_page_trace = None
+        program_sql_before = 0
+        program_db_before = 0.0
         if access_token:
             request_headers["Authorization"] = f"Bearer {access_token}"
         try:
@@ -183,6 +187,15 @@ class BackendClient:
             if trace is not None:
                 request_headers.setdefault("X-DCLM-Request-ID", trace.request_id)
                 dashboard_call_token = bind_backend_call(path.strip("/"))
+        except Exception:
+            pass
+        try:
+            from app.core.program_page_perf import current_trace as current_program_trace
+            program_page_trace = current_program_trace()
+            program_page_timed = program_page_trace is not None
+            if program_page_trace is not None:
+                program_sql_before = program_page_trace.sql_statements
+                program_db_before = program_page_trace.db_ms
         except Exception:
             pass
 
@@ -210,6 +223,15 @@ class BackendClient:
         except httpx.HTTPError as exc:
             raise BackendClientError(_format_network_error(exc)) from exc
         finally:
+            if program_page_timed:
+                try:
+                    from app.core.program_page_perf import record_backend_call
+                    record_backend_call(f"{method.upper()} {path}", (__import__("time").perf_counter() - started) * 1000,
+                                        getattr(response, "status_code", None),
+                                        (program_page_trace.sql_statements - program_sql_before) if program_page_trace else 0,
+                                        (program_page_trace.db_ms - program_db_before) if program_page_trace else 0.0)
+                except Exception:
+                    pass
             try:
                 from app.core.dashboard_perf import record_backend_call, unbind_backend_call
                 record_backend_call(f"{method.upper()} {path}", (__import__("time").perf_counter() - started) * 1000,
@@ -931,13 +953,15 @@ class BackendClient:
         program_level: str | None = None,
         event_id: str | None = None,
         campaign_id: str | None = None,
+        compare_campaign_id: str | None = None,
         date_from: str | None = None,
         date_to: str | None = None,
         include_pending: bool = False,
     ) -> dict[str, Any]:
         params: dict[str, Any] = {"scope_path": scope_path, "include_pending": include_pending}
         for key, value in (("domain", domain), ("program_type", program_type), ("program_level", program_level),
-                           ("event_id", event_id), ("campaign_id", campaign_id), ("date_from", date_from), ("date_to", date_to)):
+                           ("event_id", event_id), ("campaign_id", campaign_id), ("compare_campaign_id", compare_campaign_id),
+                           ("date_from", date_from), ("date_to", date_to)):
             if value:
                 params[key] = value
         return await self._request("GET", "/analytics/programs/occurrences", access_token=access_token, params=params)

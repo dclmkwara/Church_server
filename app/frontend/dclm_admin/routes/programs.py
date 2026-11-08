@@ -13,11 +13,15 @@ from ..auth_context import build_context
 from ..backend import BackendClientError
 from ..communication import PeopleService, ProgramService
 from ..communication.active_scope import active_scope_context
+from ..communication.active_scope import scope_link
+from ..communication.organization_service import OrganizationService
 from ..components.chartjs import bar_chart as _bar_chart
 from ..components.chartjs import donut_chart as _donut_chart
 from ..components.feedback import simple_toast_response
 from ..components.shell import hidden_context_inputs, primary_button, shell_layout
 from ..components.ui import empty_state, filter_field, page_intro, page_stack, responsive_table, section_card, stat_card, status_badge
+from app.services.analytics.program_config import reporting_today
+from app.core.program_page_perf import program_page_trace
 
 
 EVENT_STATUSES = ["scheduled", "completed", "cancelled", "draft"]
@@ -40,6 +44,31 @@ def _safe_float(value: object) -> float:
         return float(value or 0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _pool_session_rows(rows: list[dict[str, Any]], *, metric: str) -> tuple[int, int, int]:
+    """Return pooled current, prior and common counted reporter values."""
+    current_reporters = {str(row.get("scope_path")): row for row in rows if row.get("scope_path")}
+    current_counted = [row for row in rows if (row.get("report_state") == "counted" if metric == "attendance" else row.get("record_state") == "reported")]
+    current_total = sum(_safe_int(row.get("counted_population")) if metric == "attendance" else _safe_int(row.get("converts")) for row in current_counted)
+    return current_total, len(current_reporters), len(current_counted)
+
+
+def _compare_common_reporters(current_rows: list[dict[str, Any]], prior_rows: list[dict[str, Any]], *, metric: str) -> tuple[int, int, int, int]:
+    """Return full current cell, current/prior totals for common counted reporters, and n."""
+    is_counted = lambda row: (row.get("report_state") == "counted") if metric == "attendance" else (row.get("record_state") == "reported")
+    value = lambda row: _safe_int(row.get("counted_population")) if metric == "attendance" else _safe_int(row.get("converts"))
+    current_by_path = {str(row.get("scope_path")): row for row in current_rows if row.get("scope_path")}
+    prior_by_path = {str(row.get("scope_path")): row for row in prior_rows if row.get("scope_path")}
+    full_current = sum(value(row) for row in current_rows if is_counted(row))
+    common = set(current_by_path).intersection(prior_by_path)
+    comparable = [path for path in common if is_counted(current_by_path[path]) and is_counted(prior_by_path[path])]
+    return (
+        full_current,
+        sum(value(current_by_path[path]) for path in comparable),
+        sum(value(prior_by_path[path]) for path in comparable),
+        len(comparable),
+    )
 
 
 def _segment_label(value: str) -> str:
@@ -119,38 +148,134 @@ def _occurrence_status(row: dict[str, Any], *, metric: str, mode: str, can_view_
     return P(f"{_safe_int(row.get('counted_population')):,}", cls="fw-semibold mb-0")
 
 
-async def _event_matrix_page(request: Request, ctx, *, mode: str, campaign_id: str = "", event_id: str = "", metric: str = "attendance", include_pending: bool = False):
+async def _render_event_matrix_page(request: Request, ctx, *, mode: str, campaign_id: str = "", event_id: str = "", metric: str = "attendance", include_pending: bool = False):
     domain_slug = "retreat" if mode == "retreat" else "global_crusade"
-    campaigns = await ProgramService.list_campaigns(request, ctx, domain_slug=domain_slug, event_mode=mode)
+    campaigns = await ProgramService.list_analytics_campaigns(request, ctx, domain_slug=domain_slug, event_mode=mode)
     campaign_ids = {str(row.get("campaign_id")) for row in campaigns}
+    today = reporting_today().isoformat()
+    campaigns = sorted(campaigns, key=lambda row: str(row.get("start_date") or ""))
     if campaign_id not in campaign_ids:
-        past = [row for row in campaigns if str(row.get("end_date") or "") <= date.today().isoformat()]
-        selected = past[0] if past else (campaigns[0] if campaigns else None)
+        past = [row for row in campaigns if str(row.get("end_date") or row.get("start_date") or "") <= today]
+        # Retreat landing is explicitly the most recent Easter retreat when
+        # one exists; December remains available through the selector.
+        if mode == "retreat":
+            easter = [row for row in past if "easter" in str(row.get("title") or "").casefold()]
+            if easter:
+                past = easter
+        selected = past[-1] if past else (campaigns[0] if campaigns else None)
         campaign_id = str(selected.get("campaign_id") or "") if selected else ""
     selected_campaign = next((row for row in campaigns if str(row.get("campaign_id")) == campaign_id), None)
+    same_kind = [row for row in campaigns if row.get("event_mode") == mode and str(row.get("campaign_id")) != campaign_id]
+    previous_campaign = max((row for row in same_kind if str(row.get("start_date") or "") < str((selected_campaign or {}).get("start_date") or "")), key=lambda row: str(row.get("start_date") or ""), default=None)
+    compare_campaign_id = str(request.query_params.get("compare_campaign_id") or (previous_campaign or {}).get("campaign_id") or "")
+    if compare_campaign_id not in {str(row.get("campaign_id")) for row in same_kind}:
+        compare_campaign_id = ""
     occurrences_result = await ProgramService.occurrences(
-        request, ctx, domain=domain_slug, campaign_id=campaign_id or None,
-        event_id=event_id or None, include_pending=include_pending,
-    ) if campaign_id else {"occurrences": []}
-    occurrences = occurrences_result.get("occurrences") or []
+        request, ctx, domain=domain_slug, campaign_id=campaign_id or None, compare_campaign_id=compare_campaign_id or None,
+        include_pending=include_pending,
+    )
+    all_occurrences = occurrences_result.get("occurrences") or []
+    occurrences = [row for row in all_occurrences if str(row.get("campaign_id")) == campaign_id]
+    comparison = [row for row in all_occurrences if str(row.get("campaign_id")) == compare_campaign_id]
     by_id = {str(row["event_id"]): row for row in occurrences}
-    can_view_alpha = int(getattr(getattr(ctx, "profile", None), "level", 0) or 0) >= 5
-    detail = by_id.get(event_id)
+    can_view_alpha = len(str(getattr(ctx, "current_scope_path", "") or "").split(".")) == 3
+    requested_type = str(request.query_params.get("program_type") or "")
+    requested_day = str(request.query_params.get("date_from") or "")
+    detail = by_id.get(event_id) or next((row for row in occurrences if requested_type and row.get("program_type_slug") == requested_type and row.get("date") == requested_day), None)
+    if detail is None and mode == "retreat" and not requested_type and not requested_day:
+        detail = next((row for row in occurrences if row.get("day_number") == 2 and "bible" in str(row.get("program_type_slug") or "").casefold()), None)
     days = sorted({str(row["date"]) for row in occurrences})
     types = sorted({(str(row["program_type_slug"]), str(row["program_type"])) for row in occurrences}, key=lambda item: item[1].casefold())
     matrix_rows = []
-    for type_slug, type_name in types:
+    scope_path = str(getattr(ctx, "current_scope_path", "") or "")
+    scope_parts = scope_path.split(".")
+    scope_depth = len(scope_parts)
+    can_view_alpha = scope_depth == 3
+    max_path = str((getattr(ctx, "query_extras", {}) or {}).get("home_path") or scope_path)
+    max_depth = len(max_path.split("."))
+    name_by_path = occurrences_result.get("scope_names") or {}
+    crumb_paths = [".".join(scope_parts[:i]) for i in range(max_depth, scope_depth + 1)]
+    crumbs = []
+    for path in crumb_paths:
+        if not path.startswith(max_path):
+            continue
+        name = name_by_path.get(path) or (ctx.current_scope_label if path == scope_path else path.rsplit(".", 1)[-1])
+        if path == scope_path:
+            crumbs.append(Span(name, cls="text-body-emphasis fw-semibold", aria_current="location"))
+        else:
+            target = scope_link(ctx, f"/church-data/programs/analytics/{mode}", scope_path=path, campaign_id=campaign_id, compare_campaign_id=compare_campaign_id, metric=metric, include_pending=str(include_pending).lower())
+            crumbs.append(A(name, href=target, hx_get=target, hx_push_url=target, hx_target="#program-analytics-content", hx_swap="outerHTML", cls="link-primary text-decoration-none"))
+        if path != crumb_paths[-1]:
+            crumbs.append(Span(" › ", cls="text-muted"))
+    for type_slug, type_name in types if not (mode == "retreat" and scope_depth > 4) else []:
         cells = [type_name]
         for day in days:
             matches = [row for row in occurrences if row["program_type_slug"] == type_slug and row["date"] == day]
+            current = matches[0] if matches else None
+            previous_matches = [row for row in comparison if row["program_type_slug"] == type_slug and current and row.get("day_number") == current.get("day_number")]
             if matches:
-                links = [A(_occurrence_status(row, metric=metric, mode=mode, can_view_alpha=can_view_alpha), href=ctx.url_for(
-                    f"/church-data/programs/analytics/{mode}", campaign_id=campaign_id,
-                    event_id=row["event_id"], metric=metric, include_pending=str(include_pending).lower(),
-                ), cls="text-decoration-none") for row in matches]
-                cells.append(Div(*links, cls="d-grid gap-2"))
+                current_counted = [r for r in matches if (r.get("report_state") == "counted" if metric == "attendance" else r.get("record_state") == "reported")]
+                current_value = sum(_safe_int(r.get("counted_population")) if metric == "attendance" else _safe_int(r.get("converts")) for r in current_counted)
+                comparison_current_value = current_value
+                prior_value = 0
+                compared_reporter_count = 0
+                if mode != "crusade" and previous_matches and matches:
+                    current_value, comparison_current_value, prior_value, compared_reporter_count = _compare_common_reporters(matches, previous_matches, metric=metric)
+                if mode == "crusade" and previous_matches and matches:
+                    def crusade_reporters(rows):
+                        reporters = {}
+                        for row in rows:
+                            source_rows = row.get("location_reports") or [] if metric == "attendance" else row.get("record_reports") or []
+                            for source_row in source_rows:
+                                if metric == "converts" and source_row.get("record_type") != "convert":
+                                    continue
+                                location_id = str(source_row.get("location_id") or "")
+                                status = str(source_row.get("status") or "")
+                                present = bool(source_row.get("approved_rows") or (include_pending and source_row.get("pending_rows"))) if metric == "attendance" else status == "approved" or (include_pending and status == "pending")
+                                if not location_id or not present:
+                                    continue
+                                value = (_safe_int(source_row.get("approved_population")) + (_safe_int(source_row.get("pending_population")) if include_pending else 0)) if metric == "attendance" else _safe_int(source_row.get("count"))
+                                reporters[location_id] = reporters.get(location_id, 0) + value
+                        return reporters
+                    current_by_reporter = crusade_reporters(matches)
+                    previous_by_reporter = crusade_reporters(previous_matches)
+                    common_reporters = set(current_by_reporter).intersection(previous_by_reporter)
+                    comparison_current_value = sum(current_by_reporter[key] for key in common_reporters)
+                    prior_value = sum(previous_by_reporter[key] for key in common_reporters)
+                    compared_reporter_count = len(common_reporters)
+                counted_current = bool(current_counted)
+                counted_prior = bool(compared_reporter_count)
+                if mode == "crusade" and previous_matches and matches:
+                    counted_current = bool(current_by_reporter)
+                    counted_prior = bool(previous_by_reporter)
+                if counted_current:
+                    value_label = "Reported 0" if current_value == 0 else f"{current_value:,}"
+                else:
+                    current_state = current.get("report_state") if metric == "attendance" else current.get("record_state")
+                    value_label = {"no_report": "No report", "upcoming": "Upcoming", "awaiting": "Awaiting report", "late": "Late", "missing": "Missing", "returned": "Returned", "pending": "Pending review"}.get(current_state, "No counted report")
+                delta_label = "No comparison" if not counted_prior or not counted_current or not compared_reporter_count else f"{comparison_current_value - (prior_value or 0):+,} vs previous ({compared_reporter_count} reporters)"
+                coverages = [r.get("coverage") or {} for r in matches]
+                coverage = coverages[0] if coverages else {}
+                coverage_label = f"{coverage.get('label', 'Reports')}: {sum(_safe_int(c.get('reported')) for c in coverages)} of {sum(_safe_int(c.get('expected')) for c in coverages)}"
+                if mode == "crusade" and can_view_alpha and coverage.get("alpha_expected"):
+                    coverage_label += f" · Alpha: {coverage.get('alpha_reported', 0)} of 1"
+                target = scope_link(ctx, f"/church-data/programs/analytics/{mode}", campaign_id=campaign_id, compare_campaign_id=compare_campaign_id, program_type=type_slug, event_id=current["event_id"], date_from=day, date_to=day, metric=metric, include_pending=str(include_pending).lower())
+                if mode == "crusade" and metric == "attendance" and counted_current:
+                    alpha_total = sum(_safe_int((r.get("sources") or {}).get("alpha")) for r in matches)
+                    satellite_total = sum(_safe_int((r.get("sources") or {}).get("satellite")) for r in matches)
+                    total_label = "Reported 0" if current_value == 0 else f"{current_value:,}"
+                    if can_view_alpha:
+                        value_content = Div(P(f"Alpha: {alpha_total:,} · Satellites: {satellite_total:,}", cls="small mb-0"),
+                                            P(f"Total participation: {total_label}", cls="fw-semibold mb-0"))
+                    else:
+                        satellite_label = "Reported 0" if satellite_total == 0 else f"{satellite_total:,}"
+                        value_content = P(f"Satellite: {satellite_label}", cls="fw-semibold mb-0")
+                    link = A(value_content, href=target, hx_get=target, hx_push_url=target, hx_target="#program-analytics-content", hx_swap="outerHTML", cls="text-decoration-none")
+                else:
+                    link = A(value_label, href=target, hx_get=target, hx_push_url=target, hx_target="#program-analytics-content", hx_swap="outerHTML", cls="fw-semibold text-decoration-none")
+                cells.append(Div(link, P(coverage_label, cls="small text-muted mb-0"), P(delta_label, cls="small text-muted mb-0"), cls="d-grid gap-1"))
             else:
-                cells.append(Span("Session not defined", cls="small text-muted"))
+                cells.append(Span("Session not scheduled", cls="small text-muted"))
         matrix_rows.append(cells)
     headers = ["Program type"] + [
         (f"Day {next((r.get('day_number') for r in occurrences if r['date'] == day and r.get('day_number')), '—')} · {day}" if mode == "retreat" else day)
@@ -161,38 +286,124 @@ async def _event_matrix_page(request: Request, ctx, *, mode: str, campaign_id: s
             Option(f"{row.get('title') or row.get('campaign_code')} · {row.get('start_date')}", value=row.get("campaign_id"), selected=str(row.get("campaign_id")) == campaign_id)
             for row in campaigns
         ], name="campaign_id", cls="form-select"),
+        Select(Option("Compare with", value=""), *[
+            Option(f"{row.get('title') or row.get('campaign_code')} · {row.get('start_date')}", value=row.get("campaign_id"), selected=str(row.get("campaign_id")) == compare_campaign_id)
+            for row in same_kind
+        ], name="compare_campaign_id", cls="form-select") if same_kind else Input(type="hidden", name="compare_campaign_id", value=""),
         Select(Option("Attendance", value="attendance", selected=metric == "attendance"), Option("Converts", value="converts", selected=metric == "converts"), name="metric", cls="form-select") if mode == "crusade" else Input(type="hidden", name="metric", value=metric),
         Label(Input(type="checkbox", name="include_pending", value="true", checked=include_pending), " Include pending reports", cls="form-check-label d-flex align-items-center gap-2 px-2"),
-        Button("Load event", variant="primary", size="md", type="submit"),
+        Button("Apply", variant="primary", size="md", type="submit"),
         method="get", action=ctx.url_for(f"/church-data/programs/analytics/{mode}"),
         cls="d-flex flex-wrap gap-2 align-items-end mb-3",
     )
     if detail:
-        report_rows = [[r["location"], r["source_role"].title(), f"{_safe_int(r['approved_population']):,}", f"{_safe_int(r['pending_population']):,}"] for r in detail.get("location_reports", [])]
+        detail_rows = [row for row in occurrences if row.get("program_type_slug") == detail.get("program_type_slug") and row.get("date") == detail.get("date")]
+        if mode == "retreat" and scope_depth >= 4:
+            detail_rows = []
+        child_rows_by_path = {}
+        for detail_row in detail_rows:
+            for child in detail_row.get("children") or []:
+                key = str(child.get("path") or child.get("name") or "")
+                if key not in child_rows_by_path:
+                    child_rows_by_path[key] = dict(child)
+                else:
+                    existing = child_rows_by_path[key]
+                    for field in ("expected", "reported", "pending", "returned", "population"):
+                        if child.get(field) is not None:
+                            existing[field] = _safe_int(existing.get(field)) + _safe_int(child.get(field))
+        child_rows = list(child_rows_by_path.values())
+        report_rows = []
+        for child in child_rows:
+            path = str(child.get("path") or "")
+            if mode == "retreat" and scope_depth >= 4:
+                continue
+            can_drill = mode == "crusade" and scope_depth < 6 or mode == "retreat" and scope_depth == 3
+            target = scope_link(ctx, f"/church-data/programs/analytics/{mode}", scope_path=path, campaign_id=campaign_id, compare_campaign_id=compare_campaign_id, program_type=str(request.query_params.get("program_type") or ""), event_id=detail["event_id"], date_from=detail["date"], date_to=detail["date"], metric=metric, include_pending=str(include_pending).lower())
+            label = A(str(child.get("name") or "Reporting unit"), href=target, hx_get=target, hx_push_url=target, hx_target="#program-analytics-content", hx_swap="outerHTML") if can_drill else str(child.get("name") or "Reporting unit")
+            reported = int(child.get("reported") or 0)
+            expected = int(child.get("expected") or 0)
+            population = child.get("population")
+            state_label = "Reported 0" if child.get("state") == "reported" and population == 0 else (f"{population:,}" if population is not None else str(child.get("state") or "No report").replace("_", " ").title())
+            report_rows.append([label, f"{reported} of {expected}", state_label])
+        if mode == "crusade" and can_view_alpha and detail.get("alpha_location_id"):
+            alpha_reports = [r for detail_row in detail_rows for r in detail_row.get("location_reports", []) if r.get("source_role") == "alpha"]
+            alpha_report = alpha_reports[0] if alpha_reports else None
+            report_rows.insert(0, ["Alpha location", "1 of 1" if alpha_report else "0 of 1", "Reported 0" if alpha_report and alpha_report.get("approved_population") == 0 else f"{_safe_int(alpha_report.get('approved_population')):,}" if alpha_report else "No report"])
         detail_panel = section_card(
             f"{detail['program_type']} · {detail['date']}",
-            f"{detail.get('campaign_title') or mode.title()} report detail. Physical venue and reporting scope are kept separate.",
-            responsive_table(["Location", "Source", "Approved population", "Pending population"], report_rows, [], results_id="program-event-details") if report_rows else empty_state("clipboard-data", "No report rows", "This occurrence has no location level submissions in the selected scope."),
+            f"{detail.get('campaign_title') or mode.title()} · day {detail.get('day_number') or '—'}. " + ("Retreat is reported at region level." if mode == "retreat" else ("Alpha and satellite reporting remain separate." if can_view_alpha else "Satellite reporting is scoped to participating locations.")),
+            responsive_table(["Reporting unit", "Coverage", "Counted result"], report_rows, [], results_id="program-event-details") if report_rows else empty_state("clipboard-data", "No report rows", "This scheduled session has no counted submissions in the selected scope."),
         )
     else:
         detail_panel = Div()
-    table = responsive_table(headers, matrix_rows, [], results_id=f"{mode}-occurrence-matrix") if matrix_rows else empty_state("calendar3", f"No {mode} sessions reported", "No dated program events are recorded for this campaign. Missing events are not represented as zero attendance.")
+    if mode == "retreat" and scope_depth > 4:
+        table = empty_state("info-circle", "Retreat is reported at region level", "Retreat reporting drills from State to Region and stops there.")
+    else:
+        table = responsive_table(headers, matrix_rows, [], results_id=f"{mode}-occurrence-matrix") if matrix_rows else empty_state("calendar3", f"No {mode} sessions reported", "No dated program events are recorded for this campaign. Missing events are not represented as zero attendance.")
     no_campaign = P("No campaign is available in this scope yet.", cls="text-muted") if not campaigns else None
+    cell_groups = {}
+    for row in occurrences:
+        key = (row.get("program_type_slug"), row.get("day_number"), row.get("date"))
+        cell_groups.setdefault(key, []).append(row)
+    counted_cells = []
+    for rows in cell_groups.values():
+        counted_rows = [row for row in rows if row.get("report_state") == "counted"]
+        if counted_rows:
+            counted_cells.append(sum(_safe_int(row.get("counted_population")) for row in counted_rows))
+    scheduled_count = len(occurrences)
+    reported_count = sum(1 for row in occurrences if row.get("report_state") == "counted")
+    peak_value = max(counted_cells, default=0)
+    average_day = (sum(counted_cells) / len(counted_cells)) if counted_cells else None
+    convert_total = sum(_safe_int(row.get("converts")) for row in occurrences)
+    def summary_card(title: str, value: str, explanation: str):
+        return Div(stat_card(title, value, explanation, "calendar-check", "primary"), cls="col-6 col-xl-3")
+    peak_label = "Peak program/day"
+    average_label = "Average counted program/day"
+    peak_explanation = "Highest pooled program-and-day cell; values are not added across days."
+    average_explanation = "Mean of counted program-and-day cells; missing cells are excluded."
+    if mode == "crusade" and metric == "attendance":
+        if can_view_alpha:
+            peak_label, average_label = "Peak total participation", "Average total participation per session"
+            peak_explanation = "Highest session total, with Alpha and satellite counts combined and labelled in the session detail."
+            average_explanation = "Mean of counted session totals, with Alpha and satellite participation included."
+        else:
+            peak_label, average_label = "Peak satellite participation", "Average satellite participation per session"
+            peak_explanation = "Highest counted satellite session total within this scope."
+            average_explanation = "Mean of counted satellite session totals within this scope."
+    summary_cards = Div(
+        summary_card(peak_label, f"{peak_value:,}" if counted_cells else "No counted report", peak_explanation),
+        summary_card(average_label, f"{average_day:,.1f}" if average_day is not None else "No counted report", average_explanation),
+        summary_card("Sessions reported", f"{reported_count} of {scheduled_count} scheduled", "Approved scheduled sessions with a counted report; pending is controlled above."),
+        summary_card("Converts", f"{convert_total:,}" if mode == "crusade" else "—", "Convert records across the selected campaign; records are additive."),
+        cls="row g-3",
+    )
+    if mode == "retreat" and scope_depth > 4:
+        summary_cards = empty_state("info-circle", "Retreat is reported at region level", "Retreat reporting drills from State to Region and stops there.")
     content = page_stack(
         page_intro(
             "Retreat reporting" if mode == "retreat" else "Global Crusade reporting",
-            "One cell represents one dated program type. Attendance is never added across sessions."
-            if mode == "retreat" else "Alpha and satellite reporting stay separate; the labelled total is for this session only.",
+            "One cell represents one scheduled program type on one day. Attendance is never added across sessions."
+            if mode == "retreat" else ("One cell represents one scheduled session. Alpha and satellite values stay labelled separately; attendance is never added across sessions." if can_view_alpha else "One cell represents one scheduled satellite session. Attendance is never added across sessions."),
             scope_label=ctx.current_scope_label, scope_kind=ctx.current_scope_kind,
         ),
+        Div(*crumbs, cls="d-flex flex-wrap align-items-center gap-1 mb-2", role="navigation", aria_label="Scope breadcrumb"),
         selector,
-        section_card("Event summary", "Sessions reported · planned sessions not defined. No expected session list has been configured.",
-            Div(P(f"{len(occurrences)} sessions reported" if occurrences else "No sessions reported", cls="fw-semibold mb-0"), cls="py-2")),
-        section_card("Population by program and day" if mode == "retreat" or metric == "attendance" else "Converts by program and day", "Select a cell to inspect the location reports.", table),
+        summary_cards,
+        P("Scheduled sessions are approved ProgramEvent rows in the selected campaign.", cls="small text-muted mb-0"),
+        P("Locations reporting uses every active location in scope for each scheduled Crusade session.", cls="small text-muted mb-0") if mode == "crusade" else P("Retreat expected reporters are the regions holding each scheduled session.", cls="small text-muted mb-0"),
+        section_card(("Population by program and day" if mode == "retreat" else ("Total participation by program and day" if can_view_alpha else "Satellite participation by program and day")) if metric == "attendance" else "Converts by program and day", "Select a scheduled cell to inspect reporting units for that day and program. A reported zero is distinct from a missing report.", table),
         detail_panel,
         no_campaign,
     )
-    return shell_layout(ctx, request_path=request.url.path, active_key="programs", title="Retreat" if mode == "retreat" else "Crusade", subtitle="Event reporting", primary_action=None, content=content, show_shell_intro=False)
+    return shell_layout(ctx, request_path=request.url.path, active_key="programs", title="Retreat" if mode == "retreat" else "Crusade", subtitle="Event reporting", primary_action=None, content=Div(content, id="program-analytics-content"), show_shell_intro=False, show_scope_breadcrumb=False)
+
+
+async def _event_matrix_page(request: Request, ctx, *, mode: str, campaign_id: str = "", event_id: str = "", metric: str = "attendance", include_pending: bool = False):
+    with program_page_trace(mode, str(getattr(ctx, "current_scope_path", "") or "")):
+        return await _render_event_matrix_page(
+            request, ctx, mode=mode, campaign_id=campaign_id, event_id=event_id,
+            metric=metric, include_pending=include_pending,
+        )
 
 
 async def _scope_locations(request: Request, ctx) -> list[str]:
@@ -539,11 +750,7 @@ async def _events_table(
 def _campaign_activity_summary(activity: dict[str, object]) -> Div:
     return Div(
         Div(P("Events", cls="small text-muted mb-1"), H4(str(activity["event_count"]), cls="h6 fw-semibold mb-0")),
-        Div(P("Population", cls="small text-muted mb-1"), H4(str(activity["total_population"]), cls="h6 fw-semibold mb-0")),
-        Div(P("Alpha ground", cls="small text-muted mb-1"), H4(str(activity["alpha_population"]), cls="h6 fw-semibold mb-0")),
-        Div(P("Satellite", cls="small text-muted mb-1"), H4(str(activity["satellite_population"]), cls="h6 fw-semibold mb-0")),
-        Div(P("Converts", cls="small text-muted mb-1"), H4(str(activity["converts"]), cls="h6 fw-semibold mb-0")),
-        Div(P("Newcomers", cls="small text-muted mb-1"), H4(str(activity["newcomers"]), cls="h6 fw-semibold mb-0")),
+        Div(P("Records submitted", cls="small text-muted mb-1"), H4(str(activity.get("records_submitted", 0)), cls="h6 fw-semibold mb-0")),
         Div(P("Assignments", cls="small text-muted mb-1"), H4(str(activity.get("assignments_total") or 0), cls="h6 fw-semibold mb-0")),
         Div(P("Submitted", cls="small text-muted mb-1"), H4(str(activity.get("assignments_submitted") or 0), cls="h6 fw-semibold mb-0")),
         cls="counts-stat-grid mt-4",
@@ -578,7 +785,7 @@ def _campaign_activity_table(activity: dict[str, object]) -> Div:
                 P(f"{row['location']} - {row['date']}", cls="text-muted mb-2"),
                 Div(
                     P(f"Segment: {_segment_label(str(row.get('audience_segment') or ''))}", cls="small text-body-emphasis mb-1"),
-                    P(f"Population: {row['population']}", cls="small text-body-emphasis mb-1"),
+                    P(f"Session population: {row['population']}", cls="small text-body-emphasis mb-1"),
                     P(f"Alpha: {row['alpha_population']}", cls="small text-body-emphasis mb-1"),
                     P(f"Satellite: {row['satellite_population']}", cls="small text-body-emphasis mb-1"),
                     P(f"Converts: {row['converts']}", cls="small text-body-emphasis mb-1"),
@@ -589,7 +796,7 @@ def _campaign_activity_table(activity: dict[str, object]) -> Div:
             )
         )
     return responsive_table(
-        ["Event", "Location", "Date", "Segment", "Population", "Alpha", "Satellite", "Converts", "Newcomers", "Assignments"],
+        ["Event", "Location", "Date", "Segment", "Session population", "Alpha", "Satellite", "Converts", "Newcomers", "Assignments"],
         desktop_rows,
         mobile_cards,
         results_id="campaign-activity-results",
@@ -598,18 +805,18 @@ def _campaign_activity_table(activity: dict[str, object]) -> Div:
 
 async def _campaign_report_panel(ctx, campaign: dict[str, Any], activity: dict[str, Any], *, view: str) -> Div:
     source_rows = [
-        {"label": "Alpha", "value": _safe_int(activity.get("alpha_population")), "display": str(activity.get("alpha_population") or 0), "color": "#0f766e"},
-        {"label": "Satellite", "value": _safe_int(activity.get("satellite_population")), "display": str(activity.get("satellite_population") or 0), "color": "#2563eb"},
+        {"label": "Alpha records", "value": 0, "display": "Session details below", "color": "#0f766e"},
+        {"label": "Satellite records", "value": 0, "display": "Session details below", "color": "#2563eb"},
     ]
     follow_up_rows = [
-        {"label": "Converts", "value": _safe_int(activity.get("converts")), "display": str(activity.get("converts") or 0), "color": "#7c3aed"},
-        {"label": "Newcomers", "value": _safe_int(activity.get("newcomers")), "display": str(activity.get("newcomers") or 0), "color": "#ea580c"},
+        {"label": "Convert records", "value": 0, "display": "Session details below", "color": "#7c3aed"},
+        {"label": "Newcomer records", "value": 0, "display": "Session details below", "color": "#ea580c"},
     ]
     trend_rows = [
         {
             "label": str(row.get("date") or row.get("title") or "Event"),
             "value": _safe_int(row.get("population")),
-            "display": str(row.get("population") or 0),
+            "display": f"{_safe_int(row.get('population')):,} for this event",
             "color": "#1d4ed8",
         }
         for row in reversed(activity.get("events") or [])
@@ -640,18 +847,6 @@ async def _campaign_report_panel(ctx, campaign: dict[str, Any], activity: dict[s
             "color": "#dc2626",
         },
     ]
-    segment_rows = [
-        {
-            "label": _segment_label(str(row.get("segment") or "")),
-            "value": _safe_int(row.get("population")),
-            "display": str(row.get("population") or 0),
-            "color": color,
-        }
-        for row, color in zip(
-            activity.get("segment_breakdown") or [],
-            ["#0f766e", "#2563eb", "#7c3aed", "#ea580c", "#1d4ed8", "#be123c"],
-        )
-    ]
     if view == "summary":
         body = Div(
             _campaign_activity_summary(activity),
@@ -668,9 +863,8 @@ async def _campaign_report_panel(ctx, campaign: dict[str, Any], activity: dict[s
             ),
             section_card(
                 "Retreat segments",
-                "Adult, campus, youth, and children reporting stays visible when the campaign is a retreat cycle.",
-                _bar_chart(segment_rows, label="Retreat audience segment breakdown") if campaign["event_mode"] == "retreat" and segment_rows else empty_state("pie-chart", "No retreat segments", "No audience-segmented retreat events are available."),
-                _chart_legend(segment_rows) if campaign["event_mode"] == "retreat" and segment_rows else Div(),
+                "Segment totals across multiple sessions are not combined. Use the per-event rows below.",
+                empty_state("pie-chart", "No campaign-wide segment total", "Population remains attached to each dated event."),
             ) if campaign["event_mode"] == "retreat" else Div(),
             section_card(
                 "Event movement",
@@ -684,14 +878,12 @@ async def _campaign_report_panel(ctx, campaign: dict[str, Any], activity: dict[s
                 section_card(
                     "Source split",
                     f"{campaign['title']} currently separates alpha-ground and satellite population clearly.",
-                    _donut_chart(source_rows, label="Population source split", total_label="Population"),
-                    _chart_legend(source_rows),
+                    P("Alpha and satellite counts are shown per event in the rows below; this page does not add population across sessions.", cls="text-muted mb-0"),
                 ),
                 section_card(
                     "Follow-up split",
                     "Crusade and retreat follow-up reporting.",
-                    _donut_chart(follow_up_rows, label="Follow-up split", total_label="People"),
-                    _chart_legend(follow_up_rows),
+                    P("Convert and newcomer records are shown for each event below.", cls="text-muted mb-0"),
                 ),
                 cls="dashboard-grid dashboard-grid--two",
             ),
@@ -705,8 +897,7 @@ async def _campaign_report_panel(ctx, campaign: dict[str, Any], activity: dict[s
                 section_card(
                     "Retreat segments",
                     "Adult, campus, youth, and children reporting is broken out here for retreat cycles.",
-                    _bar_chart(segment_rows, label="Retreat audience segment breakdown") if campaign["event_mode"] == "retreat" and segment_rows else empty_state("bar-chart-line", "No retreat segments", "No audience-segmented retreat events are available."),
-                    _chart_legend(segment_rows) if campaign["event_mode"] == "retreat" and segment_rows else Div(),
+                    P("Audience segments are not totalled across events.", cls="text-muted mb-0"),
                 ) if campaign["event_mode"] == "retreat" else section_card(
                     "Submission guidance",
                     "Use the assignment completion chart to spot workers who still need follow-up before the reporting window closes.",
@@ -1251,7 +1442,7 @@ def register_program_routes(app) -> None:
             PeopleService.list_locations(request, ctx),
         )
         import random
-        default_code = f"EVT-{date.today().year}-{random.randint(101, 999)}"
+        default_code = f"EVT-{reporting_today().year}-{random.randint(101, 999)}"
         return Form(
             *hidden_context_inputs(ctx),
             H3("Create Event", cls="h5 fw-semibold"),
@@ -1300,8 +1491,8 @@ def register_program_routes(app) -> None:
                 cls="drawer-two-up mb-3",
             ),
             Div(
-                Input(type="date", name="start_date", value=date.today().isoformat(), cls="form-control", required=True),
-                Input(type="date", name="end_date", value=date.today().isoformat(), cls="form-control", required=True),
+                Input(type="date", name="start_date", value=reporting_today().isoformat(), cls="form-control", required=True),
+                Input(type="date", name="end_date", value=reporting_today().isoformat(), cls="form-control", required=True),
                 cls="drawer-two-up mb-3",
             ),
             Div(
@@ -1520,7 +1711,7 @@ def register_program_routes(app) -> None:
             ),
             Div(
             FsSelect("campaign_id", ("", "No campaign link"), *[(row["campaign_id"], f"{row['title']} ({row['campaign_code']})") for row in campaigns], label="Campaign / series"),
-                FsInput("date", input_type="date", label="Session date", value=date.today().isoformat(), required=True),
+                FsInput("date", input_type="date", label="Session date", value=reporting_today().isoformat(), required=True),
                 cls="drawer-two-up mb-3",
             ),
             Div(

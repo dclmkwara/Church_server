@@ -21,6 +21,7 @@ async def read_program_occurrences(
     program_level: str | None = Query(None),
     event_id: UUID | None = Query(None),
     campaign_id: UUID | None = Query(None),
+    compare_campaign_id: UUID | None = Query(None),
     date_from: date | None = Query(None),
     date_to: date | None = Query(None),
     include_pending: bool = Query(False),
@@ -35,5 +36,6 @@ async def read_program_occurrences(
     return await get_program_occurrences(
         db, scope_path=effective_scope, domain=domain, program_type=program_type,
         program_level=program_level, event_id=event_id, campaign_id=campaign_id,
+        compare_campaign_id=compare_campaign_id,
         date_from=date_from, date_to=date_to, include_pending=include_pending,
     )

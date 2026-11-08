@@ -108,7 +108,7 @@ def _normalize_offering(row: dict[str, Any], *, event_map: dict[str, dict[str, A
     return {
         "entry_id": str(row.get("id") or ""),
         "event_id": str(row.get("event_id") or ""),
-        "event_title": event["title"] if event else str(row.get("event_id") or "Unknown event"),
+        "event_title": event["title"] if event else str(row.get("event_title") or row.get("event_id") or "Unknown event"),
         "program_type": str(row.get("program_type") or ""),
         "program_level": str(row.get("program_level") or ""),
         "program_scope_path": str(row.get("program_scope_path") or ""),
@@ -171,7 +171,7 @@ def _normalize_attendance(row: dict[str, Any], *, event_map: dict[str, dict[str,
         "program_type": str(row.get("program_type") or ""),
         "program_level": str(row.get("program_level") or ""),
         "program_scope_path": str(row.get("program_scope_path") or ""),
-        "date": str((event or {}).get("date") or created_at[:10]),
+        "date": str((event or {}).get("date") or row.get("date") or created_at[:10]),
         "location": (location or {}).get("location_name") or str(row.get("location_id") or ""),
         "location_id": str(row.get("location_id") or ""),
         "status": str(row.get("status") or "present"),
@@ -435,6 +435,7 @@ class ChurchDataService:
         location: str = "",
         unit: str = "",
         event_id: str = "",
+        resolve_events: bool = True,
     ) -> list[dict[str, Any]]:
         scope_path = await ChurchDataService._scope_path(request, ctx)
         if await ChurchDataService.use_mock(request):
@@ -447,7 +448,7 @@ class ChurchDataService:
             )
         client = async_client(get_api_client())
         access_token = AuthService.get_access_token(request)
-        events = await ChurchDataService.list_events(request, ctx)
+        events = await ChurchDataService.list_events(request, ctx) if resolve_events else []
         event_map = {row["event_id"]: row for row in events}
         locations = await PeopleService.list_locations(request, ctx)
         location_map = {row["location_id"]: row for row in locations}
@@ -690,13 +691,17 @@ async def _create_count_public(request, payload: dict[str, Any]) -> dict[str, An
     return _normalize_count(created, event_map=event_map, location_map=location_map)
 
 
-async def _list_attendance_public(request, ctx, *, status: str = "", location: str = "", unit: str = "", event_id: str = "") -> list[dict[str, Any]]:
+async def _list_attendance_public(request, ctx, *, status: str = "", location: str = "", unit: str = "", event_id: str = "", resolve_events: bool = True) -> list[dict[str, Any]]:
     scope_path = await _church_data_scope_path(request, ctx)
     if await ChurchDataService.use_mock(request):
         return STORE.list_attendance(scope_path, status=status, location=location, unit=unit, event_title=event_id)
     client = async_client(get_api_client())
     access_token = AuthService.get_access_token(request)
-    event_map, location_map = await _event_and_location_maps(request, ctx)
+    if resolve_events:
+        event_map, location_map = await _event_and_location_maps(request, ctx)
+    else:
+        locations = await maybe_await(PeopleService.list_locations(request, ctx))
+        event_map, location_map = {}, {row["location_id"]: row for row in locations}
     rows = [
         _normalize_attendance(row, event_map=event_map, location_map=location_map)
         for row in await fetch_all_pages(lambda skip, limit: client.list_attendance(access_token, scope_path=scope_path, skip=skip, limit=limit), page_size=200)
