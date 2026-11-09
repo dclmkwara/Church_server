@@ -181,6 +181,8 @@ body:has(.prototype-dashboard) { margin:0; background:var(--ad-bg); }
 @media (max-width: 640px) {
   .admin-page-body:has(.prototype-dashboard) { padding-left:0!important; padding-right:0!important; padding-bottom:90px!important; }
   .admin-page-frame:has(.prototype-dashboard) { padding-left:16px!important; padding-right:16px!important; }
+  /* Keep a clear inner gutter around the dashboard panels on compact phones. */
+  .admin-page-body:has(.prototype-dashboard) { padding-inline:4px!important; }
   .admin-shell:has(.prototype-dashboard) { scroll-padding-top:76px; }
   .prototype-dashboard { padding-right:0; padding-left:0; }
   .analytics-topbar,.analytics-breadcrumb,.analytics-toolbar { max-width:none; margin-right:0; margin-left:0; }
