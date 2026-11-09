@@ -9,6 +9,9 @@ from zoneinfo import ZoneInfo
 # locations counted in both adjacent reporting periods.
 ATTENTION_DECLINE_PCT = 15
 ATTENTION_MIN_COMPARABLE_LOCATIONS = 5
+SUBMISSION_EDIT_WINDOW_HOURS = 24
+SUBMISSION_MAX_EDITS = 3
+SUBMISSION_RETURN_EXTRA_EDITS = 1
 
 
 @dataclass(frozen=True)

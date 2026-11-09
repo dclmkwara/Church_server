@@ -87,7 +87,11 @@ def _normalize_count(row: dict[str, Any], *, event_map: dict[str, dict[str, Any]
         "auto_accepted": bool(row.get("auto_accepted")),
         "submitted_by": str(row.get("entered_by_id") or "Recorded in backend"),
         "note": str(row.get("note") or ""),
-        "usher_section": str(row.get("usher_section") or _section_from_note(row.get("note"))),
+        "count_mode": str(row.get("count_mode") or ""),
+        "section_label": str(row.get("section_label") or row.get("usher_section") or _section_from_note(row.get("note"))),
+        "count_group_id": str(row.get("count_group_id") or ""),
+        "service_id": str(row.get("service_id") or "main"),
+        "usher_section": str(row.get("section_label") or row.get("usher_section") or _section_from_note(row.get("note"))),
         "assignment_id": str(row.get("assignment_id") or ""),
         "client_id": str(row.get("client_id") or ""),
         "source_role": str(row.get("source_role") or "regular"),
@@ -97,7 +101,7 @@ def _normalize_count(row: dict[str, Any], *, event_map: dict[str, dict[str, Any]
 
 
 def _section_from_note(value: Any) -> str:
-    """Read the interim note prefix until B5 adds real count section columns."""
+    """Read the legacy note prefix for rows predating real section columns."""
     return legacy_section_label(value)
 
 
@@ -263,6 +267,17 @@ class ChurchDataService:
         return result
 
     @staticmethod
+    async def return_count_group(request, count_id: str, *, reason: str) -> dict[str, Any]:
+        if await ChurchDataService.use_mock(request):
+            raise BackendClientError("Count review is unavailable in demo mode.")
+        client = async_client(get_api_client())
+        result = await client.return_count_group(AuthService.get_access_token(request), count_id, reason=reason)
+        invalidate_ttl_prefix(("church_data", "raw_counts"))
+        invalidate_ttl_prefix(("dashboard", "bootstrap"))
+        invalidate_ttl_prefix(("reports",))
+        return result
+
+    @staticmethod
     async def remind_count_location(request, payload: dict[str, Any]) -> dict[str, Any]:
         if await ChurchDataService.use_mock(request):
             raise BackendClientError("Count reminders require a live pastor account.")
@@ -286,6 +301,16 @@ class ChurchDataService:
         reviewed = await client.review_offering(access_token, entry_id, decision=decision, note=note)
         _invalidate_finance_views()
         return _normalize_offering(reviewed, event_map={}, location_map={})
+
+    @staticmethod
+    async def return_finance(request, entry_id: str, reason: str = "") -> dict[str, Any]:
+        if await ChurchDataService.use_mock(request):
+            raise BackendClientError("Returning a finance entry is unavailable in demo mode.")
+        client = async_client(get_api_client())
+        access_token = AuthService.get_access_token(request)
+        returned = await client.return_offering(access_token, entry_id, reason)
+        _invalidate_finance_views()
+        return returned
 
     @staticmethod
     async def correct_finance(request, entry_id: str, payload: dict[str, Any]) -> dict[str, Any]:

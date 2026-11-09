@@ -215,6 +215,7 @@ def test_reminder_notification_history_is_filtered_by_recipient_user(monkeypatch
         Session(), scope_path="org.234.kw", user_id=str(user_id),
         since=datetime(2026, 11, 1, tzinfo=timezone.utc),
     ))
-    reminder_sql = str(statements[0].compile(dialect=postgresql.dialect()))
+    reminder_statement = next(statement for statement in statements if "count_reminder_recipients" in str(statement))
+    reminder_sql = str(reminder_statement.compile(dialect=postgresql.dialect()))
     assert "count_reminder_recipients.recipient_user_id" in reminder_sql
-    assert str(user_id) in str(statements[0].compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+    assert str(user_id) in str(reminder_statement.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))

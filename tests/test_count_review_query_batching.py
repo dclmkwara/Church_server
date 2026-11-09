@@ -14,6 +14,9 @@ class _Result:
     def all(self):
         return self.rows
 
+    def scalars(self):
+        return self
+
 
 class _Session:
     def __init__(self, rows):
@@ -22,7 +25,7 @@ class _Session:
 
     async def execute(self, _statement):
         self.calls += 1
-        return _Result(self.rows)
+        return _Result(self.rows if self.calls == 1 else [])
 
 
 def _pastor():
@@ -55,7 +58,7 @@ def test_review_queue_loads_pending_rows_metadata_and_correction_in_one_read():
 
     groups = asyncio.run(list_count_review_groups(db=db, current_user=_pastor()))
 
-    assert db.calls == 1
+    assert db.calls == 2
     assert len(groups) == 1
     assert groups[0]["location"] == "Sample Location"
     assert groups[0]["submitters"] == ["Sample Usher"]

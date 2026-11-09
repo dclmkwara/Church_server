@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db.filters import scope_filter, scope_or_ancestor_filter
-from app.models.counts import Count
+from app.models.counts import Count, CountGroup
 from app.models.location import Group, Location, Region, State
 from app.models.programs import ProgramDomain, ProgramEvent, ProgramType
 from app.models.records import Record
@@ -70,56 +70,77 @@ async def get_program_occurrences(
     records_by_event: dict[str, dict[str, Any]] = {}
     detail_by_event: dict[str, list[dict[str, Any]]] = {}
     if event_ids:
-        counted_statuses = ["approved"] + (["pending"] if include_pending else [])
         count_query = (
-            select(
-                Count.event_id, Count.source_role,
-                func.sum(case((Count.status == "approved", Count.total), else_=0)).label("approved_total"),
-                func.sum(case((Count.status == "pending", Count.total), else_=0)).label("pending_total"),
-                func.sum(case((Count.status.in_(["rejected", "returned"]), 1), else_=0)).label("returned_rows"),
-                func.sum(case((Count.status == "approved", 1), else_=0)).label("approved_rows"),
-                func.sum(case((Count.status == "pending", 1), else_=0)).label("pending_rows"),
-                func.sum(case((Count.status.in_(counted_statuses), Count.total), else_=0)).label("counted_total"),
-                func.count(Count.id).label("row_count"),
-            )
-            .where(Count.event_id.in_(event_ids), Count.is_deleted.is_(False), scope_filter(Count.path, scope_path))
-            .group_by(Count.event_id, Count.source_role)
-        )
-        for row in (await db.execute(count_query)).all():
-            event_key = str(row.event_id)
-            item = counts_by_event.setdefault(event_key, {"sources": {}, "approved_population": 0, "pending_population": 0, "counted_population": 0, "returned_rows": 0, "approved_rows": 0, "pending_rows": 0, "row_count": 0})
-            role = row.source_role or "regular"
-            item["sources"][role] = int(row.counted_total or 0)
-            for key, column in (("approved_population", "approved_total"), ("pending_population", "pending_total"), ("counted_population", "counted_total"), ("returned_rows", "returned_rows"), ("approved_rows", "approved_rows"), ("pending_rows", "pending_rows"), ("row_count", "row_count")):
-                item[key] += int(getattr(row, column, 0) or 0)
-
-        detail_query = (
-            select(
-                Count.event_id, Count.location_id, Location.location_name, Location.path,
-                Count.program_scope_path,
-                Count.source_role,
-                func.sum(case((Count.status == "approved", Count.total), else_=0)).label("approved_total"),
-                func.sum(case((Count.status == "pending", Count.total), else_=0)).label("pending_total"),
-                func.count(Count.id).label("row_count"),
-                func.sum(case((Count.status == "approved", 1), else_=0)).label("approved_rows"),
-                func.sum(case((Count.status == "pending", 1), else_=0)).label("pending_rows"),
-                func.sum(case((Count.status.in_(["rejected", "returned"]), 1), else_=0)).label("returned_rows"),
-            )
+            select(Count, Location.location_name, Location.path, CountGroup.state, CountGroup.service_id)
             .join(Location, Location.location_id == Count.location_id)
+            .outerjoin(CountGroup, CountGroup.id == Count.count_group_id)
             .where(Count.event_id.in_(event_ids), Count.is_deleted.is_(False), scope_filter(Count.path, scope_path))
-            .group_by(Count.event_id, Count.location_id, Location.location_name, Location.path,
-                      Count.program_scope_path, Count.source_role)
         )
-        for row in (await db.execute(detail_query)).all():
-            detail_by_event.setdefault(str(row.event_id), []).append({
-                "location_id": str(row.location_id), "location": row.location_name,
-                "location_path": str(row.path), "program_scope_path": str(row.program_scope_path or row.path),
-                "source_role": row.source_role or "regular",
-                "approved_population": int(row.approved_total or 0),
-                "pending_population": int(row.pending_total or 0), "count_rows": int(row.row_count or 0),
-                "approved_rows": int(row.approved_rows or 0), "pending_rows": int(row.pending_rows or 0),
-                "returned_rows": int(row.returned_rows or 0),
-            })
+        raw_rows = list((await db.execute(count_query)).all())
+        logical_groups: dict[tuple[Any, ...], list[tuple[Any, str, str, str | None, str | None]]] = {}
+        for raw_row in raw_rows:
+            # Four-column rows occur in legacy test adapters; live SQL returns
+            # the joined group state and service identifier as columns 4 and 5.
+            count, location_name, location_path = raw_row[:3]
+            group_state = raw_row[3] if len(raw_row) > 3 else None
+            service_id = raw_row[4] if len(raw_row) > 4 else None
+            if count.count_mode:
+                group_key = ("split", str(count.count_group_id or ""), str(count.location_id), count.program_type_id, count.date.date())
+                if not count.count_group_id:
+                    group_key += (str(count.event_id),)
+            else:
+                # Legacy rows retain their historical additive behavior.
+                group_key = ("legacy", str(count.id))
+            logical_groups.setdefault(group_key, []).append((count, location_name, str(location_path), group_state, service_id))
+
+        for group_rows in logical_groups.values():
+            first, location_name, location_path, group_state, service_id = group_rows[0]
+            modes = {str(item[0].count_mode or "").lower() for item in group_rows if item[0].count_mode}
+            statuses = {str(item[0].status or "pending").lower() for item in group_rows}
+            single_count = sum(1 for item in group_rows if item[0].count_mode == "single")
+            conflict = bool(modes) and (
+                len(modes) > 1 or ("single" in modes and single_count != 1)
+                or len(statuses) > 1 or group_state == "conflict"
+            )
+            status = next(iter(statuses)) if len(statuses) == 1 else "conflict"
+            event_key = str(first.event_id)
+            role = first.source_role or "regular"
+            total = sum(int(item[0].total or 0) for item in group_rows)
+            # Count rows are counted as one reporter group; raw row count remains
+            # available for the Location and Group detail view.
+            item = counts_by_event.setdefault(event_key, {"sources": {}, "approved_population": 0, "pending_population": 0, "counted_population": 0, "service_totals": {}, "returned_rows": 0, "approved_rows": 0, "pending_rows": 0, "row_count": 0, "conflict_rows": 0})
+            detail = {
+                "location_id": str(first.location_id), "location": location_name,
+                "location_path": location_path, "program_scope_path": str(first.program_scope_path or first.path),
+                "source_role": role, "service_id": str(service_id or "legacy"), "approved_population": 0, "pending_population": 0,
+                "count_rows": len(group_rows), "approved_rows": 0, "pending_rows": 0,
+                "returned_rows": 0, "conflict_rows": 0,
+            }
+            if conflict:
+                item["conflict_rows"] += 1
+                detail["conflict_rows"] = 1
+            elif status == "approved":
+                item["approved_population"] += total
+                item["counted_population"] += total
+                item["approved_rows"] += 1
+                item["sources"][role] = item["sources"].get(role, 0) + total
+                item["service_totals"][str(service_id or "legacy")] = item["service_totals"].get(str(service_id or "legacy"), 0) + total
+                detail["approved_population"] = total
+                detail["approved_rows"] = 1
+            elif status == "pending":
+                item["pending_population"] += total
+                if include_pending:
+                    item["counted_population"] += total
+                    item["sources"][role] = item["sources"].get(role, 0) + total
+                    item["service_totals"][str(service_id or "legacy")] = item["service_totals"].get(str(service_id or "legacy"), 0) + total
+                item["pending_rows"] += 1
+                detail["pending_population"] = total
+                detail["pending_rows"] = 1
+            elif status in {"rejected", "returned"}:
+                item["returned_rows"] += 1
+                detail["returned_rows"] = 1
+            item["row_count"] += len(group_rows)
+            detail_by_event.setdefault(event_key, []).append(detail)
 
         counted_record_statuses = ["approved"] + (["pending"] if include_pending else [])
         record_scope_clauses = [Record.event_id.in_(event_ids), Record.is_deleted.is_(False),
@@ -192,7 +213,7 @@ async def get_program_occurrences(
     now_local = reporting_now()
     local_today = now_local.date()
     occurrences = []
-    empty_counts = {"sources": {}, "approved_population": 0, "pending_population": 0, "counted_population": 0, "returned_rows": 0, "approved_rows": 0, "pending_rows": 0, "row_count": 0}
+    empty_counts = {"sources": {}, "approved_population": 0, "pending_population": 0, "counted_population": 0, "service_totals": {}, "returned_rows": 0, "approved_rows": 0, "pending_rows": 0, "row_count": 0}
     for event, ptype, pdomain in event_rows:
         key = str(event.id)
         totals = counts_by_event.get(key, empty_counts)
@@ -220,16 +241,18 @@ async def get_program_occurrences(
             reported = any(detail["approved_rows"] or detail["pending_rows"] for detail in unit_rows)
             approved_report = any(detail["approved_rows"] for detail in unit_rows)
             pending_report = any(detail["pending_rows"] for detail in unit_rows)
+            conflict_report = any(detail.get("conflict_rows") for detail in unit_rows)
             returned_report = any(detail["returned_rows"] for detail in unit_rows) and not (approved_report or pending_report)
-            unit_state = "reported" if reported else "returned" if returned_report else "upcoming" if event.date > local_today else receipt_state(event.date, now_local, received=False)
+            unit_state = "conflict" if conflict_report else "reported" if reported else "returned" if returned_report else "upcoming" if event.date > local_today else receipt_state(event.date, now_local, received=False)
             coverage = {"label": "Regions reporting", "expected": expected, "reported": int(reported),
-                        "pending": int(pending_report), "returned": int(returned_report), "unit_path": unit_key}
+                        "pending": int(pending_report), "returned": int(returned_report), "conflict": int(conflict_report), "unit_path": unit_key}
             region_name = next((n["name"] for n in child_nodes if n["path"] == unit_key), unit_key.split(".")[-1])
             unit_reports = [{"name": region_name, "path": unit_key, "state": unit_state,
                              "population": sum(d["approved_population"] + (d["pending_population"] if include_pending else 0) for d in unit_rows),
                              "approved_population": sum(d["approved_population"] for d in unit_rows),
                              "pending_population": sum(d["pending_population"] for d in unit_rows),
-                             "returned_rows": sum(d["returned_rows"] for d in unit_rows)}]
+                             "returned_rows": sum(d["returned_rows"] for d in unit_rows),
+                             "conflict_rows": sum(d.get("conflict_rows", 0) for d in unit_rows)}]
         elif campaign and campaign_mode == "crusade":
             alpha_id = str(event.alpha_location_id or (campaign.alpha_location_id if campaign else "") or "")
             expected_locations = [loc for loc in locations_by_id.values() if _location_active(loc, event.date)
@@ -238,7 +261,8 @@ async def get_program_occurrences(
             satellite_reports = 0
             pending_satellites = 0
             returned_satellites = 0
-            child_totals: dict[str, dict[str, Any]] = {child["path"]: {"name": child["name"], "path": child["path"], "expected": 0, "reported": 0, "pending": 0, "returned": 0, "population": 0} for child in child_nodes}
+            conflict_satellites = 0
+            child_totals: dict[str, dict[str, Any]] = {child["path"]: {"name": child["name"], "path": child["path"], "expected": 0, "reported": 0, "pending": 0, "returned": 0, "conflict": 0, "population": 0} for child in child_nodes}
             unit_reports = []
             for location in expected_locations:
                 report = location_by_id.get(location["location_id"])
@@ -260,6 +284,13 @@ async def get_program_occurrences(
                         child_totals[prefix]["returned"] += 1
                     unit_reports.append({"name": location["name"], "path": location["path"],
                                          "state": "returned", "population": None})
+                elif report and report.get("conflict_rows"):
+                    conflict_satellites += 1
+                    prefix = ".".join(location["path"].split(".")[:scope_depth + 1])
+                    if prefix in child_totals:
+                        child_totals[prefix]["conflict"] += 1
+                    unit_reports.append({"name": location["name"], "path": location["path"],
+                                         "state": "conflict", "population": None})
                 else:
                     state = "upcoming" if event.date > local_today else receipt_state(event.date, now_local, received=False)
                     unit_reports.append({"name": location["name"], "path": location["path"], "state": state, "population": None})
@@ -270,7 +301,7 @@ async def get_program_occurrences(
             alpha_reported = bool(alpha_rows and any(d["approved_rows"] or d["pending_rows"] for d in alpha_rows))
             alpha_state = "reported" if alpha_reported else "upcoming" if event.date > local_today else receipt_state(event.date, now_local, received=False)
             coverage = {"label": "Locations reporting", "expected": len(expected_locations), "reported": satellite_reports,
-                        "pending": pending_satellites, "returned": returned_satellites}
+                        "pending": pending_satellites, "returned": returned_satellites, "conflict": conflict_satellites}
             if can_view_alpha and alpha_id:
                 coverage["alpha_expected"] = 1
                 coverage["alpha_reported"] = int(alpha_reported)
@@ -285,6 +316,8 @@ async def get_program_occurrences(
                         leaf_population = report["approved_population"] + (report["pending_population"] if include_pending else 0)
                     elif report and report["returned_rows"]:
                         leaf_state, leaf_population = "returned", None
+                    elif report and report.get("conflict_rows"):
+                        leaf_state, leaf_population = "conflict", None
                     else:
                         leaf_state, leaf_population = ("upcoming" if event.date > local_today else receipt_state(event.date, now_local, received=False)), None
                     unit_reports = [{"name": leaf["name"], "path": leaf["path"], "expected": 1,
@@ -294,11 +327,13 @@ async def get_program_occurrences(
             event_details = [d for d in event_details if can_view_alpha or d["source_role"] != "alpha"]
         else:
             expected, reported, pending, returned = 0, 0, 0, 0
+            conflict_count = 0
             for detail_row in event_details:
                 reported += int(bool(detail_row["approved_rows"] or detail_row["pending_rows"]))
                 pending += int(bool(detail_row["pending_rows"] and not detail_row["approved_rows"]))
                 returned += int(bool(detail_row["returned_rows"] and not (detail_row["approved_rows"] or detail_row["pending_rows"])))
-            coverage = {"label": "Reporters", "expected": expected, "reported": reported, "pending": pending, "returned": returned}
+                conflict_count += int(bool(detail_row.get("conflict_rows")))
+            coverage = {"label": "Reporters", "expected": expected, "reported": reported, "pending": pending, "returned": returned, "conflict": conflict_count}
             unit_reports = []
 
         population = totals["approved_population"] + (totals["pending_population"] if include_pending else 0)
@@ -320,7 +355,8 @@ async def get_program_occurrences(
             visible_pending_rows = sum(d["pending_rows"] for d in event_details if d["source_role"] == "satellite")
         has_counted = bool(visible_approved_rows or include_pending and visible_pending_rows)
         has_pending = bool(visible_pending_rows)
-        event_state = "counted" if has_counted else "pending" if has_pending else "returned" if visible_returned_rows else "upcoming" if event.date > local_today else receipt_state(event.date, now_local, received=False)
+        visible_conflicts = sum(detail.get("conflict_rows", 0) for detail in event_details)
+        event_state = "counted" if has_counted else "pending" if has_pending else "conflict" if visible_conflicts else "returned" if visible_returned_rows else "upcoming" if event.date > local_today else receipt_state(event.date, now_local, received=False)
         if campaign and campaign_mode == "retreat":
             # Retreat counts are stored against the region reporting unit.
             population = sum(d["approved_population"] + (d["pending_population"] if include_pending else 0) for d in event_details if d["program_scope_path"] == str(event.path))
@@ -334,6 +370,8 @@ async def get_program_occurrences(
             children = [dict(item, expected=1, reported=int(item["state"] == "reported"), pending=int(item["state"] == "pending")) for item in unit_reports]
         elif campaign and campaign_mode == "crusade":
             children = [dict(item) for item in unit_reports]
+        service_totals = totals.get("service_totals", {})
+        multiple_services = len(service_totals) > 1
         occurrences.append({
             "event_id": key, "campaign_id": str(event.campaign_id) if event.campaign_id else None,
             "campaign_title": campaign.title if campaign else None,
@@ -345,7 +383,9 @@ async def get_program_occurrences(
             "program_level": event.reporting_scope, "scope_path": str(event.path),
             "alpha_location_id": str(event.alpha_location_id) if event.alpha_location_id else None,
             "is_alpha_event": bool(event.is_alpha_event), "approval_status": event.approval_status,
-            "counted_population": population, "approved_population": approved_population,
+            "counted_population": None if multiple_services else population,
+            "population_by_service": [{"service_id": service, "counted_population": value} for service, value in sorted(service_totals.items())],
+            "approved_population": approved_population,
             "pending_population": pending_population, "returned_rows": visible_returned_rows,
             "count_rows": visible_count_rows, "sources": visible_sources,
             "location_reports": event_details, "unit_reports": unit_reports, "children": children, "coverage": coverage,

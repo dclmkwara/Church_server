@@ -457,6 +457,9 @@ class APIClient:
     async def reject_count_group(self, access_token: str, count_id: str, *, reason: str) -> dict[str, Any]:
         return await self._backend_client.reject_count_group(access_token, count_id, reason=reason)
 
+    async def return_count_group(self, access_token: str, count_id: str, *, reason: str) -> dict[str, Any]:
+        return await self._backend_client.return_count_group(access_token, count_id, reason=reason)
+
     async def remind_count_location(self, access_token: str, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._backend_client.remind_count_location(access_token, payload)
 

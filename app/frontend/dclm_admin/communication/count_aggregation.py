@@ -9,7 +9,7 @@ COUNT_FIELDS = ("adult_male", "adult_female", "youth_male", "youth_female", "boy
 
 def aggregate_count_submissions(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     """Summarize submissions without allowing pending or rejected counts into totals."""
-    grouped: dict[tuple[str, str, str, str, str, str], dict[str, Any]] = {}
+    grouped: dict[tuple[str, str, str], dict[str, Any]] = {}
     for row in rows:
         event_id = str(row.get("event_id") or row.get("event_title") or "")
         service_date = str(row.get("date") or "")
@@ -17,7 +17,11 @@ def aggregate_count_submissions(rows: Iterable[dict[str, Any]]) -> list[dict[str
         program_type = str(row.get("program_type") or row.get("event_title") or "").strip().lower()
         program_level = str(row.get("program_level") or "").strip().lower()
         report_scope = str(row.get("program_scope_path") or "")
-        key = (event_id, service_date, location_id, program_type, program_level, report_scope)
+        # The persisted count_group_id is the occurrence identity. Date/program/
+        # location is only a legacy fallback and never joins separate services.
+        count_group_id = str(row.get("count_group_id") or "").strip()
+        service_id = str(row.get("service_id") or "main")
+        key = ("group", count_group_id) if count_group_id else ("legacy", location_id, program_type, service_date, event_id, service_id)
         group = grouped.setdefault(
             key,
             {
@@ -30,6 +34,8 @@ def aggregate_count_submissions(rows: Iterable[dict[str, Any]]) -> list[dict[str
                 "program_level": str(row.get("program_level") or ""),
                 "program_scope_path": report_scope,
                 "count_id": str(row.get("count_id") or ""),
+                "count_group_id": count_group_id,
+                "service_id": service_id,
                 "total": None,
                 "pending_total": 0,
                 "submissions": 0,
@@ -37,6 +43,9 @@ def aggregate_count_submissions(rows: Iterable[dict[str, Any]]) -> list[dict[str
                 "pending_submissions": 0,
                 "rejected_submissions": 0,
                 "sections": [],
+                "section_count": 0,
+                "count_modes": [],
+                "mode_recorded": True,
                 "submitted_by": [],
                 "source_rows": [],
                 "latest_submission_at": "",
@@ -44,6 +53,13 @@ def aggregate_count_submissions(rows: Iterable[dict[str, Any]]) -> list[dict[str
             },
         )
         group["submissions"] += 1
+        mode = str(row.get("count_mode") or "").strip().lower()
+        if not mode:
+            group["mode_recorded"] = False
+        elif mode not in group["count_modes"]:
+            group["count_modes"].append(mode)
+        if mode == "section":
+            group["section_count"] += 1
         # Demo fixtures predate explicit review fields; treat those static rows
         # as approved historical examples. Live API rows always include status.
         review_status = str(row.get("status") or "approved").lower()
@@ -67,6 +83,17 @@ def aggregate_count_submissions(rows: Iterable[dict[str, Any]]) -> list[dict[str
         group["latest_submission_at"] = max(group["latest_submission_at"], submitted_at)
         group["source_rows"].append(row)
     for group in grouped.values():
+        has_split_mode = bool(group["count_modes"])
+        single_count = sum(1 for source in group["source_rows"] if source.get("count_mode") == "single")
+        split_conflict = has_split_mode and (
+            len(group["count_modes"]) > 1 or ("single" in group["count_modes"] and single_count != 1)
+        )
+        labels = [str(source.get("section_label") or "").strip().casefold() for source in group["source_rows"] if source.get("count_mode") == "section"]
+        if labels and len(labels) != len(set(labels)):
+            split_conflict = True
+        all_approved = group["approved_submissions"] == group["submissions"]
+        group["split_count"] = has_split_mode
+        group["mode_recorded"] = bool(group["mode_recorded"])
         group["auto_accepted"] = bool(group["approved_submissions"]) and group["approved_submissions"] == len(group["source_rows"]) and all(
             bool(source.get("auto_accepted")) for source in group["source_rows"]
         )
@@ -80,6 +107,14 @@ def aggregate_count_submissions(rows: Iterable[dict[str, Any]]) -> list[dict[str
             group["status"] = "pending"
         else:
             group["status"] = "rejected"
+        if split_conflict:
+            group["status"] = "conflict"
+            group["total"] = None
+        elif has_split_mode and not all_approved:
+            group["status"] = "partial_approval"
+            group["total"] = None
+        elif has_split_mode:
+            group["total"] = sum(int(source.get("total") or 0) for source in group["source_rows"])
     return sorted(
         grouped.values(),
         key=lambda group: (group["date"], group["latest_submission_at"], group["event_title"], group["location"]),

@@ -26,8 +26,75 @@ from app.schemas.fellowship_activities import (
 )
 from app.models.location import Fellowship
 from app.models.user import User
+from app.models.counts import SubmissionEditRevision
+from app.models.fellowship_activities import FellowshipAttendance, FellowshipOffering
+from app.schemas.counts import CountEditRequest
+from app.services.submission_editing import edit_own_submission
+from app.services.analytics.program_config import SUBMISSION_EDIT_WINDOW_HOURS, SUBMISSION_MAX_EDITS
+from sqlalchemy import select
+from datetime import timezone, timedelta
 
 router = APIRouter()
+
+
+async def _list_my_editable_records(db: AsyncSession, actor: User, model: Any, kind: str) -> list[dict[str, Any]]:
+    rows = list((await db.execute(select(model).where(
+        model.entered_by_id == actor.user_id, model.is_deleted.is_(False),
+    ).order_by(model.created_at.desc()).limit(100))).scalars().all())
+    if not rows:
+        return []
+    histories = list((await db.execute(select(SubmissionEditRevision).where(
+        SubmissionEditRevision.submission_type == kind,
+        SubmissionEditRevision.submission_id.in_([row.id for row in rows]),
+    ).order_by(SubmissionEditRevision.revision_no))).scalars().all())
+    by_id: dict[str, list[Any]] = {}
+    for item in histories:
+        by_id.setdefault(str(item.submission_id), []).append(item)
+    now = datetime.now(timezone.utc)
+    result = []
+    for row in rows:
+        history = by_id.get(str(row.id), [])
+        last_return = next((item for item in reversed(history) if item.action == "returned"), None)
+        opened = last_return.created_at if last_return else row.created_at
+        remaining = max(0, SUBMISSION_EDIT_WINDOW_HOURS * 3600 - (now - opened).total_seconds()) if opened else 0
+        used = sum(item.action == "edit" for item in history)
+        limit = SUBMISSION_MAX_EDITS + (1 if last_return else 0)
+        result.append({
+            "id": str(row.id), "date": row.date.isoformat(), "revision": history[-1].revision_no if history else 0,
+            "values": ({"men": row.men, "women": row.women, "youths": row.youths, "children": row.children, "total": row.total, "topic": row.topic, "note": row.note}
+                       if kind == "fellowship_attendance" else {"amount": str(row.amount), "note": row.note}),
+            "edits_remaining": max(0, limit - used), "hours_remaining": round(remaining / 3600, 1),
+            "locked": remaining <= 0 or used >= limit,
+            "locked_message": "The 24-hour edit window has closed." if remaining <= 0 else "The edit limit has been reached." if used >= limit else "",
+        })
+    return result
+
+
+@router.get("/attendance/mine/editable")
+async def list_my_editable_fellowship_attendance(db: AsyncSession = Depends(deps.get_db), current_user: User = Depends(deps.get_current_active_user)) -> Any:
+    return await _list_my_editable_records(db, current_user, FellowshipAttendance, "fellowship_attendance")
+
+
+@router.post("/attendance/{attendance_id}/edit")
+async def edit_own_fellowship_attendance(attendance_id: UUID, payload: CountEditRequest,
+        db: AsyncSession = Depends(deps.get_db), current_user: User = Depends(deps.get_current_active_user)) -> Any:
+    return await edit_own_submission(db, model=FellowshipAttendance, submission_type="fellowship_attendance",
+        submission_id=attendance_id, edit_id=payload.edit_id, base_revision=payload.base_revision,
+        values=payload.values, actor=current_user,
+        allowed_fields={"men", "women", "youths", "children", "topic", "note"})
+
+
+@router.get("/offerings/mine/editable")
+async def list_my_editable_fellowship_offerings(db: AsyncSession = Depends(deps.get_db), current_user: User = Depends(deps.get_current_active_user)) -> Any:
+    return await _list_my_editable_records(db, current_user, FellowshipOffering, "fellowship_offering")
+
+
+@router.post("/offerings/{offering_id}/edit")
+async def edit_own_fellowship_offering(offering_id: UUID, payload: CountEditRequest,
+        db: AsyncSession = Depends(deps.get_db), current_user: User = Depends(deps.get_current_active_user)) -> Any:
+    return await edit_own_submission(db, model=FellowshipOffering, submission_type="fellowship_offering",
+        submission_id=offering_id, edit_id=payload.edit_id, base_revision=payload.base_revision,
+        values=payload.values, actor=current_user, allowed_fields={"amount", "note"})
 
 
 async def _ensure_fellowship_in_scope(db: AsyncSession, current_user: User, fellowship_id: str) -> Fellowship:
@@ -174,16 +241,7 @@ async def update_fellowship_attendance(
     if not record:
         raise HTTPException(status_code=404, detail="Attendance record not found")
     deps.ensure_path_in_scope(current_user, record.path, detail="Fellowship attendance outside your scope")
-    updated = await crud_attendance.update(db, db_obj=record, obj_in=attendance_in)
-    if any(
-        v is not None for v in [
-            attendance_in.men, attendance_in.women, attendance_in.youths, attendance_in.children
-        ]
-    ):
-        updated.total = (updated.men or 0) + (updated.women or 0) + (updated.youths or 0) + (updated.children or 0)
-        await db.commit()
-        await db.refresh(updated)
-    return updated
+    raise HTTPException(status_code=409, detail="Submitted fellowship attendance is locked to the original report. Use the submitter edit window for corrections.")
 
 
 @router.delete(
@@ -266,7 +324,7 @@ async def update_fellowship_offering(
     if not record:
         raise HTTPException(status_code=404, detail="Offering record not found")
     deps.ensure_path_in_scope(current_user, record.path, detail="Fellowship offering outside your scope")
-    return await crud_offering.update(db, db_obj=record, obj_in=offering_in)
+    raise HTTPException(status_code=409, detail="Submitted fellowship offerings are locked to the original report. Use the submitter edit window for corrections.")
 
 
 @router.delete(

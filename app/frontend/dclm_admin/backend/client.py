@@ -773,6 +773,9 @@ class BackendClient:
     async def reject_count_group(self, access_token: str, count_id: str, *, reason: str) -> dict[str, Any]:
         return await self._request("POST", f"/counts/review/{count_id}/reject", access_token=access_token, json={"reason": reason})
 
+    async def return_count_group(self, access_token: str, count_id: str, *, reason: str) -> dict[str, Any]:
+        return await self._request("POST", f"/counts/review/{count_id}/return", access_token=access_token, json={"reason": reason})
+
     async def remind_count_location(self, access_token: str, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._request("POST", "/counts/review/remind", access_token=access_token, json=payload)
 
@@ -790,6 +793,12 @@ class BackendClient:
         return await self._request(
             "POST", f"/offerings/{offering_id}/review", access_token=access_token,
             params={"decision": decision}, json={"note": note or None},
+        )
+
+    async def return_offering(self, access_token: str, offering_id: str, reason: str) -> dict[str, Any]:
+        return await self._request(
+            "POST", f"/offerings/{offering_id}/return", access_token=access_token,
+            json={"reason": reason},
         )
 
     async def correct_offering(self, access_token: str, offering_id: str, payload: dict[str, Any]) -> dict[str, Any]:

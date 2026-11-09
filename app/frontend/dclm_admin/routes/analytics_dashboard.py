@@ -61,6 +61,7 @@ def _coverage_values(payload: dict[str, Any]) -> dict[str, int]:
         "approved": _integer(coverage.get("approved")),
         "pending": _integer(coverage.get("pending")),
         "returned": _integer(coverage.get("returned")),
+        "conflict": _integer(coverage.get("conflict")),
         "missing": sum(_integer(coverage.get(key)) for key in ("missing", "late", "awaiting")),
     }
 
@@ -137,10 +138,10 @@ def _coverage_panel(payload: dict[str, Any], occurrence: date, include_pending: 
     parts = _coverage_values(payload)
     total = max(n_expected, 1)
     bars = []
-    for key, label, css in (("approved", "Approved", "approved"), ("pending", "Pending review", "pending"), ("returned", "Returned", "returned"), ("missing", "Not reported", "missing")):
+    for key, label, css in (("approved", "Approved", "approved"), ("pending", "Pending review", "pending"), ("returned", "Returned", "returned"), ("conflict", "Conflict", "returned"), ("missing", "Not reported", "missing")):
         count = parts[key]
         bars.append(Div(cls=f"analytics-coverage-segment {css}", style=f"width:{100 * count / total:.4f}%", title=f"{label}: {count}"))
-    legend = [Span(Span(cls=f"analytics-dot {css}"), f"{label} {parts[key]}", cls="analytics-legend-item") for key, label, css in (("approved", "Approved", "approved"), ("pending", "Pending review", "pending"), ("returned", "Returned", "returned"), ("missing", "Not reported", "missing"))]
+    legend = [Span(Span(cls=f"analytics-dot {css}"), f"{label} {parts[key]}", cls="analytics-legend-item") for key, label, css in (("approved", "Approved", "approved"), ("pending", "Pending review", "pending"), ("returned", "Returned", "returned"), ("conflict", "Conflict", "returned"), ("missing", "Not reported", "missing"))]
     return Div(
         Div(
                 Div(Span(f"Reporting coverage · Sunday Worship · {_short_date(occurrence)}", cls="analytics-kicker"), H2(f"{received} of {n_expected} locations have submitted", cls="analytics-coverage-title")),
@@ -203,6 +204,8 @@ def _location_history_table(history: list[dict[str, Any]], dates: list[date], lo
             state = "Included in combined report" if _integer(raw_coverage.get("combined")) and total is None else "Approved"
         elif coverage["pending"]:
             state = "Pending review"
+        elif coverage["conflict"]:
+            state = "Conflicting split count"
         elif coverage["returned"]:
             state = "Returned for correction"
         else:
@@ -213,6 +216,8 @@ def _location_history_table(history: list[dict[str, Any]], dates: list[date], lo
             population = "Awaiting approval"
         elif coverage["approved"] and _integer(raw_coverage.get("combined")):
             population = "No separate location total"
+        elif coverage["conflict"]:
+            population = "Conflict; no counted result"
         elif coverage["returned"]:
             population = "Returned; no counted result"
         else:
@@ -452,7 +457,8 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
     valid = [point for point in selected_trend if point["average"] is not None]
     avg = round(sum(point["average"] for point in valid) / len(valid)) if valid else None
     counted_total = _integer(current.get("total"))
-    population_value = "No counted report" if current.get("total") is None else _number(counted_total)
+    multiple_services = current.get("service_reports") or []
+    population_value = ("See services below" if multiple_services and current.get("total") is None else "No counted report" if current.get("total") is None else _number(counted_total))
     active_workers = _integer(worker_summary.get("active"))
     awaiting_workers = _integer(worker_summary.get("pending_verification"))
     suspended_workers = _integer(worker_summary.get("suspended"))
@@ -499,7 +505,16 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
                 Div(P(f"{level.upper()}", cls="analytics-eyebrow"), H1(named_scope, cls="analytics-title"), P(f"Sunday Worship · week of {latest.strftime('%d %b %Y').lstrip('0')} · figures from current development records", cls="analytics-subtitle"), A("Manage expected Sunday attendance", href="/analytics/expected-population", cls="btn btn-outline-primary btn-sm admin-inline-btn") if can_manage_expected else None, cls="analytics-heading"),
                 _coverage_panel(current, latest, include_pending),
                 Div(
-                    _metric("Latest Sunday population", population_value, f"{_integer(current.get('n_counted'))} locations counted · {_short_date(latest)}", "Adds up"),
+                    H2("Sunday services reported separately", cls="h6"),
+                    Table(
+                        Thead(Tr(Th("Location"), Th("Service / session"), Th("Population", cls="text-end"))),
+                        Tbody(*(Tr(Td(item.get("location_name") or scope_label), Td(item.get("service_id") or "main"), Td("Not counted" if item.get("counted_population") is None else _number(item.get("counted_population")), cls="text-end")) for item in multiple_services)),
+                        cls="analytics-table",
+                    ),
+                    cls="analytics-panel analytics-service-breakdown",
+                ) if multiple_services else None,
+                Div(
+                    _metric("Latest Sunday population", population_value, "Multiple services reported separately; no daily total is defined." if multiple_services else f"{_integer(current.get('n_counted'))} locations counted · {_short_date(latest)}", "Adds up"),
                     _metric("% of expected Sunday attendance", expected_value, expected_note, "Pooled"),
                     _metric(f"Average per reporting location · {weeks} weeks", "—" if avg is None else _number(avg), "Mean of the weekly per-location averages in this period; weeks without a counted report are excluded.", "Recomputed"),
                     _metric("Active workers", _number(active_workers), worker_note, "Snapshot"),

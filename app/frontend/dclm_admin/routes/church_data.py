@@ -245,6 +245,10 @@ async def _count_review_workspace(request: Request, ctx, occurrence_date: str) -
             flags.append(Badge("24+ hours", variant="danger", cls="me-1"))
         if row.get("escalated"):
             flags.append(Badge("Escalated", variant="info", cls="me-1"))
+        if row.get("group_state") == "conflict":
+            flags.append(Badge("Conflict — excluded from totals", variant="danger", cls="me-1"))
+        if row.get("auto_closed"):
+            flags.append(Badge("Auto-closed; not confirmed by an usher", variant="warning", cls="me-1"))
         cat = row.get("categories") or {}
         categories = " • ".join(
             f"{label}: {int(cat.get(field) or 0)}"
@@ -262,20 +266,25 @@ async def _count_review_workspace(request: Request, ctx, occurrence_date: str) -
                 P(f"This submission corrects rejected count {latest_prior['supersedes_id']} • {latest_prior.get('rejection_reason') or 'No reason recorded'}", cls="small text-warning-emphasis mb-0"),
                 cls="rounded bg-warning-subtle p-2 mt-2",
             )
-        actions = P("Waiting for the accepting pastor; this level can view the delay but cannot decide this group.", cls="small text-muted mb-0")
+        if row.get("group_conflict"):
+            actions = P("Conflict: resolve this count group before it can be approved.", cls="small text-danger mb-0")
+        elif row.get("awaiting_close"):
+            actions = P("Waiting for the lead usher to close this count group before approval.", cls="small text-muted mb-0")
+        else:
+            actions = P("Waiting for the accepting pastor; this level can view the delay but cannot decide this group.", cls="small text-muted mb-0")
         if row.get("actionable"):
             actions = Div(
                 Form(
                     *hidden_context_inputs(ctx),
-                    Button("Approve all submissions", variant="primary", size="md", type="submit"),
+                    Button("Approve count group", variant="primary", size="md", type="submit"),
                     hx_post=ctx.url_for(f"/church-data/count-review/{row['count_id']}/approve"),
                     hx_target="#count-review-content", hx_swap="outerHTML", cls="d-inline-flex",
                 ),
                 Form(
                     *hidden_context_inputs(ctx),
                     Textarea(name="reason", required=True, rows="2", placeholder="Required reason for returning this count", cls="form-control mb-2"),
-                    Button("Reject group", variant="outline-danger", size="md", type="submit"),
-                    hx_post=ctx.url_for(f"/church-data/count-review/{row['count_id']}/reject"),
+                    Button("Return for correction", variant="outline-danger", size="md", type="submit"),
+                    hx_post=ctx.url_for(f"/church-data/count-review/{row['count_id']}/return"),
                     hx_target="#count-review-content", hx_swap="outerHTML", cls="mt-2",
                 ),
                 cls="d-grid gap-2 mt-3",
@@ -283,10 +292,17 @@ async def _count_review_workspace(request: Request, ctx, occurrence_date: str) -
         review_cards.append(
             Div(
                 Div(H4(f"{row.get('program_type')} — {row.get('date')}", cls="h6 fw-semibold mb-0"), *flags, cls="d-flex flex-wrap gap-2 align-items-center justify-content-between"),
-                P(f"{row.get('location')} • {row.get('program_level')} report • {row.get('event_title') or 'Standing program'}", cls="small text-muted mt-2 mb-2"),
+                P(f"{row.get('location')} • {row.get('program_level')} report • {row.get('event_title') or 'Standing program'} • Service: {row.get('service_id') or 'legacy'}", cls="small text-muted mt-2 mb-2"),
                 Div(P(f"Pending total: {row.get('total')}", cls="h4 fw-semibold mb-0"), P(f"{row.get('submission_count')} submissions • {section_note}", cls="small text-muted mb-0"), cls="d-flex justify-content-between align-items-start gap-3 flex-wrap"),
+                Div(*(P(f"{part.get('section_label') or part.get('count_mode') or 'Legacy part'}: {part.get('total')} • {part.get('status')}", cls="small mb-1") for part in row.get("parts", [])), cls="rounded bg-light p-2 mt-2") if row.get("split_count") else None,
                 P(categories, cls="small mt-3 mb-1"),
                 P(f"Submitted by {', '.join(row.get('submitters') or []) or 'Unknown'} • waiting {row.get('age_hours')} hours", cls="small text-muted mb-0"),
+                P(
+                    f"Edited {row.get('edited_count', 0)} time(s) • {row.get('edit_window_hours_left', 0)} hours remain"
+                    if row.get("edited_count") else "No edits recorded • 24-hour correction window",
+                    cls="small text-muted mt-1 mb-0",
+                ),
+                P(f"Returned for correction: {row.get('return_reason')}", cls="small text-warning-emphasis mt-2 mb-0") if row.get("return_reason") else None,
                 correction_note,
                 actions,
                 cls="border rounded-3 bg-white p-3 p-lg-4 shadow-sm",
@@ -797,23 +813,23 @@ def register_church_data_routes(app) -> None:
         except BackendClientError as exc:
             return Div(P(f"Approval was not saved: {exc}", cls="text-danger"), id="count-review-content")
 
-    @app.post("/church-data/count-review/{count_id}/reject")
-    async def count_review_reject(request: Request, count_id: str):
+    @app.post("/church-data/count-review/{count_id}/return")
+    async def count_review_return(request: Request, count_id: str):
         ctx = build_context(request)
         if not ctx.has_permission("counts:review"):
             return Div(P("Count review access is required.", cls="text-danger"), id="count-review-content")
         form = await request.form()
         reason = str(form.get("reason") or "").strip()
         if not reason:
-            return Div(P("Enter a reason before rejecting this count group.", cls="text-danger"), id="count-review-content")
+            return Div(P("Enter a reason before returning this count group.", cls="text-danger"), id="count-review-content")
         try:
-            await ChurchDataService.reject_count_group(request, count_id, reason=reason)
+            await ChurchDataService.return_count_group(request, count_id, reason=reason)
             local_today = reporting_today()
             sunday = (local_today - datetime.timedelta(days=(local_today.weekday() - 6) % 7)).isoformat()
             panel = await _count_review_workspace(request, ctx, sunday)
-            return simple_toast_response(panel, "Every pending submission in this count group was rejected with the supplied reason.", title="Count returned", variant="warning")
+            return simple_toast_response(panel, "Every pending submission in this count group was returned with the supplied reason.", title="Count returned", variant="warning")
         except BackendClientError as exc:
-            return Div(P(f"Rejection was not saved: {exc}", cls="text-danger"), id="count-review-content")
+            return Div(P(f"Return was not saved: {exc}", cls="text-danger"), id="count-review-content")
 
     @app.post("/church-data/count-review/remind")
     async def count_review_remind(request: Request):
@@ -1063,10 +1079,11 @@ def register_church_data_routes(app) -> None:
         review_form = ""
         if row.get("status") in {"pending", "corrected"} and ctx.has_permission("offerings:review"):
             review_form = Form(
-                P("A rejection requires a reason of at least 20 characters. The submitter cannot review their own entry.", cls="small text-muted"),
-                Textarea(name="note", placeholder="Review note (required for rejection)", cls="form-control", rows="3"),
+                P("Returning sends the entry back to its submitter and opens a fresh 24-hour edit window. Rejection is final.", cls="small text-muted"),
+                Textarea(name="note", placeholder="Review note or correction instructions", cls="form-control", rows="3"),
                 Div(
                     Button("Approve", type="submit", name="decision", value="approved", variant="success", size="md"),
+                    Button("Return for correction", type="submit", name="decision", value="returned", variant="outline-warning", size="md"),
                     Button("Reject", type="submit", name="decision", value="rejected", variant="outline-danger", size="md"),
                     cls="d-flex gap-2 mt-2",
                 ),
@@ -1148,12 +1165,15 @@ def register_church_data_routes(app) -> None:
         form = await request.form()
         decision = str(form.get("decision") or "")
         note = str(form.get("note") or "").strip()
-        if decision not in {"approved", "rejected"}:
+        if decision not in {"approved", "rejected", "returned"}:
             return P("Choose approve or reject.", cls="text-danger")
         if decision == "rejected" and len(note) < 20:
             return P("A rejection reason must contain at least 20 characters.", cls="text-danger")
         try:
-            await ChurchDataService.review_finance(request, entry_id, decision=decision, note=note)
+            if decision == "returned":
+                await ChurchDataService.return_finance(request, entry_id, note or "Please review and correct this offering.")
+            else:
+                await ChurchDataService.review_finance(request, entry_id, decision=decision, note=note)
             drawer = await _render_finance_drawer(request, entry_id)
             return simple_toast_response(
                 (drawer, await _finance_stats(request, ctx, oob=True), await _finance_table(request, ctx, oob=True)),

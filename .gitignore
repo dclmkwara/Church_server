@@ -88,3 +88,5 @@ Screenshot/
  PROGRESS.md
 # Local pre-migration database snapshots are sensitive and must never be committed.
 output/private-backups/
+_dev_db_snapshots/
+DEMO_LOGIN_ACCOUNTS.csv

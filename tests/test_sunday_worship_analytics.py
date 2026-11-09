@@ -8,9 +8,33 @@ from app.services.analytics.program_config import STANDING_PROGRAMS
 from app.services.analytics.sunday_worship import (
     SundayWorshipAnalytics,
     _build_overview,
+    _count_values,
+    _report_review_state,
     latest_sunday,
     receipt_state,
 )
+
+
+def test_split_report_conflicts_and_partial_approval_have_no_counted_result():
+    approved = SimpleNamespace(count_mode="section", status="approved", total=20, adult_male=20)
+    pending = SimpleNamespace(count_mode="section", status="pending", total=30, adult_male=30)
+    assert _report_review_state([approved, pending]) == "conflict"
+    assert _count_values([approved, pending])["total"] == 0
+
+
+def test_two_single_reports_conflict_but_legacy_rows_still_add():
+    singles = [
+        SimpleNamespace(count_mode="single", status="approved", total=20, adult_male=20),
+        SimpleNamespace(count_mode="single", status="approved", total=30, adult_male=30),
+    ]
+    assert _report_review_state(singles) == "conflict"
+    assert _count_values(singles)["total"] == 0
+    legacy = [
+        SimpleNamespace(count_mode=None, status="approved", total=20, adult_male=20),
+        SimpleNamespace(count_mode=None, status="approved", total=30, adult_male=30),
+    ]
+    assert _report_review_state(legacy) == "approved"
+    assert _count_values(legacy)["total"] == 50
 
 
 def test_standing_program_config_keeps_leaders_and_workers_meetings_separate():
@@ -91,6 +115,27 @@ def test_pending_zero_is_received_but_not_counted_by_default():
     assert official["coverage"]["pending"] == 1
     assert inclusive["n_counted"] == 1
     assert inclusive["total"] == 0
+
+
+def test_two_sunday_services_are_reported_separately_without_daily_total():
+    location = SimpleNamespace(location_id="l1", location_name="Location 1", path="org.234.kw.r.g.001")
+    rows = [
+        SimpleNamespace(id="c1", count_group_id="morning-group", count_group=SimpleNamespace(service_id="morning"), event_id=None, location_id="l1", status="approved", total=80, count_mode="single", adult_male=80),
+        SimpleNamespace(id="c2", count_group_id="evening-group", count_group=SimpleNamespace(service_id="evening"), event_id=None, location_id="l1", status="approved", total=95, count_mode="single", adult_male=95),
+    ]
+    result = _build_overview(
+        scope_path="org.234.kw.r.g",
+        occurrence_date=date(2026, 11, 1),
+        now=datetime(2026, 11, 2, tzinfo=ZoneInfo("Africa/Lagos")),
+        locations=[location], events=[], count_rows=rows, include_pending=False,
+    )
+    assert result["n_counted"] == 1
+    assert result["total"] is None
+    assert result["daily_total_defined"] is False
+    assert result["service_reports"] == [
+        {"location_id": "l1", "location_name": "Location 1", "service_id": "morning", "counted_population": 80, "review_state": "approved"},
+        {"location_id": "l1", "location_name": "Location 1", "service_id": "evening", "counted_population": 95, "review_state": "approved"},
+    ]
 
 
 def test_series_load_count_does_not_grow_with_weeks_or_direct_children():

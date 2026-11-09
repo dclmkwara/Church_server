@@ -145,7 +145,7 @@ def test_offering_reversal_is_audited_and_removes_entry_from_approved_status():
     assert audit.after_values["status"] == "reversed"
 
 
-def test_offering_correction_has_distinct_state_and_audit_record():
+def test_offering_correction_cannot_bypass_approval_lock():
     from app.crud.crud_offerings import CRUDOffering
 
     row = SimpleNamespace(
@@ -156,16 +156,14 @@ def test_offering_correction_has_distinct_state_and_audit_record():
     result = SimpleNamespace(scalar_one_or_none=lambda: row)
     db = SimpleNamespace(execute=AsyncMock(return_value=result), add=Mock(), commit=AsyncMock(), refresh=AsyncMock())
 
-    corrected = __import__("asyncio").run(CRUDOffering(None).correct(
-        db, offering_id=row.id, actor_id=uuid4(), scope_path="church.nigeria.state",
-        correction=OfferingCorrection(amount="120.00", reason="Correction from signed treasurer ledger."),
-    ))
-
-    assert corrected.status == "corrected"
-    audit = db.add.call_args.args[0]
-    assert audit.action == "corrected"
-    assert audit.before_values["status"] == "approved"
-    assert audit.after_values["status"] == "corrected"
+    with pytest.raises(HTTPException) as exc:
+        __import__("asyncio").run(CRUDOffering(None).correct(
+            db, offering_id=row.id, actor_id=uuid4(), scope_path="church.nigeria.state",
+            correction=OfferingCorrection(amount="120.00", reason="Correction from signed treasurer ledger."),
+        ))
+    assert exc.value.status_code == 409
+    assert "Return it for correction" in exc.value.detail
+    db.add.assert_not_called()
 
 
 def test_only_approved_finance_entries_can_be_reversed():

@@ -21,8 +21,60 @@ from sqlalchemy import select, func, text, case
 from datetime import date
 from app.models.user import User
 from app.models.attendance import WorkerAttendanceSubmission
+from app.models.counts import SubmissionEditRevision
+from app.schemas.counts import CountEditRequest
+from app.services.submission_editing import edit_own_submission
+from app.services.analytics.program_config import SUBMISSION_EDIT_WINDOW_HOURS, SUBMISSION_MAX_EDITS
+from app.models.attendance import WorkerAttendanceSubmission
 
 router = APIRouter()
+
+
+@router.get("/submissions/mine/editable")
+async def list_my_editable_attendance_submissions(
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    rows = list((await db.execute(select(WorkerAttendanceSubmission).where(
+        WorkerAttendanceSubmission.entered_by_id == current_user.user_id,
+        WorkerAttendanceSubmission.is_deleted.is_(False),
+    ).order_by(WorkerAttendanceSubmission.created_at.desc()).limit(100))).scalars().all())
+    if not rows:
+        return []
+    revisions = list((await db.execute(select(SubmissionEditRevision).where(
+        SubmissionEditRevision.submission_type == "worker_attendance",
+        SubmissionEditRevision.submission_id.in_([row.id for row in rows]),
+    ).order_by(SubmissionEditRevision.revision_no))).scalars().all())
+    by_id: dict[str, list[Any]] = {}
+    for revision in revisions:
+        by_id.setdefault(str(revision.submission_id), []).append(revision)
+    now = datetime.now(timezone.utc)
+    return [{
+        "id": str(row.id), "date": row.date.isoformat(), "program_type": row.program_type,
+        "expected_workers_count": row.expected_workers_count,
+        "expected_worker_ids": list(row.expected_worker_ids or []),
+        "present_workers": list(row.present_workers or []), "present_count": row.present_count,
+        "note": row.note, "revision": len(by_id.get(str(row.id), [])),
+        "edits_used": sum(item.action == "edit" for item in by_id.get(str(row.id), [])),
+        "edits_remaining": max(0, SUBMISSION_MAX_EDITS - sum(item.action == "edit" for item in by_id.get(str(row.id), []))),
+        "hours_remaining": max(0, round(SUBMISSION_EDIT_WINDOW_HOURS - (now - row.created_at).total_seconds() / 3600, 1)) if row.created_at else 0,
+        "locked": (now - row.created_at).total_seconds() >= SUBMISSION_EDIT_WINDOW_HOURS * 3600 if row.created_at else True,
+        "locked_message": "The 24-hour edit window has closed." if not row.created_at or (now - row.created_at).total_seconds() >= SUBMISSION_EDIT_WINDOW_HOURS * 3600 else "",
+    } for row in rows]
+
+
+@router.post("/submissions/{submission_id}/edit")
+async def edit_own_attendance_submission(
+    submission_id: UUID, payload: CountEditRequest,
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    return await edit_own_submission(
+        db, model=WorkerAttendanceSubmission, submission_type="worker_attendance",
+        submission_id=submission_id, edit_id=payload.edit_id, base_revision=payload.base_revision,
+        values=payload.values, actor=current_user,
+        allowed_fields={"present_workers", "note"}, approval_locks=False,
+    )
 
 
 @router.get(

@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import List, Dict, Any
 
 from sqlalchemy import and_, cast, select
@@ -9,11 +10,13 @@ from app.models.approvals import WorkerRemovalRequest
 from app.models.audit import NotificationReadState
 from app.models.broadcast import BroadcastMessage
 from app.models.core import _LTREE
-from app.models.counts import Count, CountReminderRecipient
+from app.models.counts import Count, CountGroup, CountReminderRecipient
 from app.models.fellowship_activities import FellowshipAttendance, PrayerRequest, Testimony
 from app.models.location import Location
 from app.models.offerings import Offering
-from app.models.user import User, Worker
+from app.models.user import User, Worker, Role, user_roles
+from app.utils.count_groups import count_group_is_past_deadline
+
 
 
 class NotificationService:
@@ -175,6 +178,30 @@ class NotificationService:
         limit: int = 200,
         role_score: int = 1,
     ) -> list[dict[str, Any]]:
+        # No scheduler is required: the Location Pastor's notification poll
+        # lazily closes elapsed section groups and creates the in-app notice.
+        is_location_pastor = bool((await db.execute(
+            select(User.user_id).join(user_roles, user_roles.c.user_id == User.user_id)
+            .join(Role, Role.id == user_roles.c.role_id)
+            .where(User.user_id == user_id, User.is_active.is_(True), User.is_deleted.is_(False),
+                   Role.role_name == "Location Pastor", Role.is_deleted.is_(False))
+            .limit(1)
+        )).scalars().all())
+        if is_location_pastor:
+            now_lagos = datetime.now(ZoneInfo("Africa/Lagos"))
+            open_groups = (await db.execute(select(CountGroup).where(
+                CountGroup.reporting_scope_path == scope_path,
+                CountGroup.count_mode == "section", CountGroup.state == "open",
+                CountGroup.finalized_at.is_(None), CountGroup.auto_closed_at.is_(None),
+            ).with_for_update())).scalars().all()
+            changed = False
+            for group in open_groups:
+                if count_group_is_past_deadline(group.occurrence_date, now_lagos):
+                    group.state = "complete"
+                    group.auto_closed_at = now_lagos
+                    changed = True
+            if changed:
+                await db.commit()
         payload = await NotificationService.poll_new_data(db, scope_path, since, per_bucket_limit=limit)
         items: list[dict[str, Any]] = []
         for bucket_kind, rows in payload.items():
@@ -222,6 +249,32 @@ class NotificationService:
                     }),
                     "priority": "medium",
                     "created_at": reminder.sent_at,
+                })
+        if not kind or kind in {"all", "count_group_auto_closed"}:
+            # This is a direct in-app notice to the Location Pastor at the exact
+            # reporting scope. Parent pastors do not inherit it through ltree.
+            auto_closed_rows = (await db.execute(
+                select(CountGroup, Location.location_name)
+                .join(Location, Location.location_id == CountGroup.location_id)
+                .join(User, User.user_id == user_id)
+                .join(user_roles, user_roles.c.user_id == User.user_id)
+                .join(Role, Role.id == user_roles.c.role_id)
+                .where(
+                    CountGroup.reporting_scope_path == scope_path,
+                    CountGroup.auto_closed_at > since,
+                    User.user_id == user_id,
+                    User.is_active.is_(True), User.is_deleted.is_(False),
+                    Role.role_name == "Location Pastor", Role.is_deleted.is_(False),
+                )
+                .order_by(CountGroup.auto_closed_at.desc()).limit(limit)
+            )).all()
+            for group, location_name in auto_closed_rows:
+                items.append({
+                    "notification_key": NotificationService._notification_key("count_group_auto_closed", str(group.id)),
+                    "source_id": str(group.id), "kind": "count_group_auto_closed",
+                    "title": "Count group auto-closed",
+                    "body": f"The count group for {location_name} on {group.occurrence_date} auto-closed without usher confirmation.",
+                    "priority": "medium", "created_at": group.auto_closed_at,
                 })
         if not kind or kind in {"all", "broadcast", "broadcasts"}:
             broadcast_rows = (await db.execute(

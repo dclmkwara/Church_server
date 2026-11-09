@@ -93,18 +93,14 @@ def test_occurrences_keep_each_session_separate_and_preserve_reported_zero():
     program_type = SimpleNamespace(name="Bible Study", slug="bible-study")
     domain = SimpleNamespace(name="Retreat", slug="retreat")
     count_row = SimpleNamespace(
-        event_id="event-a", source_role="regular", approved_total=0, pending_total=0,
-        returned_rows=0, approved_rows=1, pending_rows=0, counted_total=0, row_count=1,
-    )
-    location_row = SimpleNamespace(
-        event_id="event-a", location_id="location-a", location_name="Test Location",
-        path="org.234.kw.region.group.location", program_scope_path="org.234.kw.region", source_role="regular", approved_total=0,
-        pending_total=0, row_count=1, approved_rows=1, pending_rows=0, returned_rows=0,
+        id="count-a", event_id="event-a", source_role="regular", status="approved", total=0,
+        count_mode=None, count_group_id=None, program_type_id=1, location_id="location-a",
+        program_scope_path="org.234.kw.region", path="org.234.kw.region.group.location",
     )
     convert_row = SimpleNamespace(event_id="event-a", record_type="convert", source_role="satellite", total=2)
     db = SequencedDb([
         [(event_a, program_type, domain), (event_b, SimpleNamespace(name="Faith Clinic", slug="faith-clinic"), domain)],
-        [count_row], [location_row], [convert_row], [],
+        [(count_row, "Test Location", "org.234.kw.region.group.location", None)], [convert_row], [],
     ])
 
     result = asyncio.run(get_program_occurrences(db, scope_path="org.234.kw", include_pending=False))
@@ -128,7 +124,7 @@ def test_convert_record_without_population_count_is_still_reported():
     program_type = SimpleNamespace(name="Crusade Evening", slug="crusade-evening")
     domain = SimpleNamespace(name="Global Crusade", slug="global-crusade")
     convert_row = SimpleNamespace(event_id="event-a", record_type="convert", source_role="satellite", total=7)
-    db = SequencedDb([[(event, program_type, domain)], [], [], [convert_row], [], []])
+    db = SequencedDb([[(event, program_type, domain)], [], [convert_row], [], []])
 
     result = asyncio.run(get_program_occurrences(db, scope_path="org.234.kw"))
     occurrence = result["occurrences"][0]
@@ -154,20 +150,14 @@ def test_state_retreat_day_two_bible_study_pools_regions_and_pending_switch():
         events.append((event, ptype, domain))
         is_pending = idx == 1
         count_total = 100 + idx * 10
-        aggregate_counts.append(SimpleNamespace(
-            event_id=event.id, source_role="regular", approved_total=0 if is_pending else count_total,
-            pending_total=count_total if is_pending else 0, returned_rows=0,
-            approved_rows=0 if is_pending else 1, pending_rows=1 if is_pending else 0,
-            counted_total=count_total if not is_pending else 0, row_count=1,
-        ))
-        details.append(SimpleNamespace(
-            event_id=event.id, location_id=f"location-{idx}", location_name=f"Camp {region}",
-            path=f"org.234.KW.{region}.GRP.LOC", program_scope_path=f"org.234.KW.{region}",
-            source_role="regular", approved_total=0 if is_pending else count_total,
-            pending_total=count_total if is_pending else 0, row_count=1,
-            approved_rows=0 if is_pending else 1, pending_rows=1 if is_pending else 0, returned_rows=0,
-        ))
-    db = SequencedDb([events, aggregate_counts, details, [], [(f"Camp {r}", f"org.234.KW.{r}") for r in ("EDR", "ILR", "ISR", "IWR", "OOR", "OFR", "OMR")]])
+        count = SimpleNamespace(
+            id=f"count-{idx}", event_id=event.id, source_role="regular", status="pending" if is_pending else "approved",
+            total=count_total, count_mode=None, count_group_id=None, program_type_id=1,
+            location_id=f"location-{idx}", program_scope_path=f"org.234.KW.{region}",
+            path=f"org.234.KW.{region}.GRP.LOC",
+        )
+        aggregate_counts.append((count, f"Camp {region}", f"org.234.KW.{region}.GRP.LOC", None))
+    db = SequencedDb([events, aggregate_counts, [], [(f"Camp {r}", f"org.234.KW.{r}") for r in ("EDR", "ILR", "ISR", "IWR", "OOR", "OFR", "OMR")]])
     excluded = asyncio.run(get_program_occurrences(db, scope_path="org.234.KW", include_pending=False))
     target = excluded["occurrences"][0]
     assert target["day_number"] == 2
@@ -177,7 +167,7 @@ def test_state_retreat_day_two_bible_study_pools_regions_and_pending_switch():
     assert target["coverage"]["reported"] == 1
     assert target["coverage"]["expected"] == 1
 
-    db_including = SequencedDb([events, aggregate_counts, details, [], [(f"Camp {r}", f"org.234.KW.{r}") for r in ("EDR", "ILR", "ISR", "IWR", "OOR", "OFR", "OMR")]])
+    db_including = SequencedDb([events, aggregate_counts, [], [(f"Camp {r}", f"org.234.KW.{r}") for r in ("EDR", "ILR", "ISR", "IWR", "OOR", "OFR", "OMR")]])
     included = asyncio.run(get_program_occurrences(db_including, scope_path="org.234.KW", include_pending=True))
     day_two_bible = [row for row in excluded["occurrences"] if row["day_number"] == 2 and row["program_type_slug"] == "bible-study"]
     included_day_two_bible = [row for row in included["occurrences"] if row["day_number"] == 2 and row["program_type_slug"] == "bible-study"]
@@ -198,18 +188,14 @@ def test_crusade_alpha_data_is_removed_below_state_scope():
     ptype = SimpleNamespace(name="Crusade Evening", slug="crusade-evening")
     domain = SimpleNamespace(name="Global Crusade", slug="global_crusade")
     aggregate = [
-        SimpleNamespace(event_id="event-a", source_role="alpha", approved_total=900, pending_total=0, returned_rows=0, approved_rows=1, pending_rows=0, counted_total=900, row_count=1),
-        SimpleNamespace(event_id="event-a", source_role="satellite", approved_total=100, pending_total=0, returned_rows=0, approved_rows=1, pending_rows=0, counted_total=100, row_count=1),
-    ]
-    details = [
-        SimpleNamespace(event_id="event-a", location_id="alpha", location_name="Alpha", path="org.234.KW.R.G.A", program_scope_path="org.234.KW", source_role="alpha", approved_total=900, pending_total=0, row_count=1, approved_rows=1, pending_rows=0, returned_rows=0),
-        SimpleNamespace(event_id="event-a", location_id="satellite", location_name="Satellite", path="org.234.KW.R.G.S", program_scope_path="org.234.KW.R.G.S", source_role="satellite", approved_total=100, pending_total=0, row_count=1, approved_rows=1, pending_rows=0, returned_rows=0),
+        (SimpleNamespace(id="alpha-count", event_id="event-a", location_id="alpha", program_type_id=1, program_scope_path="org.234.KW", path="org.234.KW.R.G.A", source_role="alpha", status="approved", total=900, count_mode=None, count_group_id=None), "Alpha", "org.234.KW.R.G.A", None),
+        (SimpleNamespace(id="sat-count", event_id="event-a", location_id="satellite", program_type_id=1, program_scope_path="org.234.KW.R.G.S", path="org.234.KW.R.G.S", source_role="satellite", status="approved", total=100, count_mode=None, count_group_id=None), "Satellite", "org.234.KW.R.G.S", None),
     ]
     locations = [
         SimpleNamespace(location_id="alpha", location_name="Alpha", path="org.234.KW.R.G.A", is_active=True, opened_on=None, closed_on=None),
         SimpleNamespace(location_id="satellite", location_name="Satellite", path="org.234.KW.R.G.S", is_active=True, opened_on=None, closed_on=None),
     ]
-    db = SequencedDb([[(event, ptype, domain)], aggregate, details, [], locations, [("Alpha", "org.234.KW.R.G.A"), ("Satellite", "org.234.KW.R.G.S")]])
+    db = SequencedDb([[(event, ptype, domain)], aggregate, [], locations, [("Alpha", "org.234.KW.R.G.A"), ("Satellite", "org.234.KW.R.G.S")]])
     result = asyncio.run(get_program_occurrences(db, scope_path="org.234.KW.R.G"))
     row = result["occurrences"][0]
     assert row["counted_population"] == 100

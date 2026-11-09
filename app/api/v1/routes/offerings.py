@@ -2,7 +2,7 @@
 Offering submission and retrieval routes.
 """
 from typing import Any, List
-from datetime import datetime
+from datetime import datetime, time, timedelta, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -11,14 +11,128 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api import deps
 from app.db.filters import scope_filter
 from app.crud.crud_offerings import offering as crud_offering
-from app.schemas.offerings import OfferingCreate, OfferingResponse, OfferingUpdate, OfferingCorrection, OfferingReview, OfferingReversal
+from app.schemas.offerings import OfferingCreate, OfferingResponse, OfferingUpdate, OfferingCorrection, OfferingReview, OfferingReversal, SubmissionEditRequest, OfferingReturnRequest
 from app.schemas.sync import SyncResult
 from sqlalchemy import select, func, text
 from datetime import date
 from decimal import Decimal
 from app.models.user import User
+from app.models.offerings import Offering, OfferingAudit
+from app.models.counts import SubmissionEditRevision
+from app.services.submission_editing import edit_own_submission
+from app.services.analytics.program_config import SUBMISSION_EDIT_WINDOW_HOURS, SUBMISSION_MAX_EDITS, SUBMISSION_RETURN_EXTRA_EDITS
+from datetime import timezone, timedelta
+from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 router = APIRouter()
+
+
+@router.get("/preflight")
+async def offering_preflight(
+    location_id: str = Query(...), service_date: date = Query(...), fund_type: str = Query("offering"),
+    program_domain: str = Query(""), program_type: str = Query(""), event_id: UUID | None = Query(None),
+    db: AsyncSession = Depends(deps.get_db), current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    """Warn field users when a financial entry already exists for this service."""
+    await deps.get_location_in_scope(db, current_user=current_user, location_id=location_id)
+    start = datetime.combine(service_date, time.min, tzinfo=ZoneInfo("Africa/Lagos"))
+    statement = select(func.count(Offering.id)).where(
+        Offering.location_id == location_id, Offering.is_deleted.is_(False),
+        Offering.status.in_(["pending", "corrected", "approved"]),
+        Offering.fund_type == fund_type,
+        Offering.date >= start, Offering.date < start + timedelta(days=1),
+    )
+    if event_id:
+        statement = statement.where(Offering.event_id == event_id)
+    else:
+        statement = statement.where(
+            Offering.event_id.is_(None),
+            func.lower(Offering.program_domain) == program_domain.strip().lower(),
+            func.lower(Offering.program_type) == program_type.strip().lower(),
+        )
+    existing_count = int((await db.execute(statement)).scalar_one() or 0)
+    return {"already_recorded": existing_count > 0, "record_count": existing_count}
+
+
+@router.get("/mine/editable")
+async def list_my_editable_offerings(
+    db: AsyncSession = Depends(deps.get_db), current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    rows = list((await db.execute(select(Offering).where(
+        Offering.entered_by_id == current_user.user_id, Offering.is_deleted.is_(False),
+        Offering.status.in_(["pending", "corrected", "returned", "approved"]),
+    ).order_by(Offering.created_at.desc()).limit(100))).scalars().all())
+    if not rows:
+        return []
+    history = list((await db.execute(select(SubmissionEditRevision).where(
+        SubmissionEditRevision.submission_type == "offering",
+        SubmissionEditRevision.submission_id.in_([row.id for row in rows]),
+    ).order_by(SubmissionEditRevision.revision_no))).scalars().all())
+    by_id: dict[str, list[Any]] = {}
+    for revision in history:
+        by_id.setdefault(str(revision.submission_id), []).append(revision)
+    now = datetime.now(timezone.utc)
+    output = []
+    for row in rows:
+        revisions = by_id.get(str(row.id), [])
+        last_return = next((item for item in reversed(revisions) if item.action == "returned"), None)
+        opened = last_return.created_at if last_return else row.created_at
+        remaining_seconds = max(0, SUBMISSION_EDIT_WINDOW_HOURS * 3600 - (now - opened).total_seconds()) if opened else 0
+        hours_left = round(remaining_seconds / 3600, 1)
+        edits = sum(item.action == "edit" for item in revisions)
+        limit = SUBMISSION_MAX_EDITS + (SUBMISSION_RETURN_EXTRA_EDITS if last_return else 0)
+        locked = row.status == "approved" or remaining_seconds <= 0 or edits >= limit
+        output.append({"id": str(row.id), "status": row.status, "amount": str(row.amount), "payment_method": row.payment_method,
+                       "fund_type": row.fund_type, "note": row.note, "date": row.date.isoformat(), "revision": len(revisions),
+                       "edits_remaining": max(0, limit - edits), "hours_remaining": hours_left, "locked": locked,
+                       "locked_message": "Approved offerings are locked." if row.status == "approved" else "The 24-hour edit window has closed." if remaining_seconds <= 0 else "The edit limit has been reached." if edits >= limit else ""})
+    return output
+
+
+@router.post("/{offering_id}/edit")
+async def edit_own_offering(
+    offering_id: UUID, payload: SubmissionEditRequest,
+    db: AsyncSession = Depends(deps.get_db), current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    return await edit_own_submission(
+        db, model=Offering, submission_type="offering", submission_id=offering_id,
+        edit_id=payload.edit_id, base_revision=payload.base_revision,
+        values=payload.values.model_dump(exclude_unset=True), actor=current_user,
+        allowed_fields={"amount", "payment_method", "fund_type", "note"}, approval_locks=True,
+    )
+
+
+@router.post("/{offering_id}/return", dependencies=[Depends(deps.PermissionChecker("offerings:review"))])
+async def return_offering_for_correction(
+    offering_id: UUID, payload: OfferingReturnRequest,
+    db: AsyncSession = Depends(deps.get_db), current_user: User = Depends(deps.get_current_active_user),
+) -> Any:
+    row = (await db.execute(select(Offering).where(Offering.id == offering_id, Offering.is_deleted.is_(False)).with_for_update())).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(404, "Offering not found")
+    deps.ensure_path_in_scope(current_user, row.path, detail="Offering outside your scope")
+    if str(row.entered_by_id) == str(current_user.user_id):
+        raise HTTPException(403, "The submitter cannot return their own offering")
+    if row.status not in {"pending", "corrected", "approved"}:
+        raise HTTPException(409, "Only pending or approved offerings can be returned")
+    prior = list((await db.execute(select(SubmissionEditRevision).where(
+        SubmissionEditRevision.submission_type == "offering", SubmissionEditRevision.submission_id == row.id,
+    ).order_by(SubmissionEditRevision.revision_no))).scalars().all())
+    reason = payload.reason.strip()
+    before = {"status": row.status, "amount": str(row.amount), "note": row.note}
+    row.status = "returned"
+    row.reviewed_by_id = current_user.user_id
+    row.reviewed_at = datetime.now(timezone.utc)
+    row.review_note = reason
+    db.add(SubmissionEditRevision(submission_type="offering", submission_id=row.id, edit_id=uuid4(),
+                                  revision_no=(prior[-1].revision_no + 1 if prior else 1), action="returned",
+                                  editor_id=current_user.user_id, before_values=before,
+                                  after_values={"status": "returned"}, reason=reason))
+    db.add(OfferingAudit(offering_id=row.id, actor_id=current_user.user_id, action="returned", reason=reason,
+                         before_values=before, after_values={"status": "returned"}))
+    await db.commit()
+    return {"status": "returned", "offering_id": str(row.id), "reason": reason}
 
 
 @router.post(
@@ -119,8 +233,7 @@ async def update_offering(
     if not offering:
         raise HTTPException(status_code=404, detail="Offering not found")
     deps.ensure_path_in_scope(current_user, offering.path, detail="Offering outside your scope")
-    
-    return await crud_offering.update(db, db_obj=offering, obj_in=offering_in)
+    raise HTTPException(status_code=409, detail="Use the audited corrections workflow so edits remain revisioned and within the edit window.")
 
 
 @router.post(

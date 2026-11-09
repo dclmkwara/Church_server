@@ -66,6 +66,25 @@ class OfferingCorrection(BaseModel):
         return value.strip()
 
 
+class OfferingEditValues(BaseModel):
+    amount: Optional[Decimal] = Field(None, gt=0, le=MAX_AMOUNT)
+    payment_method: Optional[str] = Field(None, max_length=80)
+    fund_type: Optional[str] = Field(None, max_length=80)
+    note: Optional[str] = Field(None, max_length=4000)
+
+    _amount_precision = field_validator("amount")(_validate_amount_precision)
+
+
+class SubmissionEditRequest(BaseModel):
+    edit_id: UUID
+    base_revision: int = Field(ge=0)
+    values: OfferingEditValues
+
+
+class OfferingReturnRequest(BaseModel):
+    reason: str = Field(..., min_length=1, max_length=1000)
+
+
 class OfferingReview(BaseModel):
     note: Optional[str] = Field(None, max_length=1000)
 

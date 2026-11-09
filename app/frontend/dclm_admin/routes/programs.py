@@ -126,6 +126,8 @@ def _occurrence_status(row: dict[str, Any], *, metric: str, mode: str, can_view_
         return Span("Pending review", cls="small text-warning-emphasis")
     if state == "returned":
         return Span("Returned", cls="small text-danger")
+    if state == "conflict":
+        return Span("Conflicting split count", cls="small text-danger fw-semibold")
     if metric == "converts":
         sources = row.get("record_sources") or {}
         alpha, satellite = _safe_int(sources.get("alpha")), _safe_int(sources.get("satellite"))

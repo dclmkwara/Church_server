@@ -32,3 +32,18 @@ Local proof of the `c2e5a8f14b31 → d4a9c1e7f235 → e2b4c6d8f013` chain succee
 | 22:10 onward | Local development work | Local only | No further remote database writes were performed after the migration verification above. |
 
 The remote migration is complete. The FastAPI Cloud deploy and remote State dashboard timing sample remain outstanding because the FastAPI CLI dependency is absent. The exact deploy command after installing the documented extra is `fastapi deploy`; do not treat the cloud app as updated until its live commit is confirmed.
+
+## 2026-11-09 — B4/B5 close-out
+
+| Time (approx., Africa/Lagos) | Revision / command | Mode | Result |
+|---|---|---|---|
+| 12:25 | Read `public.alembic_version`, public table count and schema catalog | Remote read | Ledger contained `e2b4c6d8f013`; 54 public tables. Prior Step 1 log records a catalog match at `e2b4c6d8f013`. |
+| 12:29 | `pg_dump --format=custom --no-owner --no-privileges` via the Supabase session pooler to `_dev_db_snapshots/b5_pre_migration_20261109.dump` | Remote read / local backup | `pg_dump` did not exit within 120 seconds. The resulting 928,317-byte archive passed `pg_restore --list` and a full archive decompression to `NUL`; SHA-256 `EF2AAD5DA59CE865CF384DFF487B09C88357420B85C76BCBF7E258121F3ECAD4`. A disposable-cluster restore of this specific snapshot was not performed. |
+| 12:34 | `PYTHONPATH=<Church_server>; alembic upgrade head` | **REMOTE WRITE**, Supabase session pooler | Applied `e2b4c6d8f013 -> a4d92c16e7b3 -> b5e6f8a1c234 -> b5f7a9c2d341`. Alembic reported transactional DDL and exit code 0. |
+| 12:35 | Read-only post-migration catalog and row-count checks | Remote read | Ledger is `b5f7a9c2d341`. `count_groups`, `submission_edit_revisions`, and `count_section_suggestions` exist; expected worker IDs and B5 count/service columns exist. Required indexes exist. All three new B5 tables contain zero rows. |
+| 12:36 | `fastapi --help` | Local CLI check | Command exits because `fastapi[standard]` / Cloud CLI extras are not installed. No deployment or CLI authentication was attempted. |
+| 12:37 | `uv tool install "fastapi[standard]"` | Local user tool install | Installed the CLI in an isolated uv tool environment; no project dependency files were changed. |
+| 12:38 | `fastapi cloud whoami`, then device login | Cloud account auth | `whoami` reported no credentials. The device login endpoint returned HTTP 400 after opening the browser flow. No app deployment or smoke test occurred. |
+| 12:39 | Read-only count-backfill verification | Remote read | Pooler DNS resolution failed after migration, so the number of legacy note-prefixed rows updated by B5 could not be re-queried. |
+
+No remote synthetic rows were seeded by the migration. No app deployment or synthetic-account smoke test was performed. The remote is migrated, but applications should not be considered deployed until both repository deployments and smoke tests complete.

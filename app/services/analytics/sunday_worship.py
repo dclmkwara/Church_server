@@ -61,9 +61,31 @@ def receipt_state(
 def _report_review_state(rows: Iterable[Any]) -> str | None:
     """Resolve one legacy report made from one or more count rows."""
     rows = list(rows)
+    group_ids = {str(getattr(row, "count_group_id", None)) for row in rows if getattr(row, "count_group_id", None)}
+    if len(group_ids) > 1:
+        group_states = [
+            _report_review_state([row for row in rows if str(getattr(row, "count_group_id", None)) == group_id])
+            for group_id in group_ids
+        ]
+        if "conflict" in group_states:
+            return "conflict"
+        if "approved" in group_states and all(state in {"approved", None} for state in group_states):
+            return "approved"
+        if any(state in {"approved", "pending"} for state in group_states):
+            return "pending"
+        return "returned" if "returned" in group_states else None
+    modes = {str(getattr(row, "count_mode", "") or "").lower() for row in rows if getattr(row, "count_mode", None)}
+    single_count = sum(1 for row in rows if str(getattr(row, "count_mode", "") or "").lower() == "single")
+    split = bool(modes)
+    if split and (len(modes) > 1 or ("single" in modes and single_count != 1)):
+        return "conflict"
     states = {str(getattr(row, "status", "pending") or "pending").lower() for row in rows}
     if not states:
         return None
+    if split and states & _RETURNED_STATUSES:
+        return "conflict"
+    if split and len(states) > 1:
+        return "conflict"
     current_rows = [row for row in rows if str(getattr(row, "status", "pending") or "pending").lower() not in _RETURNED_STATUSES]
     if not current_rows:
         return "returned" if states & _RETURNED_STATUSES else None
@@ -75,8 +97,25 @@ def _report_review_state(rows: Iterable[Any]) -> str | None:
 
 def _count_values(rows: Iterable[Any]) -> dict[str, int]:
     """Sum the existing count fields without converting an absent report to zero."""
+    rows = list(rows)
+    modes = {str(getattr(row, "count_mode", "") or "").lower() for row in rows if getattr(row, "count_mode", None)}
+    single_count = sum(1 for row in rows if str(getattr(row, "count_mode", "") or "").lower() == "single")
+    if modes and (len(modes) > 1 or ("single" in modes and single_count != 1)):
+        rows = []
+    elif modes and len({str(getattr(row, "status", "pending") or "pending").lower() for row in rows}) > 1:
+        rows = []
     rows = [row for row in rows if str(getattr(row, "status", "pending") or "pending").lower() not in _RETURNED_STATUSES]
     return {key: sum(int(getattr(row, key, 0) or 0) for row in rows) for key in (*_CATEGORIES, "total")}
+
+
+def _service_groups(rows: Iterable[Any]) -> list[tuple[str, list[Any]]]:
+    """Partition rows by explicit count group; legacy rows remain one legacy service."""
+    groups: dict[str, list[Any]] = defaultdict(list)
+    for row in rows:
+        group_id = getattr(row, "count_group_id", None)
+        key = str(group_id) if group_id else "legacy"
+        groups[key].append(row)
+    return list(groups.items())
 
 
 def _within(path: str, ancestor: str) -> bool:
@@ -146,6 +185,7 @@ def _build_overview(
         "approved": 0,
         "pending": 0,
         "returned": 0,
+        "conflict": 0,
         "awaiting": 0,
         "late": 0,
         "missing": 0,
@@ -153,6 +193,8 @@ def _build_overview(
         "superseded": 0,
     }
     included_rows: list[Any] = []
+    service_reports: list[dict[str, Any]] = []
+    multiple_service_locations: set[str] = set()
     received_units: set[str] = set()
     counted_units: set[str] = set()
     location_totals: dict[str, int] = {}
@@ -204,8 +246,22 @@ def _build_overview(
             coverage[review] += 1
             if review == "approved" or (include_pending and review == "pending"):
                 counted_units.add(location_id)
-                included_rows.extend(rows)
-                location_totals[location_id] = _count_values(rows)["total"]
+                groups = _service_groups(rows)
+                if len(groups) > 1:
+                    multiple_service_locations.add(location_id)
+                    for group_key, group_rows in groups:
+                        group = getattr(group_rows[0], "count_group", None)
+                        group_review = _report_review_state(group_rows)
+                        service_reports.append({
+                            "location_id": location_id,
+                            "location_name": str(getattr(location, "location_name", None) or getattr(location, "name", None) or location_id),
+                            "service_id": getattr(group, "service_id", None) or "legacy service",
+                            "counted_population": _count_values(group_rows)["total"] if group_review == "approved" or (include_pending and group_review == "pending") else None,
+                            "review_state": group_review,
+                        })
+                else:
+                    included_rows.extend(rows)
+                    location_totals[location_id] = _count_values(rows)["total"]
         else:
             state = receipt_state(occurrence_date, now, received=False)
             coverage[state] += 1
@@ -229,9 +285,11 @@ def _build_overview(
 
     values = _count_values(included_rows)
     has_counted_rows = bool(included_rows)
-    total = values["total"] if has_counted_rows else None
+    # Do not publish a scope-wide daily total when multiple services have no
+    # church-defined roll-up rule. The service-level values remain available.
+    total = values["total"] if has_counted_rows and not multiple_service_locations else None
     values_payload = {
-        key: value if has_counted_rows else None
+        key: value if has_counted_rows and not multiple_service_locations else None
         for key, value in values.items()
     }
     estimates_by_location = estimates_by_location or {}
@@ -300,6 +358,9 @@ def _build_overview(
         "coverage": coverage,
         "unreported_location_ids": unreported_location_ids,
         "location_totals": location_totals,
+        "service_reports": service_reports,
+        "multiple_service_locations": sorted(multiple_service_locations),
+        "daily_total_defined": not bool(multiple_service_locations),
         "location_expected_values": expected_by_location,
         "expected_population_total": expected_total if estimated_counted_locations else None,
         "expected_population_counted_total": expected_counted_population if estimated_counted_locations else None,
@@ -404,7 +465,7 @@ class SundayWorshipAnalytics:
             )
         )
         if storage_filters:
-            count_result = await db.execute(select(Count).where(*count_filters, or_(*storage_filters)))
+            count_result = await db.execute(select(Count).options(joinedload(Count.count_group)).where(*count_filters, or_(*storage_filters)))
             count_rows = list(count_result.scalars().all())
         else:
             count_rows = []
@@ -586,7 +647,7 @@ class SundayWorshipAnalytics:
             func.lower(func.coalesce(Count.program_level, "")).in_({"group", "region", "state"}),
             scope_filter(Count.program_scope_path, scope_path),
         ))
-        count_result = await db.execute(select(Count).where(*count_filters, or_(*storage_filters)))
+        count_result = await db.execute(select(Count).options(joinedload(Count.count_group)).where(*count_filters, or_(*storage_filters)))
         count_rows = list(count_result.scalars().all())
 
         def build(path: str, when: date) -> dict[str, Any]:

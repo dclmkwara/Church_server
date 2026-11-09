@@ -3,7 +3,7 @@ CRUD operations for Offering records.
 """
 from typing import List, Optional
 from datetime import date, datetime, timedelta, UTC
-from uuid import UUID
+from uuid import UUID, uuid4
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import HTTPException
@@ -109,6 +109,23 @@ class CRUDOffering(CRUDBase[Offering, OfferingCreate, OfferingUpdate]):
             raise HTTPException(status_code=404, detail="Offering not found")
         if row.status == "reversed":
             raise HTTPException(status_code=409, detail="Reversed financial entries are terminal and cannot be corrected")
+        if row.status == "approved":
+            raise HTTPException(status_code=409, detail="Approval locked this offering. Return it for correction before editing.")
+        from app.models.counts import SubmissionEditRevision
+        from app.services.analytics.program_config import SUBMISSION_EDIT_WINDOW_HOURS, SUBMISSION_MAX_EDITS, SUBMISSION_RETURN_EXTRA_EDITS
+        from datetime import UTC
+        revisions = list((await db.execute(select(SubmissionEditRevision).where(
+            SubmissionEditRevision.submission_type == "offering",
+            SubmissionEditRevision.submission_id == row.id,
+        ).order_by(SubmissionEditRevision.revision_no))).scalars().all())
+        last_return = next((item for item in reversed(revisions) if item.action == "returned"), None)
+        opened = last_return.created_at if last_return else row.created_at
+        now = datetime.now(UTC)
+        if opened is None or now > opened + timedelta(hours=SUBMISSION_EDIT_WINDOW_HOURS):
+            raise HTTPException(status_code=409, detail="The 24-hour edit window has closed.")
+        edits = sum(item.action == "edit" for item in revisions)
+        if edits >= SUBMISSION_MAX_EDITS + (SUBMISSION_RETURN_EXTRA_EDITS if last_return else 0):
+            raise HTTPException(status_code=409, detail="The edit limit has been reached.")
         changes = correction.model_dump(exclude={"reason"}, exclude_unset=True)
         if not changes:
             raise HTTPException(status_code=400, detail="Provide at least one field to correct")
@@ -123,6 +140,12 @@ class CRUDOffering(CRUDBase[Offering, OfferingCreate, OfferingUpdate]):
         db.add(OfferingAudit(
             offering_id=row.id, actor_id=actor_id, action="corrected",
             reason=correction.reason, before_values=before, after_values=after,
+        ))
+        db.add(SubmissionEditRevision(
+            submission_type="offering", submission_id=row.id, edit_id=uuid4(),
+            revision_no=(revisions[-1].revision_no + 1 if revisions else 1),
+            action="edit", editor_id=actor_id, before_values=before,
+            after_values=after, reason=correction.reason,
         ))
         await db.commit()
         await db.refresh(row)
