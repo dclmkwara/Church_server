@@ -29,6 +29,14 @@ async def _get_by_client_id(db: AsyncSession, model: Any, client_id: UUID):
     return (await db.execute(select(model).where(model.client_id == client_id))).scalars().first()
 
 
+def fellowship_attendance_total(obj_in: FellowshipAttendanceCreate) -> int:
+    """Prefer explicit six-category values, preserving totals from legacy clients."""
+    categories = ("adult_male", "adult_female", "youth_male", "youth_female", "boys", "girls")
+    if set(categories).intersection(getattr(obj_in, "model_fields_set", set())):
+        return sum(int(getattr(obj_in, field) or 0) for field in categories)
+    return sum(int(getattr(obj_in, field) or 0) for field in ("men", "women", "youths", "children"))
+
+
 class CRUDFellowshipMember(CRUDBase[FellowshipMember, FellowshipMemberCreate, FellowshipMemberUpdate]):
     """CRUD for Fellowship Members."""
     
@@ -97,7 +105,9 @@ class CRUDFellowshipAttendance(CRUDBase[FellowshipAttendance, FellowshipAttendan
             if existing:
                 return mark_existing_submission(existing)
 
-        total = obj_in.men + obj_in.women + obj_in.youths + obj_in.children
+        category_fields = ("adult_male", "adult_female", "youth_male", "youth_female", "boys", "girls")
+        category_values = {name: getattr(obj_in, name) for name in category_fields}
+        total = fellowship_attendance_total(obj_in)
         
         db_obj = FellowshipAttendance(
             fellowship_id=obj_in.fellowship_id,
@@ -108,6 +118,7 @@ class CRUDFellowshipAttendance(CRUDBase[FellowshipAttendance, FellowshipAttendan
             women=obj_in.women,
             youths=obj_in.youths,
             children=obj_in.children,
+            **category_values,
             total=total,
             topic=obj_in.topic,
             note=obj_in.note,

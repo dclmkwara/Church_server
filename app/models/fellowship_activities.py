@@ -85,6 +85,14 @@ class FellowshipAttendance(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin
     women = Column(Integer, default=0)
     youths = Column(Integer, default=0)
     children = Column(Integer, default=0)
+    # Explicit population categories used by current field submissions.
+    # Legacy aggregate columns above remain readable for older reports.
+    adult_male = Column(Integer, nullable=False, default=0, server_default="0")
+    adult_female = Column(Integer, nullable=False, default=0, server_default="0")
+    youth_male = Column(Integer, nullable=False, default=0, server_default="0")
+    youth_female = Column(Integer, nullable=False, default=0, server_default="0")
+    boys = Column(Integer, nullable=False, default=0, server_default="0")
+    girls = Column(Integer, nullable=False, default=0, server_default="0")
     total = Column(Integer, default=0)
     
     # Metadata

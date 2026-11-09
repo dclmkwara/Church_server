@@ -53,6 +53,12 @@ class FellowshipAttendanceBase(BaseModel):
     women: int = 0
     youths: int = 0
     children: int = 0
+    adult_male: int = Field(default=0, ge=0)
+    adult_female: int = Field(default=0, ge=0)
+    youth_male: int = Field(default=0, ge=0)
+    youth_female: int = Field(default=0, ge=0)
+    boys: int = Field(default=0, ge=0)
+    girls: int = Field(default=0, ge=0)
     
     topic: Optional[str] = None
     note: Optional[str] = None
@@ -67,6 +73,12 @@ class FellowshipAttendanceUpdate(BaseModel):
     women: Optional[int] = None
     youths: Optional[int] = None
     children: Optional[int] = None
+    adult_male: Optional[int] = Field(default=None, ge=0)
+    adult_female: Optional[int] = Field(default=None, ge=0)
+    youth_male: Optional[int] = Field(default=None, ge=0)
+    youth_female: Optional[int] = Field(default=None, ge=0)
+    boys: Optional[int] = Field(default=None, ge=0)
+    girls: Optional[int] = Field(default=None, ge=0)
     topic: Optional[str] = None
     note: Optional[str] = None
 

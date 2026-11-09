@@ -243,6 +243,14 @@ class FellowshipResponse(FellowshipBase):
     formatted_id: str
     created_at: datetime
 
+
+class FellowshipListItemResponse(FellowshipResponse):
+    """Fellowship list row with one-query activity aggregates for the admin page."""
+    active_member_count: int = 0
+    last_attendance_total: int = 0
+    latest_offering_amount: float = 0
+    open_prayer_count: int = 0
+
 # --- Tree View Schema ---
 class TreeNode(BaseModel):
     """Recursive schema for hierarchy tree view."""

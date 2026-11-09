@@ -25,13 +25,14 @@ Example hierarchy path:
 from typing import List, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 
 from app.api import deps
 from app.crud import crud_location
 from app.schemas import location as schemas
 from app.models.user import User
 from app.models.location import Fellowship, Location, Group, Nation, Region, State
+from app.models.fellowship_activities import FellowshipMember, FellowshipAttendance, FellowshipOffering, PrayerRequest
 
 router = APIRouter()
 
@@ -988,7 +989,7 @@ async def create_fellowship(
     return await crud_location.fellowship.create(db=db, obj_in=fellowship_in)
 
 
-@router.get("/fellowships/", response_model=List[schemas.FellowshipResponse])
+@router.get("/fellowships/", response_model=List[schemas.FellowshipListItemResponse])
 async def read_fellowships(
     db: AsyncSession = Depends(deps.get_db),
     skip: int = Query(0, ge=0),
@@ -1018,25 +1019,68 @@ async def read_fellowships(
         GET /api/v1/fellowships/?location_id=9d4ff678-4284-4798-b438-d8a7f54a8351
         ```
     """
-    if location_id:
-        query = (
-            select(Fellowship)
-            .where(
-                Fellowship.location_id == location_id,
-                _hierarchy_visible_filter(Fellowship.path, current_user),
-            )
-            .offset(skip)
-            .limit(limit)
+    member_count = (
+        select(func.count(FellowshipMember.id))
+        .where(
+            FellowshipMember.fellowship_id == Fellowship.fellowship_id,
+            FellowshipMember.is_active.is_(True),
+            FellowshipMember.is_deleted.is_(False),
         )
-        res = await db.execute(query)
-        return res.scalars().all()
-    result = await db.execute(
-        select(Fellowship)
-        .where(_hierarchy_visible_filter(Fellowship.path, current_user))
-        .offset(skip)
-        .limit(limit)
+        .correlate(Fellowship)
+        .scalar_subquery()
     )
-    return result.scalars().all()
+    latest_attendance = (
+        select(FellowshipAttendance.total)
+        .where(
+            FellowshipAttendance.fellowship_id == Fellowship.fellowship_id,
+            FellowshipAttendance.is_deleted.is_(False),
+        )
+        .order_by(FellowshipAttendance.date.desc(), FellowshipAttendance.created_at.desc())
+        .limit(1)
+        .correlate(Fellowship)
+        .scalar_subquery()
+    )
+    latest_offering = (
+        select(FellowshipOffering.amount)
+        .where(
+            FellowshipOffering.fellowship_id == Fellowship.fellowship_id,
+            FellowshipOffering.is_deleted.is_(False),
+        )
+        .order_by(FellowshipOffering.date.desc(), FellowshipOffering.created_at.desc())
+        .limit(1)
+        .correlate(Fellowship)
+        .scalar_subquery()
+    )
+    open_prayers = (
+        select(func.count(PrayerRequest.id))
+        .where(
+            PrayerRequest.fellowship_id == Fellowship.fellowship_id,
+            PrayerRequest.status == "pending",
+            PrayerRequest.is_deleted.is_(False),
+        )
+        .correlate(Fellowship)
+        .scalar_subquery()
+    )
+    query = select(
+        Fellowship,
+        member_count.label("active_member_count"),
+        func.coalesce(latest_attendance, 0).label("last_attendance_total"),
+        func.coalesce(latest_offering, 0).label("latest_offering_amount"),
+        open_prayers.label("open_prayer_count"),
+    ).where(_hierarchy_visible_filter(Fellowship.path, current_user))
+    if location_id:
+        query = query.where(Fellowship.location_id == location_id)
+    rows = (await db.execute(query.offset(skip).limit(limit))).all()
+    return [
+        {
+            **schemas.FellowshipResponse.model_validate(row[0]).model_dump(),
+            "active_member_count": int(row[1] or 0),
+            "last_attendance_total": int(row[2] or 0),
+            "latest_offering_amount": float(row[3] or 0),
+            "open_prayer_count": int(row[4] or 0),
+        }
+        for row in rows
+    ]
 
 
 @router.get("/fellowships/{fellowship_id}", response_model=schemas.FellowshipResponse)

@@ -142,11 +142,9 @@ async def _attendance_rows(request: Request, fellowship_id: str):
         desktop_rows.append(
             [
                 row["date"],
-                row["men"],
-                row["women"],
-                row["youths"],
-                row["children"],
+                *(["Not recorded"] * 6 if row.get("legacy_breakdown") else [row[key] for key in ("adult_male", "adult_female", "youth_male", "youth_female", "boys", "girls")]),
                 row["total"],
+                "Legacy categories unavailable" if row.get("legacy_breakdown") else "Six categories",
                 row["submitted_by"],
             ]
         )
@@ -155,17 +153,19 @@ async def _attendance_rows(request: Request, fellowship_id: str):
                 H4(row["date"], cls="h6 fw-semibold mb-1"),
                 P(f"Submitted by {row['submitted_by']}", cls="text-muted mb-3"),
                 Div(
-                    P(f"Men: {row['men']}", cls="small mb-1"),
-                    P(f"Women: {row['women']}", cls="small mb-1"),
-                    P(f"Youths: {row['youths']}", cls="small mb-1"),
-                    P(f"Children: {row['children']}", cls="small mb-1"),
+                    P(
+                        "Legacy breakdown unavailable"
+                        if row.get("legacy_breakdown")
+                        else " · ".join(f"{label}: {row[key]}" for key, label in (("adult_male", "Adult male"), ("adult_female", "Adult female"), ("youth_male", "Youth male"), ("youth_female", "Youth female"), ("boys", "Boys"), ("girls", "Girls"))),
+                        cls="small mb-1",
+                    ),
                     P(f"Total: {row['total']}", cls="fw-semibold mb-0"),
                 ),
                 cls="mobile-worker-card",
             )
         )
     return responsive_table(
-        ["Date", "Men", "Women", "Youths", "Children", "Total", "Submitted By"],
+        ["Date", "Adult Male", "Adult Female", "Youth Male", "Youth Female", "Boys", "Girls", "Total", "Breakdown", "Submitted By"],
         desktop_rows,
         mobile_cards,
         results_id="fellowship-panel-table",

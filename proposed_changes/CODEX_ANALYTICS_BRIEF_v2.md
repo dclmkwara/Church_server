@@ -328,7 +328,7 @@ GET /api/v1/analytics/domains/{domain}?scope_path=...
 
 **B5. Split counts, usher edit window and Field Utility** per C4. These touch the same phone forms and the same rows, so do them together: `count_mode` and `section_label` columns with backfill, the revision table and edit endpoint with server-side window and edit-count enforcement, an edit screen in the Utility (showing time left and edits left), "Return for correction" replacing Reject in Admin, the edited badge and time-left in the review queue, and the Utility showing a returned report's reason.
 
-**B6. House Caring Fellowship categories.** Verify today's fields; propose an additive change so fellowship attendance carries the six categories (adult male/female, young adult or campus male/female, youth male/female, children boys/girls) like counts; update the Field Utility form. Until then do not merge fellowship figures into the population mix.
+**B6. House Caring Fellowship categories.** Fellowship attendance carries the six Field Utility population categories: adult male, adult female, youth male, youth female, boys, and girls. Preserve legacy aggregate fields and totals without inventing a category split; update the Field Utility form and edit flow. Fellowship remains location-only and is not merged into the broad program population mix.
 
 **C. Dashboard completion.** Each earlier slice has already added its card. Finish the children table, needs-attention panel and trend chart to match the prototype; add the offerings and converts cards.
 

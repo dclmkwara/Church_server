@@ -123,14 +123,17 @@ async def edit_own_submission(
     elif submission_type in {"fellowship_attendance", "fellowship_offering"}:
         from app.models.fellowship_activities import FellowshipAttendance
         if submission_type == "fellowship_attendance":
-            for key in ("men", "women", "youths", "children"):
+            legacy_fields = ("men", "women", "youths", "children")
+            category_fields = ("adult_male", "adult_female", "youth_male", "youth_female", "boys", "girls")
+            for key in (*legacy_fields, *category_fields):
                 if key in values:
                     value = values[key]
                     if not isinstance(value, int) or isinstance(value, bool) or value < 0 or value > 999999:
                         raise HTTPException(422, f"{key} must be a whole number from 0 to 999999")
             for key, value in values.items():
                 setattr(row, key, value.strip() or None if key in {"topic", "note"} and isinstance(value, str) else value)
-            row.total = sum(int(getattr(row, key, 0) or 0) for key in ("men", "women", "youths", "children"))
+            active_fields = category_fields if set(category_fields).intersection(values) else legacy_fields
+            row.total = sum(int(getattr(row, key, 0) or 0) for key in active_fields)
         else:
             amount = values.get("amount")
             if amount is not None:

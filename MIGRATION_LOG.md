@@ -47,3 +47,13 @@ The remote migration is complete. The FastAPI Cloud deploy and remote State dash
 | 12:39 | Read-only count-backfill verification | Remote read | Pooler DNS resolution failed after migration, so the number of legacy note-prefixed rows updated by B5 could not be re-queried. |
 
 No remote synthetic rows were seeded by the migration. No app deployment or synthetic-account smoke test was performed. The remote is migrated, but applications should not be considered deployed until both repository deployments and smoke tests complete.
+
+## 2026-11-09 - B6 fellowship preflight and local verification
+
+| Step | Mode | Result |
+|---|---|---|
+| Read-only fellowship schema/data check from the 2026-11-09 12:29 pre-B5 public snapshot (`_dev_db_snapshots/b5_pre_migration_20261109.dump`, 928,317 bytes) | Local disposable restore on port 55434 | The six activity tables had `fellowship_id` as `character varying`; none had an FK to `fellowships`. Snapshot row counts: members 1, attendance 1, offerings 1, testimony 0, prayer requests 0, summaries 0. There were no malformed UUID strings. The three populated activity rows referenced one absent fellowship ID; the snapshot's `fellowships` table had 0 rows. This is a historical development snapshot, not a fresh backup for a new remote write. |
+| Fresh remote B6 snapshot attempt | Remote read / local output | Pooler resolution/connectivity failed. Two attempted output files were 0 bytes and were rejected as backups. No remote migration or data cleanup was attempted. |
+| `uv run alembic upgrade head` from snapshot ledger `e2b4c6d8f013` | Disposable local database only | Passed through `a4d92c16e7b3`, `b5e6f8a1c234`, `b5f7a9c2d341`, and `c6d7e8f9a012`. Post-check: all six fellowship IDs are UUID; all six validated FKs exist; the three orphan test rows were removed by the B6 cleanup. The other activity tables remain empty. |
+
+The B6 revision also adds six non-null, zero-default population category columns to `fellowship_attendance`: `adult_male`, `adult_female`, `youth_male`, `youth_female`, `boys`, and `girls`. The migration is only verified locally. Before applying it remotely, make and validate a fresh backup, then inspect the current orphan count; the migration removes activity rows with no matching fellowship because they cannot satisfy the new FK. Restoring the pre-migration database snapshot is the recovery path for those deleted development rows.

@@ -51,6 +51,28 @@ def _normalize_fellowship(row: dict[str, Any], *, details: dict[str, Any], membe
     }
 
 
+def _normalize_fellowship_list_item(row: dict[str, Any]) -> dict[str, Any]:
+    """Normalize the API's aggregate fellowship list row without per-row API calls."""
+    return {
+        "fellowship_id": str(row.get("fellowship_id") or ""),
+        "name": str(row.get("fellowship_name") or "Fellowship"),
+        "location": str(row.get("location_name") or row.get("location_id") or ""),
+        "meeting_day": "House Fellowship",
+        "meeting_time": "Evening",
+        "status": "active",
+        "leader_name": str(row.get("leader_in_charge") or "Not assigned"),
+        "assistant_name": "Not assigned",
+        "member_count": int(row.get("active_member_count") or 0),
+        "last_attendance": int(row.get("last_attendance_total") or 0),
+        "last_offering": _money(row.get("latest_offering_amount")),
+        "open_prayers": int(row.get("open_prayer_count") or 0),
+        "description": str(row.get("associate_church") or row.get("fellowship_address") or "Local fellowship gathering."),
+        "path": str(row.get("path") or ""),
+        "next_meeting": "Next scheduled fellowship meeting",
+        "formatted_id": str(row.get("formatted_id") or ""),
+    }
+
+
 def _normalize_member(row: dict[str, Any]) -> dict[str, Any]:
     created = str(row.get("created_at") or "")
     return {
@@ -65,13 +87,18 @@ def _normalize_member(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _normalize_attendance(row: dict[str, Any]) -> dict[str, Any]:
+    categories = {
+        key: int(row.get(key) or 0)
+        for key in ("adult_male", "adult_female", "youth_male", "youth_female", "boys", "girls")
+    }
+    legacy_total = sum(int(row.get(key) or 0) for key in ("men", "women", "youths", "children"))
+    legacy_breakdown = not any(categories.values()) and legacy_total > 0
     return {
         "attendance_id": str(row.get("id") or ""),
         "date": _safe_date(row.get("date")),
-        "men": int(row.get("men") or 0),
-        "women": int(row.get("women") or 0),
-        "youths": int(row.get("youths") or 0),
-        "children": int(row.get("children") or 0),
+        **categories,
+        "legacy_breakdown": legacy_breakdown,
+        "legacy_total": legacy_total,
         "total": int(row.get("total") or 0),
         "submitted_by": str(row.get("entered_by_id") or "Backend user"),
         "topic": str(row.get("topic") or ""),
@@ -167,39 +194,14 @@ class FellowshipService:
 
         async def load_rows() -> list[dict[str, Any]]:
             try:
-                rows = await maybe_await(ttl_cached(
-                    ("fellowship", "rows", location or ""),
-                    60.0,
-                    lambda: fetch_all_pages(lambda skip, limit: client.list_fellowships(access_token, location_id=location or None, skip=skip, limit=limit)),
-                ))
+                rows = await fetch_all_pages(
+                    lambda skip, limit: client.list_fellowships(access_token, skip=skip, limit=limit)
+                )
             except BackendClientError:
                 raise
-            normalized = []
-            for row in rows:
-                fellowship_id = str(row.get("fellowship_id") or "")
-                location_id = str(row.get("location_id") or "")
-                details = await request_cached(
-                    request,
-                    FellowshipService._details_key(location_id),
-                    lambda: PeopleService.get_location_details(request, location_id) or {},
-                )
-                members = await FellowshipService.list_members(request, fellowship_id)
-                attendance = await FellowshipService.list_attendance(request, fellowship_id)
-                offerings = await FellowshipService.list_offerings(request, fellowship_id)
-                prayers = await FellowshipService.list_prayers(request, fellowship_id)
-                normalized.append(
-                    _normalize_fellowship(
-                        row,
-                        details=details,
-                        members=members,
-                        attendance=attendance,
-                        offerings=offerings,
-                        prayers=prayers,
-                    )
-                )
-            return normalized
+            return [_normalize_fellowship_list_item(row) for row in rows]
 
-        normalized = await request_cached(request, ("fellowship", "list", location or ""), load_rows)
+        normalized = await request_cached(request, ("fellowship", "list", "aggregate"), load_rows)
         if search:
             term = search.lower().strip()
             normalized = [
@@ -212,6 +214,8 @@ class FellowshipService:
             ]
         if status:
             normalized = [row for row in normalized if row["status"] == status]
+        if location:
+            normalized = [row for row in normalized if row["location"].casefold() == location.casefold()]
         return sorted(normalized, key=lambda row: (row["location"].lower(), row["name"].lower()))
 
     @staticmethod

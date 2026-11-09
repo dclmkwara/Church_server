@@ -61,7 +61,13 @@ async def _list_my_editable_records(db: AsyncSession, actor: User, model: Any, k
         limit = SUBMISSION_MAX_EDITS + (1 if last_return else 0)
         result.append({
             "id": str(row.id), "date": row.date.isoformat(), "revision": history[-1].revision_no if history else 0,
-            "values": ({"men": row.men, "women": row.women, "youths": row.youths, "children": row.children, "total": row.total, "topic": row.topic, "note": row.note}
+            "values": ({
+                "men": row.men, "women": row.women, "youths": row.youths, "children": row.children,
+                "adult_male": row.adult_male, "adult_female": row.adult_female,
+                "youth_male": row.youth_male, "youth_female": row.youth_female,
+                "boys": row.boys, "girls": row.girls,
+                "total": row.total, "topic": row.topic, "note": row.note,
+            }
                        if kind == "fellowship_attendance" else {"amount": str(row.amount), "note": row.note}),
             "edits_remaining": max(0, limit - used), "hours_remaining": round(remaining / 3600, 1),
             "locked": remaining <= 0 or used >= limit,
@@ -81,7 +87,7 @@ async def edit_own_fellowship_attendance(attendance_id: UUID, payload: CountEdit
     return await edit_own_submission(db, model=FellowshipAttendance, submission_type="fellowship_attendance",
         submission_id=attendance_id, edit_id=payload.edit_id, base_revision=payload.base_revision,
         values=payload.values, actor=current_user,
-        allowed_fields={"men", "women", "youths", "children", "topic", "note"})
+        allowed_fields={"men", "women", "youths", "children", "adult_male", "adult_female", "youth_male", "youth_female", "boys", "girls", "topic", "note"})
 
 
 @router.get("/offerings/mine/editable")
