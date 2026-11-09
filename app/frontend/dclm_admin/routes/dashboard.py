@@ -1173,6 +1173,56 @@ def register_dashboard_routes(app) -> None:
         except BackendClientError as exc:
             return Div(P(f"Reminder was not sent: {exc}", cls="small text-danger mb-0"), role="alert")
 
+    @app.post("/dashboard/remind-all")
+    async def dashboard_remind_all(request: Request):
+        ctx = active_scope_context(request, build_context(request))
+        if not ctx.has_permission("counts:remind"):
+            return Div(P("You do not have permission to remind reporting locations.", cls="small text-danger mb-0"), role="alert")
+        form = await request.form()
+        child_path = str(form.get("child_path") or "")
+        occurrence_date = str(form.get("occurrence_date") or "")
+        program_type_id = str(form.get("program_type_id") or "")
+        try:
+            scope_rows = await PeopleService.list_locations(request, ctx)
+            child_locations = [
+                row for row in scope_rows
+                if str(row.get("path") or "") == child_path
+                or str(row.get("path") or "").startswith(f"{child_path}.")
+            ]
+            if not child_locations or not (
+                child_path == ctx.current_scope_path
+                or child_path.startswith(f"{ctx.current_scope_path}.")
+            ):
+                return Div(P("Reminder refused: child scope is outside your jurisdiction.", cls="small text-danger mb-0"), role="alert")
+            missing = await ChurchDataService.list_unreported_sunday_locations(request, occurrence_date)
+            allowed = {str(row.get("location_id") or "") for row in child_locations}
+            targets = [
+                row for row in missing
+                if str(row.get("location_id") or "") in allowed
+                and str(row.get("path") or "").startswith(f"{child_path}.")
+            ]
+            sent = 0
+            skipped = 0
+            for row in targets:
+                try:
+                    await ChurchDataService.remind_count_location(request, {
+                        "location_id": str(row["location_id"]),
+                        "program_type_id": program_type_id,
+                        "occurrence_date": occurrence_date,
+                    })
+                    sent += 1
+                except BackendClientError as exc:
+                    if exc.status_code in {409, 429}:
+                        skipped += 1
+                    else:
+                        raise
+            return Div(
+                P(f"Reminders sent to {sent} locations" + (f"; {skipped} already reported or reminded." if skipped else "."), cls="small text-success mb-0"),
+                role="status",
+            )
+        except BackendClientError as exc:
+            return Div(P(f"Reminders were not sent: {exc}", cls="small text-danger mb-0"), role="alert")
+
     @app.get("/dashboard/sections/{section_key}")
     async def dashboard_section(request: Request, section_key: str, view: str = "chart"):
         ctx = active_scope_context(request, build_context(request))

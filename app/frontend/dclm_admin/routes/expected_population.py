@@ -151,10 +151,14 @@ def register_expected_population_routes(app) -> None:
                 locations = payload.get("locations") or []
                 estimate_count = sum(1 for item in locations if item.get("expected_value") is not None)
                 body = (
-                    Table(
-                        Thead(Tr(Th("Location"), Th("Current estimate", cls="text-end"), Th("Effective from"), Th("Add a version"), Th("Version history"))),
-                        Tbody(*_estimate_rows(locations)),
-                        cls="table table-hover align-middle expected-population-table",
+                    Div(
+                        Table(
+                            Thead(Tr(Th("Location"), Th("Current estimate", cls="text-end"), Th("Effective from"), Th("Add a version"), Th("Version history"))),
+                            Tbody(*_estimate_rows(locations)),
+                            cls="table table-hover align-middle",
+                        ),
+                        P("Swipe to see all estimate columns", cls="analytics-scroll-hint small text-muted"),
+                        cls="table-responsive expected-population-table",
                     )
                     if locations else empty_state("geo-alt", "No locations in this State", "Add locations to the hierarchy before setting attendance estimates.")
                 )
