@@ -26,6 +26,7 @@ DEFAULT_PERMISSIONS = [
     _perm("workers:update", "Update Worker", "Can edit worker records"),
     _perm("workers:delete", "Delete Worker", "Can remove worker records"),
     _perm("workers:approve", "Approve Worker", "Can approve worker registrations"),
+    _perm("workers:request_changes", "Request Worker Changes", "Can prepare worker transfer, removal, and status-change requests"),
 
     # Programs
     _perm("programs:read", "Read Programs", "Can view program domains, types, and events"),
@@ -33,6 +34,7 @@ DEFAULT_PERMISSIONS = [
     _perm("programs:create_event", "Create Program Events", "Can schedule program events within the assigned jurisdiction"),
     _perm("programs:assign_workers", "Assign Event Workers", "Can assign officiating workers to special program events"),
     _perm("programs:approve_assignments", "Approve Event Assignments", "Can approve or reject officiating worker assignments for special program events"),
+    _perm("programs:approve_events", "Approve Program Events", "Can approve or reject event schedules at the assigned level"),
 
     # Officials / appointments
     _perm("officials:read", "Read Official Appointments", "Can view official appointments within scope"),
@@ -99,6 +101,7 @@ DEFAULT_PERMISSIONS = [
     _perm("reports:read", "Read Reports", "Can view reports"),
     _perm("reports:refresh", "Refresh Reports", "Can refresh report materializations"),
     _perm("statistics:read", "Read Statistics", "Can view statistics endpoints"),
+    _perm("population_estimates:manage", "Manage Expected Population", "Can set versioned expected Sunday attendance within the assigned State"),
 
     # Notifications and media
     _perm("notifications:read", "Read Notifications", "Can poll notifications"),
@@ -181,7 +184,7 @@ ADMIN_PERMS = USHER_PERMS + [
     "workers:create",
     "workers:update",
     "programs:manage",
-]
+] + REPORTING_READ + ["counts:remind", "workers:request_changes"]
 
 PASTOR_PERMS = ADMIN_PERMS + DATA_DELETE_PERMS + REPORTING_READ + [
     "offerings:review",
@@ -193,6 +196,7 @@ PASTOR_PERMS = ADMIN_PERMS + DATA_DELETE_PERMS + REPORTING_READ + [
     "announcements:manage",
     "reports:refresh",
     "rbac:read",
+    "programs:approve_events",
 ]
 
 # A Location Pastor can suspend a worker and request removal, but cannot
@@ -248,14 +252,14 @@ DEFAULT_ROLES = {
     "Location Usher": {"score_id": 1, "permissions": USHER_PERMS},
 
     # Level 2: Location governance
-    "Location Admin": {"score_id": 2, "permissions": ADMIN_PERMS + ["users:assign_roles", "programs:create_event"]},
+    "Location Admin": {"score_id": 2, "permissions": ADMIN_PERMS + ["programs:create_event"]},
     "Location Pastor": {"score_id": 2, "permissions": LOCATION_PASTOR_PERMS + ["users:assign_roles", "programs:create_event"]},
 
     # Level 1: collection role at the group scope; not group governance.
     "Group Usher": {"score_id": 1, "permissions": USHER_PERMS},
 
     # Level 3: group governance
-    "Group Admin": {"score_id": 3, "permissions": ADMIN_PERMS + ["users:assign_roles", "programs:create_event", "programs:assign_workers", "programs:approve_assignments"] + OFFICIAL_PERMS},
+    "Group Admin": {"score_id": 3, "permissions": ADMIN_PERMS + ["programs:create_event", "programs:assign_workers", "programs:approve_assignments"] + OFFICIAL_PERMS},
     "Group Pastor": {"score_id": 3, "permissions": PASTOR_PERMS + ["counts:review", "counts:remind", "users:assign_roles", "programs:create_event", "programs:assign_workers", "programs:approve_assignments"] + OFFICIAL_PERMS},
 
     # Level 1: collection role at the region scope; not region governance.
@@ -264,11 +268,11 @@ DEFAULT_ROLES = {
     # Level 4: region governance
     "Region Admin": {
         "score_id": 4,
-        "permissions": ADMIN_PERMS + ["users:assign_roles", "programs:create_event", "programs:assign_workers", "programs:approve_assignments"] + OFFICIAL_PERMS + REGION_HIERARCHY_PERMS
+        "permissions": ADMIN_PERMS + ["programs:create_event", "programs:assign_workers", "programs:approve_assignments"] + OFFICIAL_PERMS + REGION_HIERARCHY_PERMS
     },
     "Region Pastor": {
         "score_id": 4,
-        "permissions": PASTOR_PERMS + ["counts:review", "counts:remind", "users:assign_roles", "programs:create_event", "programs:assign_workers", "programs:approve_assignments"] + OFFICIAL_PERMS + REGION_HIERARCHY_PERMS
+        "permissions": PASTOR_PERMS + ["counts:review", "users:assign_roles", "programs:create_event", "programs:assign_workers", "programs:approve_assignments"] + OFFICIAL_PERMS + REGION_HIERARCHY_PERMS
     },
 
     # Level 1: event capture role. Event-specific Alpha access must be granted
@@ -278,11 +282,11 @@ DEFAULT_ROLES = {
     # Level 5: state governance
     "State Admin": {
         "score_id": 5,
-        "permissions": ADMIN_PERMS + REPORTING_READ + ["users:assign_roles", "programs:create_event", "programs:assign_workers", "programs:approve_assignments"] + OFFICIAL_PERMS + STATE_HIERARCHY_PERMS
+        "permissions": ADMIN_PERMS + ["population_estimates:manage", "programs:create_event", "programs:assign_workers", "programs:approve_assignments"] + OFFICIAL_PERMS + STATE_HIERARCHY_PERMS
     },
     "State Overseer": {
         "score_id": 5,
-        "permissions": PASTOR_PERMS + ["counts:review", "counts:remind", "users:assign_roles", "programs:create_event", "programs:assign_workers", "programs:approve_assignments"] + OFFICIAL_PERMS + STATE_HIERARCHY_PERMS
+        "permissions": PASTOR_PERMS + ["counts:review", "users:assign_roles", "population_estimates:manage", "programs:create_event", "programs:assign_workers", "programs:approve_assignments"] + OFFICIAL_PERMS + STATE_HIERARCHY_PERMS
     },
 
     # Enterprise roles are seeded for the separate higher-level client, which

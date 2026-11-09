@@ -233,8 +233,8 @@ async def create_worker(
         db, current_user=current_user, location_id=worker_in.location_id,
         detail="You can only create workers within your scope",
     )
-    if deps.highest_role_score(current_user) != 2 or not any(role.role_name == "Location Pastor" for role in (current_user.roles or [])):
-        raise HTTPException(status_code=403, detail="Worker registration is initiated by the Location Pastor")
+    if deps.highest_role_score(current_user) != 2:
+        raise HTTPException(status_code=403, detail="Worker candidates must be registered by their Location Pastor or Admin")
     if str(worker_in.location_id) != str(current_user.location_id):
         raise HTTPException(status_code=403, detail="Location Pastors may register workers only at their assigned location")
     try:
@@ -342,8 +342,8 @@ async def update_worker(
         raise HTTPException(status_code=403, detail="Worker status changes require the approval workflow")
     if "location_id" in update_data and update_data["location_id"] != str(worker.location_id):
         raise HTTPException(status_code=403, detail="Worker transfers must use the transfer workflow")
-    if not any(role.role_name in {"Location Pastor", "Location Admin"} for role in (current_user.roles or [])):
-        raise HTTPException(status_code=403, detail="Worker profile edits are limited to location administrators")
+    if not 2 <= deps.highest_role_score(current_user) <= 5:
+        raise HTTPException(status_code=403, detail="Worker profile edits require level 2–5 authority")
     worker = await crud_worker.update(db, db_obj=worker, obj_in=worker_in)
     return worker
 

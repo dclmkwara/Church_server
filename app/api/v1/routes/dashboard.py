@@ -106,7 +106,7 @@ async def _build_expected_population_bulk_preview(
     *,
     lock_locations: bool = False,
 ) -> dict[str, Any]:
-    if not _is_state_overseer(current_user):
+    if not _can_manage_expected_population(current_user):
         raise HTTPException(status_code=403, detail="Only the State Overseer can maintain expected Sunday attendance")
     scope_path = deps.effective_scope_path(current_user)
     if len([part for part in scope_path.split(".") if part]) != 3:
@@ -296,10 +296,9 @@ async def _build_expected_population_bulk_preview(
     }
 
 
-def _is_state_overseer(current_user: User) -> bool:
-    return (
-        deps.highest_role_score(current_user) == 5
-        and any(role.role_name == "State Overseer" and role.score_value == 5 for role in (current_user.roles or []))
+def _can_manage_expected_population(current_user: User) -> bool:
+    return deps.highest_role_score(current_user) == 5 and deps.has_permission(
+        current_user, "population_estimates:manage"
     )
 
 DEFAULT_BOOTSTRAP_SECTIONS = (
@@ -806,7 +805,7 @@ async def list_expected_population(
 
 @router.post(
     "/expected-population",
-    dependencies=[Depends(deps.PermissionChecker("statistics:read"))],
+    dependencies=[Depends(deps.PermissionChecker("population_estimates:manage"))],
 )
 async def create_expected_population_version(
     payload: ExpectedPopulationVersionCreate,
@@ -814,8 +813,8 @@ async def create_expected_population_version(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> dict[str, Any]:
     """Append a version; never overwrite a historical expectation."""
-    if not _is_state_overseer(current_user):
-        raise HTTPException(status_code=403, detail="Only the State Overseer can maintain expected Sunday attendance")
+    if not _can_manage_expected_population(current_user):
+        raise HTTPException(status_code=403, detail="Expected Sunday attendance management is not permitted for this account")
     scope_path = deps.effective_scope_path(current_user)
     if len([part for part in scope_path.split(".") if part]) != 3:
         raise HTTPException(status_code=403, detail="Expected Sunday attendance can only be maintained at State scope")
@@ -865,7 +864,7 @@ async def create_expected_population_version(
 
 @router.post(
     "/expected-population/bulk-preview",
-    dependencies=[Depends(deps.PermissionChecker("statistics:read"))],
+    dependencies=[Depends(deps.PermissionChecker("population_estimates:manage"))],
 )
 async def preview_expected_population_bulk(
     payload: ExpectedPopulationBulkPreviewRequest,
@@ -878,7 +877,7 @@ async def preview_expected_population_bulk(
 
 @router.post(
     "/expected-population/bulk-apply",
-    dependencies=[Depends(deps.PermissionChecker("statistics:read"))],
+    dependencies=[Depends(deps.PermissionChecker("population_estimates:manage"))],
 )
 async def apply_expected_population_bulk(
     payload: ExpectedPopulationBulkApplyRequest,
@@ -886,7 +885,7 @@ async def apply_expected_population_bulk(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> dict[str, Any]:
     """Apply exactly the signed preview after rechecking scope and current versions."""
-    if not _is_state_overseer(current_user):
+    if not _can_manage_expected_population(current_user):
         raise HTTPException(status_code=403, detail="Only the State Overseer can maintain expected Sunday attendance")
     try:
         signed = _expected_population_preview_signer.loads(

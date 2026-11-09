@@ -181,6 +181,15 @@ def highest_role_score(current_user: User) -> int:
     )
 
 
+def has_permission(current_user: User, permission: str) -> bool:
+    """Check a loaded role snapshot for a named permission."""
+    return any(
+        getattr(perm, "permission", None) == permission
+        for role in (getattr(current_user, "roles", None) or [])
+        for perm in (getattr(role, "permissions", None) or [])
+    )
+
+
 def _continental_nation_paths(current_user: User) -> tuple[str, ...]:
     paths = tuple(getattr(current_user, "_authorized_nation_paths", ()) or ())
     if not paths:

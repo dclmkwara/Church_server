@@ -55,7 +55,7 @@ NAV_GROUPS = [
             {"label": "Organization", "icon": "geo-alt", "href": "/organization", "key": "organization"},
             {"label": "Communication", "icon": "megaphone", "href": "/communication", "key": "communication", "module": "communication"},
             {"label": "Reports", "icon": "clipboard-data", "href": "/reports", "key": "reports", "module": "reports"},
-            {"label": "Roles & Permissions", "icon": "shield-lock", "href": "/system/rbac", "key": "system", "module": "system", "min_level": 5},
+            {"label": "Roles & Permissions", "icon": "shield-lock", "href": "/system/rbac", "key": "system", "module": "system", "min_level": 5, "permission": "rbac:read"},
         ],
     },
 ]

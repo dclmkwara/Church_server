@@ -271,7 +271,7 @@ def test_event_approval_is_limited_to_same_level_pastor(scope, score, role_name,
 
     event = SimpleNamespace(reporting_scope=scope, path="org.234.KW.ILR.ILE")
     user = SimpleNamespace(
-        roles=[SimpleNamespace(role_name=role_name, score_value=score)],
+        roles=[SimpleNamespace(role_name=role_name, score_value=score, permissions=[SimpleNamespace(permission="programs:approve_events")])],
         path=event.path,
         user_id="pastor-user",
     )
@@ -280,7 +280,7 @@ def test_event_approval_is_limited_to_same_level_pastor(scope, score, role_name,
 
     other_role_name, other_score = ("State Overseer", 5) if role_name == "Group Pastor" else ("Group Pastor", 3)
     wrong_role = SimpleNamespace(
-        roles=[SimpleNamespace(role_name=other_role_name, score_value=other_score)],
+        roles=[SimpleNamespace(role_name=other_role_name, score_value=other_score, permissions=[])],
         path=event.path,
     )
     with pytest.raises(HTTPException) as exc:
@@ -305,9 +305,79 @@ def test_same_level_pastor_identity_is_used_for_immediate_event_approval(scope, 
     from app.api.v1.routes import programs
 
     user = SimpleNamespace(
-        roles=[SimpleNamespace(role_name=role_name, score_value=score)],
+        roles=[SimpleNamespace(role_name=role_name, score_value=score, permissions=[SimpleNamespace(permission="programs:approve_events")])],
         path="org.234.KW",
     )
     monkeypatch.setattr(programs.deps, "effective_scope_path", lambda _user: "org.234.KW")
     assert programs._is_event_pastor_for_scope(user, scope, "org.234.KW")
     assert not programs._is_event_pastor_for_scope(user, scope, "org.234.KW.ILR")
+
+
+@pytest.mark.parametrize(
+    ("scope", "score", "role_name"),
+    [
+        ("location", 2, "Location Admin"),
+        ("group", 3, "Group Admin"),
+        ("region", 4, "Region Admin"),
+        ("state", 5, "State Admin"),
+    ],
+)
+def test_admin_edit_invalidates_event_approval_until_pastor_reapproves(scope, score, role_name, monkeypatch):
+    from app.api.v1.routes import programs
+
+    event = SimpleNamespace(
+        reporting_scope=scope,
+        path="org.234.KW.ILR.ILE",
+        approval_status="approved",
+        approved_by_id="old-pastor",
+        approved_at=datetime.now(UTC),
+        approval_note="previous approval",
+    )
+    admin = SimpleNamespace(
+        roles=[SimpleNamespace(role_name=role_name, score_value=score, permissions=[])],
+        path=event.path,
+        user_id="admin-user",
+    )
+    monkeypatch.setattr(programs.deps, "effective_scope_path", lambda _user: event.path)
+
+    assert programs._invalidate_event_approval_for_editor(admin, event)
+    assert event.approval_status == "pending"
+    assert event.approved_by_id is None
+    assert event.approved_at is None
+    assert event.approval_note is None
+
+
+@pytest.mark.parametrize(
+    ("scope", "score", "role_name"),
+    [
+        ("location", 2, "Location Pastor"),
+        ("group", 3, "Group Pastor"),
+        ("region", 4, "Region Pastor"),
+        ("state", 5, "State Overseer"),
+    ],
+)
+def test_same_level_pastor_edit_keeps_approval(scope, score, role_name, monkeypatch):
+    from app.api.v1.routes import programs
+
+    event = SimpleNamespace(
+        reporting_scope=scope,
+        path="org.234.KW.ILR.ILE",
+        approval_status="approved",
+        approved_by_id="pastor-user",
+        approved_at=datetime.now(UTC),
+        approval_note=None,
+    )
+    pastor = SimpleNamespace(
+        roles=[SimpleNamespace(
+            role_name=role_name,
+            score_value=score,
+            permissions=[SimpleNamespace(permission="programs:approve_events")],
+        )],
+        path=event.path,
+        user_id="pastor-user",
+    )
+    monkeypatch.setattr(programs.deps, "effective_scope_path", lambda _user: event.path)
+
+    assert not programs._invalidate_event_approval_for_editor(pastor, event)
+    assert event.approval_status == "approved"
+    assert event.approved_by_id == "pastor-user"

@@ -8,7 +8,7 @@ from fastapi import HTTPException
 
 from app.api.v1.routes.dashboard import (
     ExpectedPopulationVersionCreate,
-    _is_state_overseer,
+    _can_manage_expected_population,
     create_expected_population_version,
     list_expected_population,
 )
@@ -111,13 +111,16 @@ def test_combined_count_uses_sum_of_covered_location_estimates_once():
     assert result["expected_population_percent"] == 125
 
 
-def test_only_state_overseer_role_can_manage_estimates():
-    state_overseer = SimpleNamespace(roles=[SimpleNamespace(role_name="State Overseer", score_value=5)])
-    state_admin = SimpleNamespace(roles=[SimpleNamespace(role_name="State Admin", score_value=5)])
-    region_pastor = SimpleNamespace(roles=[SimpleNamespace(role_name="Region Pastor", score_value=4)])
-    assert _is_state_overseer(state_overseer)
-    assert not _is_state_overseer(state_admin)
-    assert not _is_state_overseer(region_pastor)
+def test_expected_population_permission_allows_both_state_governance_roles_only():
+    manage = [SimpleNamespace(permission="population_estimates:manage")]
+    state_overseer = SimpleNamespace(roles=[SimpleNamespace(role_name="Renamed Role", score_value=5, permissions=manage)])
+    state_admin = SimpleNamespace(roles=[SimpleNamespace(role_name="State Admin", score_value=5, permissions=manage)])
+    region_pastor = SimpleNamespace(roles=[SimpleNamespace(role_name="Region Pastor", score_value=4, permissions=manage)])
+    ungranted_state_role = SimpleNamespace(roles=[SimpleNamespace(role_name="State Overseer", score_value=5, permissions=[])])
+    assert _can_manage_expected_population(state_overseer)
+    assert _can_manage_expected_population(state_admin)
+    assert not _can_manage_expected_population(region_pastor)
+    assert not _can_manage_expected_population(ungranted_state_role)
 
 
 class _FakeResult:
@@ -159,7 +162,7 @@ def test_estimate_change_appends_version_and_audit_record():
     user_id = uuid4()
     location = SimpleNamespace(location_id=location_id, path="org.234.KW.R.G.L", is_active=True)
     user = SimpleNamespace(
-        roles=[SimpleNamespace(role_name="State Overseer", score_value=5)],
+        roles=[SimpleNamespace(role_name="State Overseer", score_value=5, permissions=[SimpleNamespace(permission="population_estimates:manage")])],
         path="org.234.KW",
         user_id=user_id,
     )
@@ -179,18 +182,20 @@ def test_estimate_change_appends_version_and_audit_record():
     assert db.commits == 1
 
 
-def test_estimate_change_rejects_state_admin_even_at_same_score():
+def test_estimate_change_allows_state_admin_with_explicit_permission():
     user = SimpleNamespace(
-        roles=[SimpleNamespace(role_name="State Admin", score_value=5)],
+        roles=[SimpleNamespace(role_name="State Admin", score_value=5, permissions=[SimpleNamespace(permission="population_estimates:manage")])],
         path="org.234.KW",
         user_id=uuid4(),
     )
-    with pytest.raises(HTTPException) as exc:
-        asyncio.run(create_expected_population_version(
-            ExpectedPopulationVersionCreate(location_id=uuid4(), expected_value=1, effective_from=date.today()),
-            db=_FakeSession(), current_user=user,
-        ))
-    assert exc.value.status_code == 403
+    location = SimpleNamespace(location_id=str(uuid4()), path="org.234.KW.R.G.L", is_active=True)
+    user.roles[0].permissions = [SimpleNamespace(permission="population_estimates:manage")]
+    db = _FakeSession(location=location)
+    asyncio.run(create_expected_population_version(
+        ExpectedPopulationVersionCreate(location_id=location.location_id, expected_value=1, effective_from=date.today()),
+        db=db, current_user=user,
+    ))
+    assert db.commits == 1
 
 
 def test_history_api_preserves_all_versions_and_current_value():

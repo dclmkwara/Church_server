@@ -22,14 +22,8 @@ def _ensure_min_score(current_user: User, min_score: int, detail: str) -> None:
     if max((role.score_value for role in current_user.roles), default=0) < min_score:
         raise HTTPException(status_code=403, detail=detail)
 
-_STATE_OR_HIGHER_ROLES = (
-    'State Admin', 'State Overseer', 'Zonal Coordinator',
-    'National Admin', 'National Overseer', 'Continental Admin',
-    'Continental Overseer', 'Global Admin',
-)
-
 def _has_authoritative_role(current_user: User) -> bool:
-    return any(role.role_name in _STATE_OR_HIGHER_ROLES for role in (current_user.roles or []))
+    return deps.highest_role_score(current_user) >= 5 and deps.has_permission(current_user, "programs:manage")
 
 @router.get('/domains', response_model=List[ProgramDomainResponse], dependencies=[Depends(deps.PermissionChecker('programs:read'))])
 async def read_program_domains(db: AsyncSession = Depends(deps.get_db), skip: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=500), current_user: User = Depends(deps.get_current_active_user)) -> Any:
@@ -241,34 +235,38 @@ async def create_program_event(*, db: AsyncSession = Depends(deps.get_db), event
     return result.scalar_one()
 
 
-EVENT_PASTOR_SCOPE_ROLES = {
-        'location': (2, {'Location Pastor'}),
-        'group': (3, {'Group Pastor'}),
-        'region': (4, {'Region Pastor'}),
-        'state': (5, {'State Overseer'}),
-}
+EVENT_SCOPE_SCORES = {'location': 2, 'group': 3, 'region': 4, 'state': 5}
 
 
 def _is_event_pastor_for_scope(current_user: User, reporting_scope: str, event_path: str) -> bool:
-    scope_role = EVENT_PASTOR_SCOPE_ROLES.get(reporting_scope)
-    if not scope_role:
+    score = EVENT_SCOPE_SCORES.get(reporting_scope)
+    if score is None:
         return False
-    score, pastor_roles = scope_role
-    role_names = {role.role_name for role in (current_user.roles or [])}
     return (
         deps.highest_role_score(current_user) == score
-        and bool(role_names & pastor_roles)
+        and deps.has_permission(current_user, "programs:approve_events")
         and str(deps.effective_scope_path(current_user)) == str(event_path)
     )
 
 
 def _require_event_pastor(current_user: User, event: ProgramEvent) -> None:
-    if event.reporting_scope not in EVENT_PASTOR_SCOPE_ROLES:
+    if event.reporting_scope not in EVENT_SCOPE_SCORES:
         raise HTTPException(status_code=422, detail='Event has an unsupported approval scope')
     if not _is_event_pastor_for_scope(current_user, event.reporting_scope, str(event.path)):
-        raise HTTPException(status_code=403, detail='Only the pastor at the event jurisdiction may approve this schedule')
+        raise HTTPException(status_code=403, detail='The event approver must be authorized at the same jurisdiction and cannot approve their own submission')
     if getattr(event, 'created_by_id', None) and str(event.created_by_id) == str(current_user.user_id):
         raise HTTPException(status_code=403, detail='The event creator cannot approve their own schedule')
+
+
+def _invalidate_event_approval_for_editor(current_user: User, event: ProgramEvent) -> bool:
+    """Require pastor re-approval when an admin changes an event schedule."""
+    if _is_event_pastor_for_scope(current_user, event.reporting_scope, str(event.path)):
+        return False
+    event.approval_status = 'pending'
+    event.approved_by_id = None
+    event.approved_at = None
+    event.approval_note = None
+    return True
 
 
 @router.post('/events/{event_id}/approve', response_model=ProgramEventResponse)
@@ -423,6 +421,12 @@ async def update_program_event(*, db: AsyncSession = Depends(deps.get_db), event
         alpha_check = select(text('CAST(:alpha_path AS ltree) <@ CAST(:event_path AS ltree)')).params(alpha_path=str(alpha_location.path), event_path=target_path)
         if not (await db.execute(alpha_check)).scalar(): raise HTTPException(status_code=400, detail='Alpha location must be within the event path')
     updated = await program_event.update(db, db_obj=db_event, obj_in=event_in)
+    if _invalidate_event_approval_for_editor(current_user, updated):
+        # Admin edits to an approved schedule must pass through the same-level
+        # pastor again; the previous approval no longer covers changed details.
+        db.add(updated)
+        await db.commit()
+        await db.refresh(updated)
     result = await db.execute(
         select(ProgramEvent).options(
             selectinload(ProgramEvent.program_type),
@@ -595,6 +599,8 @@ async def approve_event_assignment(assignment_id: UUID, db: AsyncSession = Depen
     if not db_assignment: raise HTTPException(status_code=404, detail='Assignment not found')
     deps.ensure_path_in_scope(current_user, db_assignment.path, detail='Assignment outside your scope')
     _ensure_min_score(current_user, 3, 'Group-level access is required to approve event assignments')
+    if str(db_assignment.assigned_by_id) == str(current_user.user_id):
+        raise HTTPException(status_code=403, detail='You cannot approve your own event-worker assignment')
     return await event_assignment.approve(db, db_obj=db_assignment, approved_by_id=current_user.user_id)
 
 @router.post('/assignments/{assignment_id}/reject', response_model=EventAssignmentResponse, dependencies=[Depends(deps.PermissionChecker('programs:approve_assignments'))])
@@ -604,5 +610,7 @@ async def reject_event_assignment(assignment_id: UUID, note: str = Query(None), 
     if not db_assignment: raise HTTPException(status_code=404, detail='Assignment not found')
     deps.ensure_path_in_scope(current_user, db_assignment.path, detail='Assignment outside your scope')
     _ensure_min_score(current_user, 3, 'Group-level access is required to reject event assignments')
+    if str(db_assignment.assigned_by_id) == str(current_user.user_id):
+        raise HTTPException(status_code=403, detail='You cannot reject your own event-worker assignment')
     return await event_assignment.reject(db, db_obj=db_assignment, approved_by_id=current_user.user_id, note=note)
 

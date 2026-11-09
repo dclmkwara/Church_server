@@ -940,8 +940,8 @@ async def remind_unreported_location(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Send the existing in-app broadcast to one location with no Sunday report."""
-    if deps.highest_role_score(current_user) < 3:
-        raise HTTPException(status_code=403, detail="A pastor-level reviewer is required to remind a location")
+    if deps.highest_role_score(current_user) < 2:
+        raise HTTPException(status_code=403, detail="Level 2 or higher authority is required to remind a location")
     location_result = await db.execute(
         select(Location).where(Location.location_id == str(payload.location_id)).with_for_update()
     )
@@ -1010,13 +1010,15 @@ async def remind_unreported_location(
     }
 
 
-@router.get("/review/unreported", dependencies=[Depends(deps.PermissionChecker("counts:review"))])
+@router.get("/review/unreported")
 async def list_unreported_sunday_locations(
     occurrence_date: date = Query(...),
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
-    """List uncovered locations for a Sunday so a pastor can send reminders."""
+    """List uncovered locations for a Sunday for authorized reviewers/reminders."""
+    if not (deps.has_permission(current_user, "counts:review") or deps.has_permission(current_user, "counts:remind")):
+        raise HTTPException(status_code=403, detail="Count review or reminder permission is required")
     if occurrence_date.weekday() != 6:
         raise HTTPException(status_code=422, detail="Sunday Worship reminders require a Sunday date")
     scope_path = deps.effective_scope_path(current_user)

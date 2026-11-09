@@ -49,7 +49,7 @@ class _Session:
 def _overseer():
     return SimpleNamespace(
         user_id=uuid4(), path="dclm.234.kwara",
-        roles=[SimpleNamespace(role_name="State Overseer", score_value=5)],
+        roles=[SimpleNamespace(role_name="State Overseer", score_value=5, permissions=[SimpleNamespace(permission="population_estimates:manage")])],
     )
 
 
@@ -167,10 +167,10 @@ def test_csv_with_unknown_code_cannot_be_applied():
     assert preview["can_apply"] is False
 
 
-def test_csv_preview_rejects_non_state_overseer():
+def test_csv_preview_rejects_non_state_scope_even_with_permission():
     user = SimpleNamespace(
         user_id=uuid4(), path="dclm.234.kwara",
-        roles=[SimpleNamespace(role_name="State Admin", score_value=5)],
+        roles=[SimpleNamespace(role_name="Region Pastor", score_value=4, permissions=[SimpleNamespace(permission="population_estimates:manage")])],
     )
     try:
         asyncio.run(_build_expected_population_bulk_preview(
@@ -180,4 +180,17 @@ def test_csv_preview_rejects_non_state_overseer():
     except HTTPException as exc:
         assert exc.status_code == 403
     else:
-        raise AssertionError("State Admin must not preview an estimate import")
+        raise AssertionError("A Region Pastor cannot preview a State estimate import")
+
+
+def test_state_admin_can_preview_expected_attendance_csv():
+    user = SimpleNamespace(
+        user_id=uuid4(), path="dclm.234.kwara",
+        roles=[SimpleNamespace(role_name="State Admin", score_value=5, permissions=[SimpleNamespace(permission="population_estimates:manage")])],
+    )
+    preview = asyncio.run(_build_expected_population_bulk_preview(
+        _Session([_Result()]), user,
+        "location_code,expected_attendance,effective_from\nOUTSIDE,10,2026-11-01\n",
+    ))
+    assert preview["rows"][0]["status"] == "unknown"
+    assert not preview["can_apply"]

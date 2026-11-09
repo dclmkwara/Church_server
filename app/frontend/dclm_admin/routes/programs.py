@@ -1776,11 +1776,7 @@ def register_program_routes(app) -> None:
         row = await ProgramService.get_event(request, ctx, event_id)
         if row is None:
             return P("Program event not found.", cls="text-muted")
-        expected_pastor = {
-            "location": "Location Pastor", "group": "Group Pastor",
-            "region": "Region Pastor", "state": "State Overseer",
-        }.get(row.get("reporting_scope"))
-        can_approve_event = row.get("approval_status") == "pending" and ctx.profile.role_label == expected_pastor
+        can_approve_event = row.get("approval_status") == "pending" and ctx.has_permission("programs:approve_events")
         event_approval = Div(
             P("Awaiting approval from the pastor at this level.", cls="small text-warning mb-2"),
             Button(

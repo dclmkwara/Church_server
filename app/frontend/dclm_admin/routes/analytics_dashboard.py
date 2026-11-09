@@ -520,7 +520,7 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
     other_workers = max(total_workers - active_workers - awaiting_workers - suspended_workers, 0)
     expected_attendance = _integer(attendance_summary.get("expected"))
     present_attendance = _integer(attendance_summary.get("present"))
-    attendance_note = "Roster-based attendance rate withheld until split submissions deduplicate expected workers." if expected_attendance else "No attendance submission in this scope."
+    attendance_note = "Not enough roster data yet." if expected_attendance else "No attendance submission in this scope."
     ancestors = series.get("ancestors") if isinstance(series.get("ancestors"), list) else []
     named_scope = next((str(item.get("name")) for item in ancestors if item.get("path") == scope_path and item.get("name")), scope_label)
     worker_note = f"{active_workers} active · {awaiting_workers} awaiting approval · {suspended_workers} suspended · {other_workers} inactive/other · {total_workers} on register."
@@ -537,7 +537,7 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
             f"{_number(expected_total)} expected across {current.get('expected_population_counted_locations', 0)} locations; "
             f"{current.get('expected_population_no_estimate_locations', 0)} counted locations have no estimate."
         )
-    can_manage_expected = level == "State" and ctx.level == 5 and ctx.profile.role_label == "State Overseer"
+    can_manage_expected = level == "State" and ctx.level == 5 and ctx.has_permission("population_estimates:manage")
     dashboard_url = "/dashboard"
     filters = Form(
         Input(type="hidden", name="profile", value=ctx.profile.key),
@@ -588,7 +588,7 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
                 ),
                     Div(
                         Div(_dashboard_loading_panel("locations" if level == "Location" else "child scopes"), id="analytics-children-panel", hx_get=_dashboard_panels_url(ctx, "/dashboard/panels"), hx_trigger="load", hx_target="this", hx_swap="innerHTML", cls="analytics-lazy-panel", aria_busy="true"),
-                        Div(_dashboard_loading_panel("Needs attention"), id="analytics-attention-panel", cls="analytics-lazy-panel", aria_busy="true") if ctx.has_permission("counts:review") else _review_attention_note(level, panel_id="analytics-attention-panel"),
+                        Div(_dashboard_loading_panel("Needs attention"), id="analytics-attention-panel", cls="analytics-lazy-panel", aria_busy="true") if (ctx.has_permission("counts:review") or ctx.has_permission("counts:remind")) else _review_attention_note(level, panel_id="analytics-attention-panel"),
                         cls="analytics-content-split",
                     ),
                 Div(_dashboard_loading_panel("weekly trend"), id="analytics-trend-panel", cls="analytics-lazy-panel", aria_busy="true"),
@@ -646,7 +646,7 @@ async def render_analytics_dashboard_panel(request: Request, ctx: Any, panel: st
         total, counted = report.get("total"), _integer(report.get("n_counted"))
         points.append({"date": when.isoformat(), "average": round(_integer(total) / counted) if total is not None and counted else None, "counted": counted, "expected": _integer(report.get("n_expected"))})
     trend_panel = Div(H2("Weekly trend", cls="analytics-panel-title"), P("Average population per reporting location and coverage of counted reports. Missing reports are not plotted as zero.", cls="analytics-note"), _line_chart(points, weeks), cls="panel analytics-trend-panel")
-    if not can_review:
+    if not can_review and not ctx.has_permission("counts:remind"):
         attention_panel = _review_attention_note(level, panel_id="analytics-attention-panel")
     else:
         attention_panel = _attention_panel(current, queue, children, child_reports, series, ctx, latest, series.get("program_type_id"))

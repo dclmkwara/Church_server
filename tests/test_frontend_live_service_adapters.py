@@ -736,7 +736,7 @@ def test_reports_navigation_and_routes_follow_permission_not_role_score(monkeypa
     administrator = build_context({"profile": "location_admin"})
     assert pastor.level == administrator.level == 2
     assert "reports" in pastor.visible_modules
-    assert "reports" not in administrator.visible_modules
+    assert "reports" in administrator.visible_modules
 
     async def receive():
         return {"type": "http.request", "body": b"", "more_body": False}
@@ -749,7 +749,7 @@ def test_reports_navigation_and_routes_follow_permission_not_role_score(monkeypa
     )
     try:
         response = asyncio.run(content_route.endpoint(request))
-        assert "reports:read permission" in response.body.decode()
+        assert "reports:read permission" not in response.body.decode()
         refresh_request = Request(
             {"type": "http", "method": "POST", "path": "/reports/refresh", "headers": [], "query_string": b"profile=location_admin", "path_params": {}, "app": frontend_app},
             receive,

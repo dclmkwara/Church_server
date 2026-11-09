@@ -21,6 +21,11 @@ from fastapi import HTTPException
 router = APIRouter()
 
 
+def _require_worker_change_requester(current_user: User) -> None:
+    if deps.highest_role_score(current_user) < 2 or not deps.has_permission(current_user, "workers:request_changes"):
+        raise HTTPException(status_code=403, detail="Worker-change request permission is required")
+
+
 @router.post("/transfers", response_model=TransferRequestResponse, status_code=201)
 async def create_transfer_request(
     *,
@@ -28,12 +33,15 @@ async def create_transfer_request(
     payload: TransferRequestCreate,
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
-    if deps.highest_role_score(current_user) != 2:
-        raise HTTPException(status_code=403, detail="Only a Location Pastor may initiate a worker transfer")
+    _require_worker_change_requester(current_user)
     from app.models.user import Worker
     worker = await db.get(Worker, payload.worker_id)
-    if not worker or str(worker.location_id) != str(current_user.location_id):
-        raise HTTPException(status_code=403, detail="You may initiate transfer only for a worker at your assigned location")
+    if not worker or worker.is_deleted:
+        raise HTTPException(status_code=404, detail="Worker not found")
+    await deps.get_location_in_scope(
+        db, current_user=current_user, location_id=worker.location_id,
+        detail="Worker is outside your assigned scope",
+    )
     return await approvals.create_transfer(
         db,
         worker_id=payload.worker_id,
@@ -53,7 +61,7 @@ async def list_transfer_requests(
     limit: int = 100,
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
-    if deps.highest_role_score(current_user) < 2:
+    if deps.highest_role_score(current_user) < 2 or not deps.has_permission(current_user, "workers:approve"):
         raise HTTPException(status_code=403, detail="A church leadership role is required to review transfers")
     scope_path = deps.effective_scope_path(current_user)
     return await approvals.list_transfers(db, scope_path=scope_path, status=status, skip=skip, limit=limit)
@@ -66,7 +74,7 @@ async def approve_transfer_request(
     request_id: UUID,
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
-    if deps.highest_role_score(current_user) < 2:
+    if deps.highest_role_score(current_user) < 2 or not deps.has_permission(current_user, "workers:approve"):
         raise HTTPException(status_code=403, detail="A church leadership role is required to review transfers")
     scope_path = deps.effective_scope_path(current_user)
     return await approvals.approve_transfer(
@@ -83,6 +91,8 @@ async def reject_transfer_request(
     reason: Optional[str] = None,
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
+    if deps.highest_role_score(current_user) < 2 or not deps.has_permission(current_user, "workers:approve"):
+        raise HTTPException(status_code=403, detail="A pastor with worker-approval authority is required to reject transfers")
     scope_path = deps.effective_scope_path(current_user)
     return await approvals.reject_transfer(
         db, request_id=request_id, approver_id=current_user.user_id,
@@ -98,8 +108,15 @@ async def create_status_change_request(
     payload: StatusChangeRequestCreate,
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
-    if deps.highest_role_score(current_user) != 2:
-        raise HTTPException(status_code=403, detail="Only a Location Pastor may submit a worker status change request")
+    _require_worker_change_requester(current_user)
+    from app.models.user import Worker
+    worker = await db.get(Worker, payload.worker_id)
+    if not worker or worker.is_deleted:
+        raise HTTPException(status_code=404, detail="Worker not found")
+    await deps.get_location_in_scope(
+        db, current_user=current_user, location_id=worker.location_id,
+        detail="Worker is outside your assigned scope",
+    )
     return await approvals.create_status_change(
         db,
         worker_id=payload.worker_id,
@@ -119,7 +136,7 @@ async def list_status_change_requests(
     limit: int = 100,
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
-    if deps.highest_role_score(current_user) < 3:
+    if deps.highest_role_score(current_user) < 3 or not deps.has_permission(current_user, "workers:approve"):
         raise HTTPException(status_code=403, detail="Group Pastor approval or higher is required for status changes")
     scope_path = deps.effective_scope_path(current_user)
     return await approvals.list_status_changes(db, scope_path=scope_path, status=status, skip=skip, limit=limit)
@@ -132,7 +149,7 @@ async def approve_status_change_request(
     request_id: UUID,
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
-    if deps.highest_role_score(current_user) < 3:
+    if deps.highest_role_score(current_user) < 3 or not deps.has_permission(current_user, "workers:approve"):
         raise HTTPException(status_code=403, detail="Group Pastor approval or higher is required for status changes")
     scope_path = deps.effective_scope_path(current_user)
     return await approvals.approve_status_change(
@@ -148,6 +165,8 @@ async def reject_status_change_request(
     reason: Optional[str] = None,
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
+    if deps.highest_role_score(current_user) < 3 or not deps.has_permission(current_user, "workers:approve"):
+        raise HTTPException(status_code=403, detail="Group Pastor approval or higher is required for status changes")
     scope_path = deps.effective_scope_path(current_user)
     return await approvals.reject_status_change(
         db, request_id=request_id, approver_id=current_user.user_id, reason=reason, scope_path=scope_path
@@ -175,15 +194,18 @@ async def create_removal_request(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Submit a worker removal request (starts at Group Pastor / score 3)."""
-    if deps.highest_role_score(current_user) != 2:
-        raise HTTPException(status_code=403, detail="Only a Location Pastor may submit a worker removal request")
+    _require_worker_change_requester(current_user)
     if len(payload.reason.strip()) < 20:
         raise HTTPException(status_code=400, detail="Reason must be at least 20 characters")
 
     from app.models.user import Worker
     worker = await db.get(Worker, payload.worker_id)
-    if not worker or str(worker.location_id) != str(current_user.location_id):
-        raise HTTPException(status_code=403, detail="You may submit removal only for a worker at your assigned location")
+    if not worker or worker.is_deleted:
+        raise HTTPException(status_code=404, detail="Worker not found")
+    await deps.get_location_in_scope(
+        db, current_user=current_user, location_id=worker.location_id,
+        detail="Worker is outside your assigned scope",
+    )
     return await removal.submit(
         db,
         worker_id=payload.worker_id,
@@ -204,7 +226,7 @@ async def list_removal_requests(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """List removal requests in the current user's scope."""
-    if deps.highest_role_score(current_user) < 3:
+    if deps.highest_role_score(current_user) < 3 or not deps.has_permission(current_user, "workers:approve"):
         raise HTTPException(status_code=403, detail="Group Pastor or higher authority is required to review removal requests")
     scope_path = deps.effective_scope_path(current_user)
     return await removal.list_requests(
@@ -226,6 +248,8 @@ async def approve_removal_request(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> Any:
     """Approve request and soft-delete the worker."""
+    if deps.highest_role_score(current_user) < 3 or not deps.has_permission(current_user, "workers:approve"):
+        raise HTTPException(status_code=403, detail="Group Pastor or higher authority is required to approve removal requests")
     scope_path = deps.effective_scope_path(current_user)
 
     from app.models.user import Role, RoleScore

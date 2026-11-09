@@ -175,6 +175,8 @@ async def create_user(
     assigner_score = deps.highest_role_score(current_user)
     if assigner_score < 2 or any((role.score_value != 1 and not security.can_assign_role(assigner_score, role.score_value)) for role in target_roles):
         raise HTTPException(status_code=403, detail="You may assign worker roles or lower pastoral roles within your authority")
+    if any(role.score_value >= assigner_score for role in target_roles) and not deps.has_permission(current_user, "users:assign_roles"):
+        raise HTTPException(status_code=403, detail="Only the pastor may create or assign access at this leadership level")
     
     # Create user (CRUD will validate worker exists)
     user = await crud_user.create(db, obj_in=user_in)
@@ -347,11 +349,19 @@ async def update_user(
         - Changing roles requires appropriate permissions
         - Cannot update user outside your hierarchical scope
     """
-    user = await crud_user.get(db, id=user_id)
+    from app.models.user import Role as RoleModel
+    target_result = await db.execute(
+        select(User).options(selectinload(User.roles).selectinload(RoleModel.score)).where(User.user_id == user_id)
+    )
+    user = target_result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
     deps.ensure_path_in_scope(current_user, user.path, detail="User outside your scope")
+    actor_score = deps.highest_role_score(current_user)
+    target_score = max((role.score_value for role in (user.roles or [])), default=0)
+    if target_score >= actor_score and not deps.has_permission(current_user, "users:assign_roles"):
+        raise HTTPException(status_code=403, detail="Only the pastor may manage an admin or pastor account")
     user = await crud_user.update(db, db_obj=user, obj_in=user_in)
     return user
 

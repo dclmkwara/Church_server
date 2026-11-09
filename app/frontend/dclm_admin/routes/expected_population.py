@@ -21,8 +21,8 @@ from ..components.shell import shell_layout
 from ..components.ui import empty_state, page_intro, page_stack, section_card
 
 
-def _is_state_overseer(ctx) -> bool:
-    return ctx.level == 5 and ctx.profile.role_label == "State Overseer"
+def _can_manage_expected_population(ctx) -> bool:
+    return ctx.level == 5 and ctx.has_permission("population_estimates:manage")
 
 
 def _expected_population_template_csv(payload: dict) -> str:
@@ -140,8 +140,8 @@ def register_expected_population_routes(app) -> None:
     @app.get("/analytics/expected-population")
     async def expected_population_page(request: Request):
         ctx = active_scope_context(request, build_context(request))
-        if not _is_state_overseer(ctx):
-            content = empty_state("shield-lock", "State Overseer access required", "Only the State Overseer can maintain expected Sunday attendance estimates.")
+        if not _can_manage_expected_population(ctx):
+            content = empty_state("shield-lock", "State leadership access required", "Your account cannot maintain expected Sunday attendance estimates.")
         else:
             client = async_client(get_api_client())
             try:
@@ -197,8 +197,8 @@ def register_expected_population_routes(app) -> None:
     @app.post("/analytics/expected-population")
     async def expected_population_save(request: Request):
         ctx = active_scope_context(request, build_context(request))
-        if not _is_state_overseer(ctx):
-            return Div(P("Only the State Overseer can change expected Sunday attendance.", role="alert", cls="text-danger"))
+        if not _can_manage_expected_population(ctx):
+            return Div(P("Your account cannot change expected Sunday attendance.", role="alert", cls="text-danger"))
         form = await request.form()
         try:
             location_id = str(form.get("location_id") or "")
@@ -219,8 +219,8 @@ def register_expected_population_routes(app) -> None:
     @app.get("/analytics/expected-population/template.csv")
     async def expected_population_csv_template(request: Request):
         ctx = active_scope_context(request, build_context(request))
-        if not _is_state_overseer(ctx):
-            return Div(P("Only the State Overseer can download the expected-attendance template.", role="alert", cls="text-danger"))
+        if not _can_manage_expected_population(ctx):
+            return Div(P("Your account cannot download the expected-attendance template.", role="alert", cls="text-danger"))
         try:
             client = async_client(get_api_client())
             payload = await client.get_expected_population(
@@ -238,8 +238,8 @@ def register_expected_population_routes(app) -> None:
     @app.post("/analytics/expected-population/bulk-preview")
     async def expected_population_bulk_preview(request: Request):
         ctx = active_scope_context(request, build_context(request))
-        if not _is_state_overseer(ctx):
-            return Alert("Only the State Overseer can preview this import.", variant="danger", role="alert")
+        if not _can_manage_expected_population(ctx):
+            return Alert("Your account cannot preview this import.", variant="danger", role="alert")
         form = await request.form()
         upload = form.get("file")
         csv_text = str(form.get("csv_text") or "")
@@ -263,8 +263,8 @@ def register_expected_population_routes(app) -> None:
     @app.post("/analytics/expected-population/bulk-apply")
     async def expected_population_bulk_apply(request: Request):
         ctx = active_scope_context(request, build_context(request))
-        if not _is_state_overseer(ctx):
-            return Alert("Only the State Overseer can apply this import.", variant="danger", role="alert")
+        if not _can_manage_expected_population(ctx):
+            return Alert("Your account cannot apply this import.", variant="danger", role="alert")
         form = await request.form()
         preview_token = str(form.get("preview_token") or "")
         if not preview_token:

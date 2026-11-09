@@ -224,12 +224,24 @@ VISIBLE_MODULES = {
     9: ["dashboard", "inbox", "people", "workflows", "church-data", "fellowship", "organization", "communication", "reports"],
 }
 
+_DEMO_ADMIN_PERMISSIONS = frozenset({
+    "reports:read", "statistics:read", "counts:remind", "workers:request_changes",
+    "programs:manage", "programs:create_event",
+})
+_DEMO_PASTOR_PERMISSIONS = _DEMO_ADMIN_PERMISSIONS | frozenset({
+    "reports:refresh", "programs:approve_events", "counts:review", "offerings:review",
+    "workers:approve", "users:assign_roles", "rbac:read",
+})
+
 DEMO_ROLE_PERMISSIONS = {
-    "location_pastor": frozenset({"reports:read", "reports:refresh"}),
-    "group_pastor": frozenset({"reports:read", "reports:refresh"}),
-    "region_pastor": frozenset({"reports:read", "reports:refresh"}),
-    "state_admin": frozenset({"reports:read"}),
-    "state_overseer": frozenset({"reports:read", "reports:refresh"}),
+    "location_admin": _DEMO_ADMIN_PERMISSIONS,
+    "location_pastor": _DEMO_PASTOR_PERMISSIONS,
+    "group_admin": _DEMO_ADMIN_PERMISSIONS | frozenset({"programs:assign_workers", "programs:approve_assignments"}),
+    "group_pastor": _DEMO_PASTOR_PERMISSIONS | frozenset({"programs:assign_workers", "programs:approve_assignments"}),
+    "region_admin": _DEMO_ADMIN_PERMISSIONS | frozenset({"programs:assign_workers", "programs:approve_assignments"}),
+    "region_pastor": _DEMO_PASTOR_PERMISSIONS | frozenset({"programs:assign_workers", "programs:approve_assignments"}),
+    "state_admin": _DEMO_ADMIN_PERMISSIONS | frozenset({"population_estimates:manage", "programs:assign_workers", "programs:approve_assignments"}),
+    "state_overseer": _DEMO_PASTOR_PERMISSIONS | frozenset({"population_estimates:manage", "programs:assign_workers", "programs:approve_assignments"}),
     "national_admin": frozenset({"reports:read", "reports:refresh"}),
     "continental_admin": frozenset({"reports:read", "reports:refresh"}),
     "global_admin": frozenset({"reports:read", "reports:refresh"}),
