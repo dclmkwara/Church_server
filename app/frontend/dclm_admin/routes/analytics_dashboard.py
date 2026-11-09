@@ -453,7 +453,6 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
         if not isinstance(exc, HTTPException):
             raise
         result = Div(
-            Link(rel="stylesheet", href="/assets/css/analytics-dashboard.css?v=8"),
             Div(P(f"Scope request refused ({exc.status_code})", cls="analytics-error-title"), P(str(exc.detail), cls="analytics-error-message"), id="analytics-dashboard-error", role="alert", cls="analytics-error panel"),
             id="analytics-dashboard-body", cls="prototype-dashboard",
         )
@@ -487,7 +486,6 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
     if isinstance(series, dict) and series.get("error"):
         message = str(series.get("error") or "The dashboard data service refused the request.")
         result = Div(
-            Link(rel="stylesheet", href="/assets/css/analytics-dashboard.css?v=8"),
             Div(P("Dashboard data could not be loaded", cls="analytics-error-title"), P(message, cls="analytics-error-message"), id="analytics-dashboard-error", role="alert", cls="analytics-error panel"),
             id="analytics-dashboard-body", cls="prototype-dashboard",
         )
@@ -553,7 +551,6 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
     )
     # The filter form submits the current jurisdiction path; scope authorization remains enforced by active_scope_context.
     result = Div(
-        Link(rel="stylesheet", href="/assets/css/analytics-dashboard.css?v=8"),
         Script("""
         (function(){
           if (window.__dclmAnalyticsRowNavigation) return;

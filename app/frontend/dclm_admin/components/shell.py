@@ -356,7 +356,7 @@ def shell_layout(
         Link(rel="apple-touch-icon", sizes="180x180", href="/assets/apple-touch-icon.png"),
         Link(rel="manifest", href="/manifest.json"),
         Link(rel="stylesheet", href="/assets/css/admin.css?v=20261031_0930"),
-        Link(rel="stylesheet", href="/assets/css/analytics-dashboard.css?v=9"),
+        Link(rel="stylesheet", href="/assets/css/analytics-dashboard.css?v=10"),
         Script("""
 (function(){
   try {
