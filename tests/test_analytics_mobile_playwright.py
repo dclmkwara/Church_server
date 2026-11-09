@@ -107,3 +107,32 @@ def test_analytics_and_existing_admin_pages_fit_mobile_viewports():
             context.close()
         browser.close()
     assert not failures, "Mobile layout violations:\n" + "\n".join(failures)
+
+
+def test_analytics_dashboard_stacks_content_panels_below_640px():
+    """Keep the groups table and attention panel full-width on phone screens."""
+    from playwright.sync_api import sync_playwright
+
+    css = Path(__file__).parents[1] / "app/frontend/dclm_admin/assets/css/analytics-dashboard.css"
+    style = css.read_text(encoding="utf-8")
+    with sync_playwright() as runtime:
+        browser = runtime.chromium.launch(headless=True)
+        page = browser.new_page(viewport={"width": 390, "height": 844})
+        page.set_content(
+            f"""<style>{style}</style>
+            <main class="prototype-dashboard">
+              <div class="analytics-content-split">
+                <section class="analytics-table-panel">Groups</section>
+                <section class="analytics-attention-panel">Needs attention</section>
+              </div>
+            </main>"""
+        )
+        grid_columns = page.locator(".analytics-content-split").evaluate(
+            "element => getComputedStyle(element).gridTemplateColumns"
+        )
+        panel_widths = page.locator(".analytics-content-split > *").evaluate_all(
+            "elements => elements.map(element => Math.round(element.getBoundingClientRect().width))"
+        )
+        browser.close()
+    assert len(grid_columns.split()) == 1, f"Expected one phone-width column, got {grid_columns}"
+    assert panel_widths[0] == panel_widths[1] and panel_widths[0] >= 340

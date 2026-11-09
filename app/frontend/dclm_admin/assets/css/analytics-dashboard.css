@@ -182,7 +182,9 @@ body:has(.prototype-dashboard) { margin:0; background:var(--ad-bg); }
   .analytics-filter-period { flex-wrap:wrap; min-width:0; }
   .analytics-pending-switch { white-space:normal; }
   .analytics-coverage-panel,.analytics-metric,.analytics-table-panel,.analytics-attention-panel,.analytics-trend-panel { padding:12px; }
-  .analytics-content-split { grid-template-columns:minmax(0,1fr); }
+  /* Match the more specific desktop prototype rule above. Without the
+     prototype qualifier, the two-column rule wins and compresses both panels. */
+  .prototype-dashboard .analytics-content-split { grid-template-columns:minmax(0,1fr); }
   .analytics-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .analytics-metric { overflow-wrap:anywhere; }
   .analytics-card-head { align-items:flex-start; flex-wrap:wrap; }
