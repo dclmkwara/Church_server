@@ -1,4 +1,4 @@
-from app.frontend.dclm_admin.routes.analytics_dashboard import _line_chart, _location_history_table, _scope_dashboard_link
+from app.frontend.dclm_admin.routes.analytics_dashboard import _line_chart, _location_history_table, _period_delta, _scope_dashboard_link, _waiting_on_decision
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
@@ -102,3 +102,19 @@ def test_location_history_keeps_missing_zero_pending_and_combined_distinct():
     assert "Included in combined report" in rendered
     assert "No separate location total" in rendered
     assert "Awaiting approval" in rendered
+
+
+def test_dashboard_period_delta_handles_zero_and_no_comparison_without_nan():
+    assert _period_delta(120, 100, previous_records=2, noun="4 Sundays") == "Up 20% vs previous 4 Sundays"
+    assert _period_delta(0, 100, previous_records=1, noun="4 Sundays") == "Down 100% vs previous 4 Sundays"
+    assert _period_delta(10, 0, previous_records=0, noun="4 Sundays") == "New this period · 4 Sundays"
+    assert _period_delta(0, 0, previous_records=0, noun="4 Sundays") == "No prior-period records to compare"
+
+
+def test_waiting_on_decision_shows_category_count_and_oldest_age():
+    panel = _waiting_on_decision({"pending_approvals": [{"label": "Count reports", "count": 3, "oldest_age_hours": 26}]}, 4)
+    rendered = str(panel)
+    assert "Waiting on a decision" in rendered
+    assert "Count reports" in rendered and "3" in rendered and "oldest waiting 26h" in rendered
+    empty = str(_waiting_on_decision({"pending_approvals": []}, 8))
+    assert "No requests waiting for a decision." in empty

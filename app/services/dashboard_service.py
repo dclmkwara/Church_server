@@ -8,8 +8,9 @@ Production changes:
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, case, cast, extract, func, select, Integer
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +20,7 @@ from app.models.approvals import StatusChangeRequest, TransferRequest, WorkerRem
 from app.models.attendance import WorkerAttendance
 from app.models.church_member import ChurchMember
 from app.models.counts import Count
+from app.models.offerings import Offering
 from app.models.programs import ProgramDomain, ProgramEvent, ProgramType
 from app.models.records import Record
 from app.models.user import User, Worker
@@ -32,15 +34,29 @@ def _status_case(column, expected: str):
 class DashboardService:
 
     @staticmethod
-    async def get_summary(db, scope_path: str, *, location_id=None) -> dict[str, Any]:
+    async def get_summary(db, scope_path: str, *, location_id=None, weeks: int = 4, latest_date: date | None = None) -> dict[str, Any]:
         mf = [_scope_filter(ChurchMember.path, scope_path), ChurchMember.is_deleted == False]
         wf = [_scope_filter(Worker.path, scope_path), Worker.is_deleted == False]
         rf = [_scope_filter(Record.path, scope_path), Record.is_deleted == False]
         cf = [_scope_filter(Count.path, scope_path), Count.is_deleted == False]
         uf = [_scope_filter(User.path, scope_path), User.is_deleted == False]
-        tf = [_scope_filter(TransferRequest.path, scope_path), TransferRequest.status == "pending"]
+        tf = [_scope_filter(TransferRequest.path, scope_path), TransferRequest.status.in_(("pending", "pending_region"))]
         sf = [_scope_filter(StatusChangeRequest.path, scope_path), StatusChangeRequest.status == "pending"]
         rmf = [_scope_filter(WorkerRemovalRequest.path, scope_path), WorkerRemovalRequest.status.in_(("pending", "escalated"))]
+        of = [_scope_filter(Offering.path, scope_path), Offering.is_deleted == False, Offering.status == "approved"]
+        pending_count_filters = [_scope_filter(Count.path, scope_path), Count.is_deleted == False, Count.status.in_(("pending", "corrected"))]
+        pending_offering_filters = [_scope_filter(Offering.path, scope_path), Offering.is_deleted == False, Offering.status.in_(("pending", "corrected"))]
+        from app.services.analytics.program_config import reporting_now, reporting_today
+        today = latest_date or reporting_today()
+        latest_sunday = today - timedelta(days=(today.weekday() + 1) % 7)
+        weeks = weeks if weeks in {4, 8} else 4
+        current_start = latest_sunday - timedelta(weeks=weeks - 1)
+        previous_start = current_start - timedelta(weeks=weeks)
+        period_end = latest_sunday + timedelta(days=1)
+        lagos = ZoneInfo("Africa/Lagos")
+        current_start_at = datetime.combine(current_start, time.min, tzinfo=lagos)
+        period_end_at = datetime.combine(period_end, time.min, tzinfo=lagos)
+        previous_start_at = datetime.combine(previous_start, time.min, tzinfo=lagos)
         if location_id:
             mf.append(ChurchMember.location_id == location_id)
             wf.append(Worker.location_id == location_id)
@@ -48,6 +64,9 @@ class DashboardService:
             cf.append(Count.location_id == location_id)
             uf.append(User.location_id == location_id)
             tf.append(TransferRequest.from_location_id == location_id)
+            of.append(Offering.location_id == location_id)
+            pending_count_filters.append(Count.location_id == location_id)
+            pending_offering_filters.append(Offering.location_id == location_id)
 
         # Single round-trip consolidated query: executes all summary aggregates in 1 database trip.
         # Worker status totals are included here so the dashboard does not issue
@@ -67,6 +86,25 @@ class DashboardService:
             select(func.count(TransferRequest.id)).where(and_(*tf)).scalar_subquery().label("pending_transfers"),
             select(func.count(StatusChangeRequest.id)).where(and_(*sf)).scalar_subquery().label("pending_status_changes"),
             select(func.count(WorkerRemovalRequest.id)).where(and_(*rmf)).scalar_subquery().label("pending_removals"),
+            select(func.coalesce(func.sum(case((and_(Offering.date >= current_start_at, Offering.date < period_end_at), Offering.amount), else_=0)), 0)).where(and_(*of)).scalar_subquery().label("offerings_current_total"),
+            select(func.count(Offering.id)).where(and_(*of, Offering.date >= current_start_at, Offering.date < period_end_at)).scalar_subquery().label("offerings_current_records"),
+            select(func.coalesce(func.sum(case((and_(Offering.date >= previous_start_at, Offering.date < current_start_at), Offering.amount), else_=0)), 0)).where(and_(*of)).scalar_subquery().label("offerings_previous_total"),
+            select(func.count(Offering.id)).where(and_(*of, Offering.date >= previous_start_at, Offering.date < current_start_at)).scalar_subquery().label("offerings_previous_records"),
+            select(func.sum(case((and_(Record.date >= current_start_at, Record.date < period_end_at, func.lower(Record.record_type) == "newcomer"), 1), else_=0))).where(and_(*rf)).scalar_subquery().label("newcomers_current"),
+            select(func.sum(case((and_(Record.date >= current_start_at, Record.date < period_end_at, func.lower(Record.record_type) == "convert"), 1), else_=0))).where(and_(*rf)).scalar_subquery().label("converts_current"),
+            select(func.sum(case((and_(Record.date >= previous_start_at, Record.date < current_start_at, func.lower(Record.record_type) == "newcomer"), 1), else_=0))).where(and_(*rf)).scalar_subquery().label("newcomers_previous"),
+            select(func.sum(case((and_(Record.date >= previous_start_at, Record.date < current_start_at, func.lower(Record.record_type) == "convert"), 1), else_=0))).where(and_(*rf)).scalar_subquery().label("converts_previous"),
+            select(func.count(Record.id)).where(and_(*rf, Record.date >= current_start_at, Record.date < period_end_at)).scalar_subquery().label("records_current"),
+            select(func.count(Record.id)).where(and_(*rf, Record.date >= previous_start_at, Record.date < current_start_at)).scalar_subquery().label("records_previous"),
+            select(func.count(func.distinct(func.coalesce(Count.count_group_id, Count.id)))).where(and_(*pending_count_filters)).scalar_subquery().label("pending_count_reports"),
+            select(func.min(Count.created_at)).where(and_(*pending_count_filters)).scalar_subquery().label("oldest_pending_count_at"),
+            select(func.count(Offering.id)).where(and_(*pending_offering_filters)).scalar_subquery().label("pending_offering_reports"),
+            select(func.min(Offering.created_at)).where(and_(*pending_offering_filters)).scalar_subquery().label("oldest_pending_offering_at"),
+            select(func.min(Worker.created_at)).where(and_(*wf, Worker.approval_status == "pending_verification")).scalar_subquery().label("oldest_pending_worker_at"),
+            select(func.min(User.created_at)).where(and_(*uf, User.approval_status == "pending")).scalar_subquery().label("oldest_pending_user_at"),
+            select(func.min(TransferRequest.created_at)).where(and_(*tf)).scalar_subquery().label("oldest_pending_transfer_at"),
+            select(func.min(StatusChangeRequest.created_at)).where(and_(*sf)).scalar_subquery().label("oldest_pending_status_at"),
+            select(func.min(WorkerRemovalRequest.created_at)).where(and_(*rmf)).scalar_subquery().label("oldest_pending_removal_at"),
         )
         row = (await db.execute(stmt)).one()
         pending_items = (
@@ -76,6 +114,23 @@ class DashboardService:
             + int(row.pending_status_changes or 0)
             + int(row.pending_removals or 0)
         )
+        now = reporting_now()
+        def pending_item(label: str, count: Any, oldest: Any) -> dict[str, Any]:
+            if oldest is not None and oldest.tzinfo is None:
+                oldest = oldest.replace(tzinfo=timezone.utc)
+            age = max(int((now - oldest).total_seconds() // 3600), 0) if oldest else None
+            return {"label": label, "count": int(count or 0), "oldest_age_hours": age}
+
+        pending_approvals = [
+            pending_item("Worker registrations", row.pending_workers, row.oldest_pending_worker_at),
+            pending_item("User access requests", row.pending_users, row.oldest_pending_user_at),
+            pending_item("Count groups", row.pending_count_reports, row.oldest_pending_count_at),
+            pending_item("Offerings", row.pending_offering_reports, row.oldest_pending_offering_at),
+            pending_item("Transfers", row.pending_transfers, row.oldest_pending_transfer_at),
+            pending_item("Status changes", row.pending_status_changes, row.oldest_pending_status_at),
+            pending_item("Worker removals", row.pending_removals, row.oldest_pending_removal_at),
+        ]
+        pending_approvals = [item for item in pending_approvals if item["count"]]
         attendance = await worker_meeting_analytics(db, scope_path, location_id=str(location_id) if location_id else None)
         attendance_rows = attendance["ranking"]
         opportunities = sum(int(item.get("expected") or 0) for item in attendance_rows)
@@ -93,6 +148,22 @@ class DashboardService:
             "pending_status_changes": int(row.pending_status_changes or 0),
             "pending_removals": int(row.pending_removals or 0),
             "pending_items": pending_items,
+            "pending_approvals": pending_approvals,
+            "reporting_window_weeks": weeks,
+            "approved_offerings": {
+                "current_total": float(row.offerings_current_total or 0),
+                "current_records": int(row.offerings_current_records or 0),
+                "previous_total": float(row.offerings_previous_total or 0),
+                "previous_records": int(row.offerings_previous_records or 0),
+            },
+            "newcomer_period": {
+                "newcomers_current": int(row.newcomers_current or 0),
+                "newcomers_previous": int(row.newcomers_previous or 0),
+                "converts_current": int(row.converts_current or 0),
+                "converts_previous": int(row.converts_previous or 0),
+                "records_current": int(row.records_current or 0),
+                "records_previous": int(row.records_previous or 0),
+            },
             "newcomers_total": int(row.newcomers_total or 0), "converts_total": int(row.converts_total or 0),
             "latest_total": int(row.latest_total or 0), "locations_reporting": int(row.locations_reporting or 0),
             "attendance_summary": {

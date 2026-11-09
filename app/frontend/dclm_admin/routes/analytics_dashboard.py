@@ -5,7 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 from html import escape
 from typing import Any
 
-from fasthtml.common import A, Details, Div, Form, H1, H2, H3, Input, Label, Link, Main, NotStr, P, Script, Span, Summary, Table, Tbody, Td, Th, Thead, Tr
+from fasthtml.common import A, Details, Div, Form, H1, H2, H3, Input, Label, Link, Main, NotStr, P, Script, Span, Strong, Summary, Table, Tbody, Td, Th, Thead, Tr
 from faststrap import Badge, Button
 from starlette.requests import Request
 
@@ -49,6 +49,33 @@ def _scope_level(path: str, fallback: str) -> str:
 
 def _number(value: Any) -> str:
     return f"{_integer(value):,}"
+
+
+def _period_delta(current: int | float, previous: int | float, *, previous_records: int, noun: str) -> str:
+    """Describe comparable-period movement without inventing a rate from zero."""
+    current_value, previous_value = float(current or 0), float(previous or 0)
+    if previous_records <= 0:
+        return "No prior-period records to compare" if current_value <= 0 else f"New this period · {noun}"
+    if previous_value == 0:
+        return f"Up from 0 · {noun}" if current_value > 0 else "No change · previous period was 0"
+    change = round(100 * (current_value - previous_value) / abs(previous_value))
+    if change == 0:
+        return f"No change vs previous {noun}"
+    direction = "Up" if change > 0 else "Down"
+    return f"{direction} {abs(change)}% vs previous {noun}"
+
+
+def _waiting_on_decision(summary: dict[str, Any], weeks: int) -> Any:
+    pending = summary.get("pending_approvals") or []
+    rows = []
+    for item in pending:
+        label = str(item.get("label") or "Pending item")
+        count = _integer(item.get("count"))
+        age = item.get("oldest_age_hours")
+        age_text = "age unavailable" if age is None else f"oldest waiting {_integer(age)}h"
+        rows.append(Div(Span(label), Strong(_number(count)), Span(age_text, cls="analytics-muted"), cls="analytics-decision-row"))
+    body = Div(*rows, cls="analytics-decision-list") if rows else P("No requests waiting for a decision.", cls="analytics-muted")
+    return Div(H2("Waiting on a decision", cls="analytics-panel-title"), P("Pending approvals in this scope, ordered by their oldest waiting item.", cls="analytics-note"), body, cls="panel analytics-decision-panel")
 
 
 def _short_date(value: date) -> str:
@@ -501,6 +528,9 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
 
     worker_summary = payload.get("worker_analytics") or {}
     attendance_summary = payload.get("attendance_summary") or {}
+    summary = payload.get("summary") or {}
+    offering_summary = summary.get("approved_offerings") or {}
+    record_summary = summary.get("newcomer_period") or {}
 
     trend_points = []
     for when, report in zip(dates, history):
@@ -538,6 +568,20 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
             f"{current.get('expected_population_no_estimate_locations', 0)} counted locations have no estimate."
         )
     can_manage_expected = level == "State" and ctx.level == 5 and ctx.has_permission("population_estimates:manage")
+    offerings_current = float(offering_summary.get("current_total") or 0)
+    offerings_previous = float(offering_summary.get("previous_total") or 0)
+    offerings_records = _integer(offering_summary.get("current_records"))
+    offerings_value = f"₦{offerings_current:,.2f}" if offerings_records else "No approved reports"
+    offerings_note = (
+        f"{_number(offerings_records)} approved records · "
+        + _period_delta(offerings_current, offerings_previous, previous_records=_integer(offering_summary.get("previous_records")), noun=f"{weeks} Sundays")
+    )
+    newcomers_current = _integer(record_summary.get("newcomers_current"))
+    converts_current = _integer(record_summary.get("converts_current"))
+    newcomers_previous = _integer(record_summary.get("newcomers_previous"))
+    converts_previous = _integer(record_summary.get("converts_previous"))
+    newcomers_note = _period_delta(newcomers_current, newcomers_previous, previous_records=newcomers_previous, noun=f"{weeks} Sundays")
+    converts_note = _period_delta(converts_current, converts_previous, previous_records=converts_previous, noun=f"{weeks} Sundays")
     dashboard_url = "/dashboard"
     filters = Form(
         Input(type="hidden", name="profile", value=ctx.profile.key),
@@ -584,11 +628,15 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
                     _metric(f"Average per reporting location · {weeks} weeks", "—" if avg is None else _number(avg), "Mean of the weekly per-location averages in this period; weeks without a counted report are excluded.", "Recomputed"),
                     _metric("Active workers", _number(active_workers), worker_note, "Snapshot"),
                     _metric("Workers’ meeting attendance rate", "Rate withheld" if expected_attendance else "No report", attendance_note, "Roster check"),
+                    _metric(f"Approved offerings · last {weeks} Sundays", offerings_value, offerings_note, "Approved only"),
+                    _metric(f"Newcomers · last {weeks} Sundays", _number(newcomers_current), newcomers_note, "Reports"),
+                    _metric(f"Converts · last {weeks} Sundays", _number(converts_current), converts_note, "Reports"),
                     cls="analytics-metrics",
                 ),
                     Div(
                         Div(_dashboard_loading_panel("locations" if level == "Location" else "child scopes"), id="analytics-children-panel", hx_get=_dashboard_panels_url(ctx, "/dashboard/panels"), hx_trigger="load", hx_target="this", hx_swap="innerHTML", cls="analytics-lazy-panel", aria_busy="true"),
                         Div(_dashboard_loading_panel("Needs attention"), id="analytics-attention-panel", cls="analytics-lazy-panel", aria_busy="true") if (ctx.has_permission("counts:review") or ctx.has_permission("counts:remind")) else _review_attention_note(level, panel_id="analytics-attention-panel"),
+                        _waiting_on_decision(summary, weeks),
                         cls="analytics-content-split",
                     ),
                 Div(_dashboard_loading_panel("weekly trend"), id="analytics-trend-panel", cls="analytics-lazy-panel", aria_busy="true"),

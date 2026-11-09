@@ -689,7 +689,7 @@ async def get_sunday_worship_dashboard_payload(
     series = await SundayWorshipAnalytics.series(
         db, effective_scope, occurrence_dates=occurrence_dates, include_pending=include_pending,
     )
-    summary = await DashboardService.get_summary(db, effective_scope)
+    summary = await DashboardService.get_summary(db, effective_scope, weeks=weeks, latest_date=latest)
     bootstrap = {
         "scope_path": effective_scope,
         "authorized_scope_path": deps.effective_scope_path(current_user),

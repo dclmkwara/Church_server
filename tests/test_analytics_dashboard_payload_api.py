@@ -12,7 +12,7 @@ def test_initial_dashboard_payload_combines_summary_and_series(monkeypatch):
         calls.append(("series", scope, len(occurrence_dates), include_pending))
         return {"scope": [{"total": 14}]}
 
-    async def fake_summary(db, scope):
+    async def fake_summary(db, scope, **kwargs):
         calls.append(("summary", scope))
         return {
             "workers_total": 4, "active_workers": 3,
@@ -33,6 +33,27 @@ def test_initial_dashboard_payload_combines_summary_and_series(monkeypatch):
     assert result["series"]["scope"][0]["total"] == 14
     assert result["bootstrap"]["worker_analytics"]["active"] == 3
     assert result["bootstrap"]["attendance_summary"] == {"expected": 2, "present": 1}
+
+
+def test_dashboard_payload_passes_selected_reporting_window_into_summary(monkeypatch):
+    seen = {}
+
+    async def fake_series(db, scope, *, occurrence_dates, include_pending):
+        return {"scope": []}
+
+    async def fake_summary(db, scope, **kwargs):
+        seen.update(kwargs)
+        return {"workers_total": 0, "active_workers": 0, "pending_workers": 0, "suspended_workers": 0}
+
+    monkeypatch.setattr(dashboard, "_effective_scope", lambda user, requested: "dclm.234.kw")
+    monkeypatch.setattr(dashboard.SundayWorshipAnalytics, "series", fake_series)
+    monkeypatch.setattr(dashboard.DashboardService, "get_summary", fake_summary)
+    user = SimpleNamespace(path="dclm.234.kw", roles=[])
+    asyncio.run(dashboard.get_sunday_worship_dashboard_payload(
+        scope_path=None, weeks=8, latest_date=date(2026, 11, 1), include_pending=False,
+        db=object(), current_user=user,
+    ))
+    assert seen == {"weeks": 8, "latest_date": date(2026, 11, 1)}
 
 
 def test_deferred_dashboard_panels_do_not_query_review_queue_without_permission(monkeypatch):
