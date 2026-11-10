@@ -228,3 +228,71 @@ if ($LASTEXITCODE -ne 0) { throw 'Downgrade failed; restore the verified backup 
 - No remote migration, stamp, DDL, DML, or role/permission update was run.
 - The direct permission-grant rows for `counts:review` were not present in the saved schema catalog; schema presence does not prove RBAC assignment.
 - Existing schema drift is documented, not repaired in this runbook.
+
+## Slice F: B5-to-head operator path
+
+This section records the later state in `MIGRATION_LOG.md`; it supersedes the older examples above for the current Slice F handoff. No remote command was run for Slice F. The recorded remote ledger is `d7a4c1e2f809`, so an operator should verify it and skip migration if that remains current. If the ledger is `b5f7a9c2d341`, the required revisions are:
+
+| Revision | Purpose |
+|---|---|
+| `c6d7e8f9a012` | B6: convert six `fellowship_id` columns to UUID, remove identified orphan development rows, add six foreign keys and six attendance categories. |
+| `d71a9c4e2b60` | Admin role policy data revision: add admin operational permissions and grants; remove inappropriate admin role-assignment grants. |
+| `d7a4c1e2f809` | Grant scoped audit-log read permission to Location, Group, Region and State pastor roles. |
+
+The local restored clone was stamped at the snapshot baseline `b5f7a9c2d341`, upgraded through all three revisions to `d7a4c1e2f809`, and checked. Downgrade was not needed for this test deployment and was not run. The RBAC revision originally failed because `permissions.operation` is `NOT NULL`; the corrected revision supplies `operation='CREATE'`. It also requires a PostgreSQL superuser or `BYPASSRLS` migration connection because the normal application write policy `church_permissions_write` is restricted to `app.role_score >= 9`. The revision does not weaken or alter that policy.
+
+### Ordered commands for the database operator
+
+Run from the Church_server repository in PowerShell on a machine that can reach the Supabase development database. Copy the migration connection from the Supabase Connect page into the process environment. Do not place it in a report or commit. Use the migration connection, not the runtime pooler URL.
+
+```powershell
+$env:SYNC_DATABASE_URL = Read-Host "Paste the Supabase migration connection URL"
+```
+
+1. **Remote read / local backup write:** make and validate a fresh custom-format backup.
+
+```powershell
+$backup = "_dev_db_snapshots/slice-f-pre-migration-$(Get-Date -Format yyyyMMdd-HHmmss).dump"
+pg_dump --format=custom --no-owner --no-privileges --file $backup $env:SYNC_DATABASE_URL
+if ($LASTEXITCODE -ne 0) { throw "pg_dump failed; do not migrate" }
+pg_restore --list $backup | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "Backup listing failed; do not migrate" }
+pg_restore --file NUL $backup
+if ($LASTEXITCODE -ne 0) { throw "Backup decompression failed; do not migrate" }
+Get-FileHash $backup -Algorithm SHA256
+```
+
+2. **Remote read only:** inspect ledger and RBAC counts. Stop if the revision is not `b5f7a9c2d341` or `d7a4c1e2f809`; do not stamp or guess an intermediate baseline.
+
+```powershell
+psql $env:SYNC_DATABASE_URL -c "SELECT version_num FROM public.alembic_version;"
+psql $env:SYNC_DATABASE_URL -c "SELECT (SELECT count(*) FROM public.roles) AS roles, (SELECT count(*) FROM public.permissions) AS permissions, (SELECT count(*) FROM public.role_permissions) AS grants;"
+```
+
+3. **Remote write:** only when the ledger is exactly `b5f7a9c2d341`, apply through head. If it already equals `d7a4c1e2f809`, skip this command. Do not run `init_rbac.py` against the remote database.
+
+```powershell
+$env:DATABASE_URL = $env:SYNC_DATABASE_URL
+uv run alembic upgrade d7a4c1e2f809
+if ($LASTEXITCODE -ne 0) { throw "Migration failed; use the verified backup recovery procedure" }
+```
+
+4. **Remote read only:** verify revision, UUID types, foreign keys and grants.
+
+```powershell
+psql $env:SYNC_DATABASE_URL -c "SELECT version_num FROM public.alembic_version;"
+psql $env:SYNC_DATABASE_URL -c "SELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_schema='public' AND table_name IN ('fellowship_members','fellowship_attendance','fellowship_offerings','fellowship_testimony','fellowship_prayer_request','fellowship_attendance_summaries') AND column_name='fellowship_id' ORDER BY table_name;"
+psql $env:SYNC_DATABASE_URL -c "SELECT conname, conrelid::regclass AS table_name FROM pg_constraint WHERE contype='f' AND conname LIKE '%fellowship%';"
+psql $env:SYNC_DATABASE_URL -c "SELECT (SELECT count(*) FROM public.roles) AS roles, (SELECT count(*) FROM public.permissions) AS permissions, (SELECT count(*) FROM public.role_permissions) AS grants;"
+psql $env:SYNC_DATABASE_URL -c "SELECT r.name, p.name FROM public.role_permissions rp JOIN public.roles r ON r.id=rp.role_id JOIN public.permissions p ON p.id=rp.permission_id WHERE p.name='system:read_audit_logs' ORDER BY r.name;"
+```
+
+Expected recorded head is `d7a4c1e2f809`; counts are 20 roles, 85 permissions and 977 grants. Six fellowship ID columns should report `uuid`, and six fellowship foreign keys should be present. Investigate any difference before publishing application code.
+
+### Safe release order
+
+1. Apply and verify the remote migration first, only if the ledger is still at B5.
+2. Push/deploy Church_server commits containing B6/RBAC/audit support.
+3. Push/deploy the Field Utility commit that submits against the B5/B6 schema.
+
+Reversing this order can make Utility submissions fail against missing count-group, edit-history, fellowship-category or UUID/FK schema, or make admin pages depend on grants that have not been seeded. This runbook does not authorize a remote write or deployment; the project owner runs those commands.
