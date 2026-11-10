@@ -12,6 +12,7 @@ from faststrap import Button, Icon, Input as FsInput, Select as FsSelect, Placeh
 from ..auth_context import build_context
 from ..backend import BackendClientError
 from ..communication import PeopleService, ProgramService
+from ..communication.dashboard_service import DashboardService
 from ..communication.active_scope import active_scope_context
 from ..communication.active_scope import scope_link
 from ..communication.organization_service import OrganizationService

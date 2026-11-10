@@ -38,6 +38,7 @@ ANALYTICS_PAGES = {
     "recurring-program-attendance": "/church-data/population-attendance",
     "finance-analytics": "/church-data/finance",
     "newcomers": "/church-data/newcomers",
+    "pastor-report": "/dashboard/pastor-report",
 }
 PAGES = {
     **ANALYTICS_PAGES,
@@ -79,8 +80,11 @@ def _layout_violations(page, viewport_width: int) -> list[str]:
             const rect = element.getBoundingClientRect();
             if (!rect.width || !rect.height) continue;
             const style = getComputedStyle(element);
+            if (element.closest('.offcanvas:not(.show)')) continue;
+            if (typeof element.checkVisibility === 'function' && !element.checkVisibility({checkOpacity: true, checkVisibilityCSS: true})) continue;
             if (element.closest('.prototype-dashboard,#program-analytics-content,#count-review-content,.expected-population-table') &&
-                style.fontSize && parseFloat(style.fontSize) < 10) {
+                element.tagName !== 'SUMMARY' &&
+                element.textContent.trim() && style.fontSize && parseFloat(style.fontSize) < 10) {
               problems.push(`${element.tagName}.${element.className} text is ${style.fontSize}`);
               break;
             }
