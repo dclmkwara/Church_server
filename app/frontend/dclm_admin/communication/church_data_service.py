@@ -16,6 +16,7 @@ from .pagination import fetch_all_pages
 from .request_cache import request_cached
 from .ttl_cache import invalidate_ttl_prefix
 from app.utils.count_sections import legacy_section_label
+from app.services.analytics.program_config import reporting_today
 
 
 PAYMENT_METHOD_LABELS = {
@@ -622,7 +623,7 @@ async def _finance_summary_public(request, ctx) -> dict[str, Any]:
     if await ChurchDataService.use_mock(request):
         return STORE.finance_summary(scope_path)
     rows = await _list_finance_public(request, ctx)
-    today = date.today()
+    today = reporting_today()
     month_prefix = today.strftime("%Y-%m")
     year_prefix = str(today.year)
     approved = [row for row in rows if row.get("status") == "approved"]

@@ -47,6 +47,14 @@ def test_standing_program_config_keeps_leaders_and_workers_meetings_separate():
     assert leaders.weekday != workers.weekday
 
 
+def test_standing_population_programs_have_expected_units_and_separate_types():
+    assert STANDING_PROGRAMS["sunday_worship_service"].expected_unit == "location"
+    assert STANDING_PROGRAMS["monday_bible_study"].expected_unit == "location"
+    assert STANDING_PROGRAMS["thursday_revival_hour"].expected_unit == "location"
+    assert STANDING_PROGRAMS["house_caring_fellowship"].expected_unit == "fellowship"
+    assert STANDING_PROGRAMS["tuesday_leaders_meeting"].key != STANDING_PROGRAMS["saturday_workers_meeting"].key
+
+
 def test_latest_sunday_uses_local_calendar_date():
     """The most recent occurrence remains Sunday when the current day is later in week."""
     assert latest_sunday(date(2026, 11, 6)) == date(2026, 11, 1)
@@ -115,6 +123,40 @@ def test_pending_zero_is_received_but_not_counted_by_default():
     assert official["coverage"]["pending"] == 1
     assert inclusive["n_counted"] == 1
     assert inclusive["total"] == 0
+
+
+def test_house_fellowship_units_keep_zero_separate_from_missing_and_sum_categories():
+    fellowships = [
+        SimpleNamespace(location_id="f1", path="org.234.kw.r.g.001.f001", location_name="Fellowship One", is_active=True, opened_on=None, closed_on=None),
+        SimpleNamespace(location_id="f2", path="org.234.kw.r.g.002.f001", location_name="Fellowship Two", is_active=True, opened_on=None, closed_on=None),
+    ]
+    report = SimpleNamespace(
+        id="attendance-1", event_id=None, location_id="f1", status="approved", total=10,
+        adult_male=2, adult_female=3, youth_male=1, youth_female=0, boys=4, girls=0,
+    )
+    result = _build_overview(
+        scope_path="org.234.kw.r.g",
+        occurrence_date=date(2026, 11, 1),
+        now=datetime(2026, 11, 4, tzinfo=ZoneInfo("Africa/Lagos")),
+        locations=fellowships, events=[], count_rows=[report], include_pending=False,
+        program=STANDING_PROGRAMS["house_caring_fellowship"],
+    )
+    assert result["expected_unit"] == "fellowship"
+    assert result["n_expected"] == 2
+    assert result["n_received"] == 1
+    assert result["total"] == 10
+    assert result["coverage"]["reported"] == 1
+    assert "approved" not in result["coverage"]
+    assert result["coverage"]["missing"] == 1
+
+
+def test_house_fellowship_legacy_total_is_used_when_categories_are_empty():
+    legacy = SimpleNamespace(
+        count_mode=None, status="approved", total=17,
+        adult_male=0, adult_female=0, youth_male=0, youth_female=0, boys=0, girls=0,
+        men=8, women=6, youths=2, children=1,
+    )
+    assert _count_values([legacy])["total"] == 17
 
 
 def test_two_sunday_services_are_reported_separately_without_daily_total():

@@ -69,6 +69,76 @@ def test_sunday_worship_dashboard_adapter_forwards_selected_occurrence_date():
     )
 
 
+def test_standing_program_series_adapter_keeps_scope_period_and_pending_filter():
+    from app.frontend.dclm_admin.backend.client import BackendClient
+
+    client = BackendClient()
+    client._request = AsyncMock(return_value={"program_type": "monday_bible_study"})
+    result = asyncio.run(client.get_standing_program_series(
+        "token", scope_path="org.234.KW.R1", program_key="monday_bible_study",
+        weeks=8, latest_date="2026-11-02", include_pending=True,
+    ))
+
+    assert result["program_type"] == "monday_bible_study"
+    client._request.assert_awaited_once_with(
+        "GET", "/analytics/standing-programs/series", access_token="token",
+        params={"scope_path": "org.234.KW.R1", "program_key": "monday_bible_study", "weeks": 8, "include_pending": True, "latest_date": "2026-11-02"},
+    )
+
+
+def test_finance_window_excludes_pending_by_default_and_never_counts_rejected():
+    from app.frontend.dclm_admin.routes.church_data import _finance_rows_in_view, _finance_summary_for_rows
+
+    rows = [
+        {"date": "2026-11-01", "status": "approved"},
+        {"date": "2026-11-02", "status": "pending"},
+        {"date": "2026-11-03", "status": "rejected"},
+        {"date": "2026-10-01", "status": "approved"},
+    ]
+    official = _finance_rows_in_view(rows, date_from="2026-11-01", date_to="2026-11-08")
+    inclusive = _finance_rows_in_view(rows, date_from="2026-11-01", date_to="2026-11-08", include_pending=True)
+    assert [row["status"] for row in official] == ["approved"]
+    assert [row["status"] for row in inclusive] == ["approved", "pending"]
+    summary = _finance_summary_for_rows(rows, date_from="2026-11-01", date_to="2026-11-08")
+    assert summary["approved_total"] == 0
+    assert summary["approved_count"] == 1
+    assert summary["pending_count"] == 1
+    assert summary["rejected_count"] == 1
+
+
+def test_newcomer_person_details_are_hidden_at_state_and_region_but_available_at_group_and_location(monkeypatch):
+    from starlette.requests import Request
+    from fasthtml.common import Div
+    from app.frontend.dclm_admin.app_factory import app as frontend_app
+    from app.frontend.dclm_admin.routes import church_data as church_data_routes
+    from app.frontend.dclm_admin.backend.config import get_backend_config
+
+    monkeypatch.setenv("DCLM_ADMIN_DATA_MODE", "mock")
+    get_backend_config.cache_clear()
+    monkeypatch.setattr(DashboardService, "newcomer_analytics", staticmethod(AsyncMock(return_value={"newcomers_total": 4, "converts_total": 2, "male": 3, "female": 3})))
+    monkeypatch.setattr(church_data_routes, "_scope_locations", AsyncMock(return_value=[]))
+    monkeypatch.setattr(church_data_routes, "_records_workspace", AsyncMock(return_value=Div("PRIVATE PERSON 09123456789")))
+    route = next(route for route in frontend_app.routes if getattr(route, "path", None) == "/church-data/newcomers/content")
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    outputs = {}
+    for persona in ("state_overseer", "region_pastor", "group_pastor", "location_pastor"):
+        request = Request({
+            "type": "http", "method": "GET", "path": "/church-data/newcomers/content",
+            "headers": [], "query_string": f"profile={persona}".encode(), "path_params": {}, "app": frontend_app,
+        }, receive)
+        response = asyncio.run(route.endpoint(request))
+        outputs[persona] = response.body.decode()
+
+    for persona in ("state_overseer", "region_pastor"):
+        assert "PRIVATE PERSON" not in outputs[persona]
+        assert "person-level names and contact details" in outputs[persona].lower()
+    for persona in ("group_pastor", "location_pastor"):
+        assert "PRIVATE PERSON" in outputs[persona]
+
+
 def test_sunday_worship_series_adapter_uses_one_grouped_endpoint():
     from app.frontend.dclm_admin.backend.client import BackendClient
 

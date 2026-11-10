@@ -867,6 +867,20 @@ class DashboardService:
             return {"error": str(exc)}
 
     @staticmethod
+    async def standing_program_series(request, ctx, *, program_key: str, weeks: int, scope_path: str, latest_date: str, include_pending: bool) -> dict[str, Any]:
+        if not await DashboardService.live_enabled(request):
+            return {"error": "Standing program analytics require the live backend."}
+        try:
+            client = async_client(get_api_client())
+            return await client.get_standing_program_series(
+                AuthService.get_access_token(request), scope_path=scope_path,
+                program_key=program_key, weeks=weeks, latest_date=latest_date,
+                include_pending=include_pending,
+            )
+        except BackendClientError as exc:
+            return {"error": str(exc)}
+
+    @staticmethod
     async def sunday_worship_dashboard(request, ctx, *, weeks: int, scope_path: str, latest_date: str) -> dict[str, Any]:
         if not await DashboardService.live_enabled(request):
             return {"error": "Sunday Worship reporting requires the live backend."}

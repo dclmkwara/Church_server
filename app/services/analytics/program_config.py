@@ -31,7 +31,7 @@ STANDING_PROGRAMS = {
         "sunday_worship_service", "Sunday Worship", 6, "location", "sunday_worship_service"
     ),
     "house_caring_fellowship": StandingProgram(
-        "house_caring_fellowship", "House Caring Fellowship", 6, "location", None
+        "house_caring_fellowship", "House Caring Fellowship", 6, "fellowship", None
     ),
     "monday_bible_study": StandingProgram(
         "monday_bible_study", "Monday Bible Study", 0, "location", "monday_bible_study"

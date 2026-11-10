@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 
-from fasthtml.common import Div, Form, H3, H4, Input, Option, P, Select, Textarea
+from fasthtml.common import A, Div, Form, H3, H4, Input, Label, Option, P, Select, Textarea
 from decimal import Decimal, InvalidOperation
 from starlette.requests import Request
 
@@ -38,6 +38,39 @@ def _scope_path(ctx) -> str:
 
 def _can_remind_counts(ctx) -> bool:
     return bool(ctx.has_permission("counts:remind"))
+
+
+def _scope_level_number(ctx) -> int:
+    return max(0, len([part for part in _scope_path(ctx).split(".") if part]) - 1)
+
+
+def _finance_rows_in_view(rows, *, date_from: str = "", date_to: str = "", include_pending: bool = False):
+    filtered = list(rows)
+    if date_from:
+        filtered = [row for row in filtered if str(row.get("date") or "")[:10] >= date_from]
+    if date_to:
+        filtered = [row for row in filtered if str(row.get("date") or "")[:10] <= date_to]
+    statuses = {"approved", "pending", "corrected"} if include_pending else {"approved"}
+    return [row for row in filtered if str(row.get("status") or "").lower() in statuses]
+
+
+def _finance_summary_for_rows(rows, *, date_from: str, date_to: str):
+    period = list(rows)
+    if date_from:
+        period = [row for row in period if str(row.get("date") or "")[:10] >= date_from]
+    if date_to:
+        period = [row for row in period if str(row.get("date") or "")[:10] <= date_to]
+    approved = [row for row in period if str(row.get("status") or "").lower() == "approved"]
+    pending = [row for row in period if str(row.get("status") or "").lower() in {"pending", "corrected"}]
+    rejected = [row for row in period if str(row.get("status") or "").lower() == "rejected"]
+    return {
+        "approved_total": sum((Decimal(str(row.get("amount") or 0)) for row in approved), Decimal("0")),
+        "approved_count": len(approved),
+        "pending_total": sum((Decimal(str(row.get("amount") or 0)) for row in pending), Decimal("0")),
+        "pending_count": sum(str(row.get("status") or "").lower() == "pending" for row in pending),
+        "corrected_count": sum(str(row.get("status") or "").lower() == "corrected" for row in pending),
+        "rejected_count": len(rejected),
+    }
 
 PAYMENT_METHOD_VALUES = {
     "Cash": "cash",
@@ -463,15 +496,20 @@ async def _finance_mobile_card(ctx, row):
 
 async def _finance_stats(request: Request, ctx, *, oob: bool = False) -> Div:
     ctx = active_scope_context(request, ctx)
-    summary = await ChurchDataService.finance_summary(request, ctx) if await ChurchDataService.live_enabled(request) else STORE.finance_summary(_scope_path(ctx))
-    _month = reporting_today().strftime("%B")
-    _year = reporting_today().year
+    today = reporting_today()
+    date_from = (today - datetime.timedelta(days=27)).isoformat()
+    date_to = today.isoformat()
+    rows = await _load_finance_rows(request, ctx)
+    return _finance_window_stats(rows, date_from=date_from, date_to=date_to, oob=oob)
+
+
+def _finance_window_stats(rows, *, date_from: str, date_to: str, oob: bool = False) -> Div:
+    summary = _finance_summary_for_rows(rows, date_from=date_from, date_to=date_to)
     return _summary_grid(
         [
-            ("Approved this month", format_naira(summary["month_total"]), f"{_month} {_year} · {summary.get('month_approved_count', 0)} entries · event date", "cash-coin"),
-            ("Approved this year", format_naira(summary["year_total"]), f"Jan–{_month} {_year} · {summary.get('approved_count', 0)} entries", "piggy-bank"),
-            ("Awaiting review", format_naira(summary.get("pending_total", 0)), f"{summary.get('pending_count', 0)} new · {summary.get('corrected_count', 0)} corrected · excluded from approved totals", "hourglass-split"),
-            ("Rejected", str(summary.get("rejected_count", 0)), "Rejected entries are excluded from approved totals", "x-circle"),
+            ("Approved in selected period", format_naira(summary["approved_total"]), f"{summary['approved_count']} approved entries - event date {date_from} to {date_to}", "cash-coin"),
+            ("Awaiting review", format_naira(summary["pending_total"]), f"{summary['pending_count']} new - {summary['corrected_count']} corrected - same date range", "hourglass-split"),
+            ("Rejected in selected period", str(summary["rejected_count"]), f"{date_from} to {date_to} - excluded from approved totals", "x-circle"),
         ],
         grid_id="finance-stats",
         grid_cls="counts-stat-grid",
@@ -479,11 +517,19 @@ async def _finance_stats(request: Request, ctx, *, oob: bool = False) -> Div:
     )
 
 
-async def _finance_table(request: Request, ctx, *, fund_type: str = "", location: str = "", method: str = "", oob: bool = False) -> Div:
+async def _load_finance_rows(request: Request, ctx, *, fund_type: str = "", location: str = "", method: str = ""):
     ctx = active_scope_context(request, ctx)
-    rows = await ChurchDataService.list_finance(request, ctx, fund_type=fund_type, location=location, method=method) if await ChurchDataService.live_enabled(request) else STORE.list_finance(_scope_path(ctx), fund_type=fund_type, location=location, method=method)
+    return (await ChurchDataService.list_finance(request, ctx, fund_type=fund_type, location=location, method=method)
+            if await ChurchDataService.live_enabled(request)
+            else STORE.list_finance(_scope_path(ctx), fund_type=fund_type, location=location, method=method))
+
+
+async def _finance_table(request: Request, ctx, *, fund_type: str = "", location: str = "", method: str = "", date_from: str = "", date_to: str = "", include_pending: bool = False, source_rows=None, results_id: str = "finance-results", oob: bool = False) -> Div:
+    ctx = active_scope_context(request, ctx)
+    rows = source_rows if source_rows is not None else await _load_finance_rows(request, ctx, fund_type=fund_type, location=location, method=method)
+    rows = _finance_rows_in_view(rows, date_from=date_from, date_to=date_to, include_pending=include_pending)
     if not rows:
-        attrs = {"id": "finance-results"}
+        attrs = {"id": results_id}
         if oob:
             attrs["hx_swap_oob"] = "outerHTML:#finance-results"
         return Div(
@@ -519,7 +565,7 @@ async def _finance_table(request: Request, ctx, *, fund_type: str = "", location
         ["Event date", "Event", "Location", "Amount / Status", "Method", "Entered By", "Action"],
         desktop_rows,
         mobile_cards,
-        results_id="finance-results",
+        results_id=results_id,
         oob="outerHTML:#finance-results" if oob else None,
     )
 
@@ -972,8 +1018,11 @@ def register_church_data_routes(app) -> None:
         )
 
     @app.get("/church-data/finance")
-    async def finance_page(request: Request, fund_type: str = "", location: str = "", method: str = ""):
+    async def finance_page(request: Request, fund_type: str = "", location: str = "", method: str = "", date_from: str = "", date_to: str = "", include_pending: bool = False):
         ctx = active_scope_context(request, build_context(request))
+        today = reporting_today()
+        date_from = date_from or (today - datetime.timedelta(days=27)).isoformat()
+        date_to = date_to or today.isoformat()
         body = await _church_data_loading_shell(
             request,
             ctx,
@@ -981,7 +1030,7 @@ def register_church_data_routes(app) -> None:
             subtitle="Record and review finance entries.",
             section_title="Finance overview",
             section_note="Offering, tithe, and payment records.",
-            target_url=ctx.url_for("/church-data/finance/content", fund_type=fund_type, location=location, method=method),
+            target_url=ctx.url_for("/church-data/finance/content", fund_type=fund_type, location=location, method=method, date_from=date_from, date_to=date_to, include_pending=str(include_pending).lower()),
         )
         return shell_layout(
             ctx,
@@ -995,12 +1044,20 @@ def register_church_data_routes(app) -> None:
         )
 
     @app.get("/church-data/finance/content")
-    async def finance_content(request: Request, fund_type: str = "", location: str = "", method: str = ""):
+    async def finance_content(request: Request, fund_type: str = "", location: str = "", method: str = "", date_from: str = "", date_to: str = "", include_pending: bool = False):
         ctx = active_scope_context(request, build_context(request))
-        locations, stats, table = await asyncio.gather(
+        today = reporting_today()
+        date_from = date_from or (today - datetime.timedelta(days=27)).isoformat()
+        date_to = date_to or today.isoformat()
+        locations, source_rows = await asyncio.gather(
             _scope_locations(request, ctx),
-            _finance_stats(request, ctx),
-            _finance_table(request, ctx, fund_type=fund_type, location=location, method=method),
+            _load_finance_rows(request, ctx, fund_type=fund_type, location=location, method=method),
+        )
+        stats = _finance_window_stats(source_rows, date_from=date_from, date_to=date_to)
+        table = await _finance_table(
+            request, ctx, fund_type=fund_type, location=location, method=method,
+            date_from=date_from, date_to=date_to, include_pending=include_pending,
+            source_rows=source_rows,
         )
         filter_form = Form(
             *hidden_context_inputs(ctx),
@@ -1034,10 +1091,14 @@ def register_church_data_routes(app) -> None:
                 ),
                 field_id="finance-location",
             ),
+            filter_field("From", Input(type="date", name="date_from", value=date_from, cls="form-control"), field_id="finance-date-from"),
+            filter_field("To", Input(type="date", name="date_to", value=date_to, cls="form-control"), field_id="finance-date-to"),
+            Label(Input(type="checkbox", name="include_pending", value="true", checked=include_pending), " Include pending entries", cls="form-check-label d-flex align-items-center gap-2"),
+            Button("Apply filters", variant="primary", type="submit"),
             hx_get=ctx.url_for("/church-data/finance/list"),
             hx_target="#finance-results",
             hx_swap="outerHTML",
-            hx_trigger="change from:select",
+            hx_trigger="change from:select, change from:input[type=checkbox], submit",
             cls="admin-filter-grid",
         )
         return section_card(
@@ -1050,9 +1111,16 @@ def register_church_data_routes(app) -> None:
         )
 
     @app.get("/church-data/finance/list")
-    async def finance_list(request: Request, fund_type: str = "", location: str = "", method: str = ""):
-        ctx = build_context(request)
-        return await _finance_table(request, ctx, fund_type=fund_type, location=location, method=method)
+    async def finance_list(request: Request, fund_type: str = "", location: str = "", method: str = "", date_from: str = "", date_to: str = "", include_pending: bool = False):
+        ctx = active_scope_context(request, build_context(request))
+        rows = await _load_finance_rows(request, ctx, fund_type=fund_type, location=location, method=method)
+        stats = _finance_window_stats(rows, date_from=date_from, date_to=date_to, oob=True)
+        table = await _finance_table(
+            request, ctx, fund_type=fund_type, location=location, method=method,
+            date_from=date_from, date_to=date_to, include_pending=include_pending,
+            source_rows=rows, results_id="finance-results-content",
+        )
+        return Div(stats, table, id="finance-results")
 
     @app.get("/church-data/finance/new")
     async def new_finance_form(request: Request):
@@ -1266,6 +1334,24 @@ def register_church_data_routes(app) -> None:
     @app.get("/church-data/newcomers/content")
     async def newcomers_content(request: Request, search: str = "", status: str = "", location: str = "", gender: str = ""):
         ctx = active_scope_context(request, build_context(request))
+        if _scope_level_number(ctx) <= 3:
+            analytics = await DashboardService.newcomer_analytics(request, ctx)
+            return Div(
+                section_card(
+                    "Privacy-protected summary",
+                    "Person-level names and contact details are available only at Group and Location scope.",
+                    Div(
+                        await _summary_grid([
+                            ("Newcomers", str(analytics.get("newcomers_total", 0)), "Count in this scope", "person-plus"),
+                            ("Converts", str(analytics.get("converts_total", 0)), "Count in this scope", "people"),
+                            ("Male", str(analytics.get("male", 0)), "Recorded gender", "person"),
+                            ("Female", str(analytics.get("female", 0)), "Recorded gender", "person"),
+                        ], grid_id="newcomer-privacy-summary", grid_cls="counts-stat-grid"),
+                        P("Individual records are intentionally withheld at Region and State scope.", cls="small text-muted mb-0 mt-2"),
+                    ),
+                ),
+                id="newcomer-page-content",
+            )
         locations, workspace = await asyncio.gather(
             _scope_locations(request, ctx),
             _records_workspace(request, ctx, search=search, status=status, location=location, gender=gender),
@@ -1332,7 +1418,9 @@ def register_church_data_routes(app) -> None:
 
     @app.get("/church-data/newcomers/list")
     async def newcomers_list(request: Request, search: str = "", status: str = "", location: str = "", gender: str = ""):
-        ctx = build_context(request)
+        ctx = active_scope_context(request, build_context(request))
+        if _scope_level_number(ctx) <= 3:
+            return P("Person-level records are available only at Group and Location scope.", cls="text-muted", role="status")
         return await _records_workspace(request, ctx, search=search, status=status, location=location, gender=gender)
 
     @app.get("/church-data/newcomers/new")
@@ -1345,7 +1433,9 @@ def register_church_data_routes(app) -> None:
 
     @app.get("/church-data/newcomers/{record_id}/drawer")
     async def record_drawer(request: Request, record_id: str):
-        ctx = build_context(request)
+        ctx = active_scope_context(request, build_context(request))
+        if _scope_level_number(ctx) <= 3:
+            return P("Person-level details are available only at Group and Location scope.", cls="text-muted", role="status")
         row = await ChurchDataService.get_record(request, ctx, record_id) if await ChurchDataService.live_enabled(request) else STORE.get_record(record_id)
         if row is None:
             return P("Record not found.", cls="text-muted")
@@ -1462,6 +1552,11 @@ def register_church_data_routes(app) -> None:
             cls="admin-filter-grid",
         )
         return Div(
+            section_card(
+                "Population attendance",
+                "Sunday Worship, House Caring Fellowship, Monday Bible Study and Thursday Revival Hour.",
+                A("Open recurring-program attendance", href=ctx.url_for("/church-data/population-attendance", program_key="sunday_worship_service", weeks="4"), cls="btn btn-outline-primary"),
+            ),
             sunday_population_panel,
             section_card(
                 "Worker attendance overview",

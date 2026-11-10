@@ -975,6 +975,24 @@ class BackendClient:
                 params[key] = value
         return await self._request("GET", "/analytics/programs/occurrences", access_token=access_token, params=params)
 
+    async def get_standing_program_series(
+        self,
+        access_token: str,
+        *,
+        scope_path: str,
+        program_key: str,
+        weeks: int = 4,
+        latest_date: str | None = None,
+        include_pending: bool = False,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {
+            "scope_path": scope_path, "program_key": program_key,
+            "weeks": weeks, "include_pending": include_pending,
+        }
+        if latest_date:
+            params["latest_date"] = latest_date
+        return await self._request("GET", "/analytics/standing-programs/series", access_token=access_token, params=params)
+
     async def get_sunday_worship_dashboard_payload(
         self, access_token: str, *, scope_path: str, weeks: int,
         include_pending: bool, latest_date: str,

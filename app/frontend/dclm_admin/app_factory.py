@@ -19,6 +19,7 @@ from .communication import AuthService
 from .routes.auth import register_auth_routes
 from .routes.communication import register_communication_routes
 from .routes.church_data import register_church_data_routes
+from .routes.population_analytics import register_population_analytics_routes
 from .routes.dashboard import register_dashboard_routes
 from .routes.expected_population import register_expected_population_routes
 from .routes.fellowship import register_fellowship_routes
@@ -324,6 +325,7 @@ register_fellowship_routes(app)
 register_organization_routes(app)
 register_program_routes(app)
 register_church_data_routes(app)
+register_population_analytics_routes(app)
 register_workflow_routes(app)
 register_communication_routes(app)
 register_report_routes(app)

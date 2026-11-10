@@ -15,7 +15,8 @@ from sqlalchemy.orm import joinedload
 from app.db.filters import scope_filter, scope_or_ancestor_filter
 from app.models.counts import Count, CountReminderRecipient
 from app.models.expected_population import LocationExpectedPopulation
-from app.models.location import Group, Location, Region, State
+from app.models.fellowship_activities import FellowshipAttendance
+from app.models.location import Fellowship, Group, Location, Region, State
 from app.models.programs import ProgramCampaign, ProgramEvent, ProgramType
 
 from .program_config import (
@@ -135,6 +136,7 @@ def _build_overview(
     count_rows: list[Any],
     include_pending: bool,
     estimates_by_location: dict[str, list[Any]] | None = None,
+    program: Any = _PROGRAM,
 ) -> dict[str, Any]:
     """Build independent coverage states and counted values from loaded rows."""
     locations_by_id = {str(row.location_id): row for row in locations}
@@ -342,12 +344,25 @@ def _build_overview(
                 expected_total += sum(expected_by_location[item] for item in covered)
                 expected_counted_population += _count_values(rows)["total"]
     expected_percent = round(expected_counted_population * 100 / expected_total, 1) if expected_total > 0 else None
+    coverage_output = coverage
+    if program.key == "house_caring_fellowship":
+        # The shared calculator treats stored fellowship rows as countable, but
+        # the fellowship model has no approval/review status. Do not publish its
+        # synthetic internal "approved" state as a church decision.
+        coverage_output = {
+            "reported": len(received_units),
+            "awaiting": coverage["awaiting"],
+            "late": coverage["late"],
+            "missing": coverage["missing"],
+        }
     return {
-        "program_domain": "weekly_programs",
-        "program_type": _PROGRAM.key,
-        "program_label": _PROGRAM.label,
-        "program_level": "Location",
-        "expected_unit": _PROGRAM.expected_unit,
+        # House Caring Fellowship records remain location/fellowship data and
+        # are not persisted against the shared program-domain metadata.
+        "program_domain": None if program.key == "house_caring_fellowship" else "weekly_programs",
+        "program_type": program.key,
+        "program_label": program.label,
+        "program_level": program.expected_unit.title() if program.expected_unit else None,
+        "expected_unit": program.expected_unit,
         "scope_path": scope_path,
         "occurrence_date": occurrence_date.isoformat(),
         "n_expected": len(locations),
@@ -355,7 +370,7 @@ def _build_overview(
         "n_counted": len(counted_units),
         "total": total,
         "categories": {key: values_payload[key] for key in _CATEGORIES},
-        "coverage": coverage,
+        "coverage": coverage_output,
         "unreported_location_ids": unreported_location_ids,
         "location_totals": location_totals,
         "service_reports": service_reports,
@@ -369,7 +384,7 @@ def _build_overview(
         "locations_with_estimate": len(set(expected_by_location) & set(locations_by_id)),
         "expected_population_percent": expected_percent,
         "additivity": "additive",
-        "status_rule": "approved" if not include_pending else "approved+pending",
+        "status_rule": "saved rows; no review status is stored" if program.key == "house_caring_fellowship" else ("approved" if not include_pending else "approved+pending"),
         "include_pending": include_pending,
         "combined_levels": sorted({
             str(event.reporting_scope).lower()
@@ -389,17 +404,21 @@ class SundayWorshipAnalytics:
         occurrence_date: date | None = None,
         now: datetime | None = None,
         include_pending: bool = False,
+        program_key: str = "sunday_worship_service",
     ) -> dict[str, Any]:
         """Return Sunday coverage and totals without treating absence as zero."""
+        program = STANDING_PROGRAMS.get(program_key)
+        if program is None or program.program_type_slug is None:
+            raise ValueError("This standing program has no population-count source")
         now = now or datetime.now(timezone.utc)
         local_now = now.astimezone(ZoneInfo(REPORTING_TIMEZONE)) if now.tzinfo else now.replace(tzinfo=ZoneInfo(REPORTING_TIMEZONE))
         occurrence_date = occurrence_date or latest_sunday(local_now.date())
-        if occurrence_date.weekday() != _PROGRAM.weekday:
-            raise ValueError("Sunday Worship occurrence_date must be a Sunday")
+        if occurrence_date.weekday() != program.weekday:
+            raise ValueError(f"{program.label} date does not match its configured day")
 
         type_result = await db.execute(
             select(ProgramType.id).where(
-                ProgramType.slug == _PROGRAM.program_type_slug,
+                ProgramType.slug == program.program_type_slug,
                 ProgramType.is_deleted.is_(False),
             )
         )
@@ -440,7 +459,7 @@ class SundayWorshipAnalytics:
         canonical_filters.append(
             and_(
                 Count.event_id.is_(None),
-                func.lower(func.trim(Count.program_type)) == "sunday worship service",
+                func.lower(func.trim(Count.program_type)) == program.label.casefold(),
                 or_(Count.program_domain.is_(None), func.lower(func.trim(Count.program_domain)).in_({"weekly programs", "weekly_programs"})),
             )
         )
@@ -477,6 +496,7 @@ class SundayWorshipAnalytics:
             events=events,
             count_rows=count_rows,
             include_pending=include_pending,
+            program=program,
         )
 
     @staticmethod
@@ -487,12 +507,16 @@ class SundayWorshipAnalytics:
         occurrence_dates: list[date],
         include_pending: bool = False,
         now: datetime | None = None,
+        program_key: str = "sunday_worship_service",
     ) -> dict[str, Any]:
         """Load all weeks and direct children in a small fixed set of queries."""
+        program = STANDING_PROGRAMS.get(program_key)
+        if program is None:
+            raise ValueError("Unknown standing program")
         if not occurrence_dates:
             return {"scope": [], "children": []}
-        if any(item.weekday() != _PROGRAM.weekday for item in occurrence_dates):
-            raise ValueError("Every occurrence date must be a Sunday")
+        if any(item.weekday() != program.weekday for item in occurrence_dates):
+            raise ValueError(f"Every occurrence date must match {program.label}'s configured day")
         now = now or datetime.now(timezone.utc)
         first_date, last_date = min(occurrence_dates), max(occurrence_dates)
 
@@ -501,10 +525,14 @@ class SundayWorshipAnalytics:
         hierarchy_selects = []
         # Carry the location roster in the same hierarchy/estimate round trip.
         # The reporting calculator and child table share this request-scoped set.
-        reminder_time = select(func.max(CountReminderRecipient.sent_at)).where(
-            CountReminderRecipient.location_id == Location.location_id,
-            CountReminderRecipient.occurrence_date == last_date,
-        ).correlate(Location).scalar_subquery()
+        reminder_time = (
+            select(func.max(CountReminderRecipient.sent_at)).where(
+                CountReminderRecipient.location_id == Location.location_id,
+                CountReminderRecipient.occurrence_date == last_date,
+            ).correlate(Location).scalar_subquery()
+            if program_key == "sunday_worship_service"
+            else literal(None, type_=DateTime(timezone=True))
+        )
         hierarchy_selects.append(
             select(
                 Location.path.label("path"), Location.location_name.label("name"),
@@ -555,7 +583,8 @@ class SundayWorshipAnalytics:
                     literal(None, type_=Date).label("closed_on"), literal(None, type_=DateTime(timezone=True)).label("reminded_at"),
                 ).where(node_model.path == path)
             )
-        hierarchy_selects.append(
+        if program_key == "sunday_worship_service":
+            hierarchy_selects.append(
             select(
                 LocationExpectedPopulation.path.label("path"),
                 Location.location_name.label("name"),
@@ -571,7 +600,7 @@ class SundayWorshipAnalytics:
                 scope_filter(LocationExpectedPopulation.path, scope_path),
                 LocationExpectedPopulation.effective_from <= last_date,
             )
-        )
+            )
         hierarchy_result = await db.execute(union_all(*hierarchy_selects).order_by("path")) if hierarchy_selects else None
         hierarchy_rows = list(hierarchy_result.all()) if hierarchy_result is not None else []
         location_rows = [row for row in hierarchy_rows if row.node_type == "location"]
@@ -606,11 +635,11 @@ class SundayWorshipAnalytics:
         ).outerjoin(
             ProgramCampaign, ProgramCampaign.id == ProgramEvent.campaign_id,
         ).where(
-            ProgramType.slug == _PROGRAM.program_type_slug,
+            ProgramType.slug == program.program_type_slug,
             ProgramType.is_deleted.is_(False),
-        )
-        event_result = await db.execute(type_and_events)
-        event_rows = list(event_result.all())
+        ) if program.program_type_slug else None
+        event_result = await db.execute(type_and_events) if type_and_events is not None else None
+        event_rows = list(event_result.all()) if event_result is not None else []
         type_id = event_rows[0].program_type_id if event_rows else None
         event_rows = [row for row in event_rows if row[1] is not None]
         events = [
@@ -621,34 +650,81 @@ class SundayWorshipAnalytics:
         ]
         start_at = datetime.combine(first_date, time.min, ZoneInfo(REPORTING_TIMEZONE)).astimezone(timezone.utc)
         end_at = datetime.combine(last_date + timedelta(days=1), time.min, ZoneInfo(REPORTING_TIMEZONE)).astimezone(timezone.utc)
-        canonical_filters = []
-        # Resolve the canonical type and events in one query. The empty event
-        # result retains legacy name matching without another type lookup.
-        if type_id is not None:
-            canonical_filters.append(Count.program_type_id == type_id)
-        canonical_filters.append(and_(
-            Count.event_id.is_(None),
-            func.lower(func.trim(Count.program_type)) == "sunday worship service",
-            or_(Count.program_domain.is_(None), func.lower(func.trim(Count.program_domain)).in_({"weekly programs", "weekly_programs"})),
-        ))
-        count_filters = [
-            Count.is_deleted.is_(False), Count.date >= start_at, Count.date < end_at,
-            or_(*canonical_filters),
-        ]
-        storage_filters = []
-        location_ids = [str(row.location_id) for row in locations]
-        event_ids = [row.id for row in events]
-        if location_ids:
-            storage_filters.append(Count.location_id.in_(location_ids))
-        if event_ids:
-            storage_filters.append(Count.event_id.in_(event_ids))
-        storage_filters.append(and_(
-            Count.event_id.is_(None),
-            func.lower(func.coalesce(Count.program_level, "")).in_({"group", "region", "state"}),
-            scope_filter(Count.program_scope_path, scope_path),
-        ))
-        count_result = await db.execute(select(Count).options(joinedload(Count.count_group)).where(*count_filters, or_(*storage_filters)))
-        count_rows = list(count_result.scalars().all())
+        count_rows = []
+        if program_key == "house_caring_fellowship":
+            fellowship_start = datetime.combine(first_date, time.min)
+            fellowship_end = datetime.combine(last_date + timedelta(days=1), time.min)
+            fellowship_result = await db.execute(
+                select(Fellowship, FellowshipAttendance)
+                .join(Location, Location.location_id == Fellowship.location_id)
+                .outerjoin(FellowshipAttendance, and_(
+                    Fellowship.fellowship_id == FellowshipAttendance.fellowship_id,
+                    FellowshipAttendance.is_deleted.is_(False),
+                    FellowshipAttendance.date >= fellowship_start,
+                    FellowshipAttendance.date < fellowship_end,
+                ))
+                .where(
+                    scope_filter(Fellowship.path, scope_path),
+                    or_(Location.is_active.is_(True), and_(Location.is_active.is_(False), Location.closed_on.is_not(None), Location.closed_on > first_date)),
+                    or_(Location.opened_on.is_(None), Location.opened_on <= last_date),
+                    or_(Location.closed_on.is_(None), Location.closed_on > first_date),
+                )
+            )
+            house_units: dict[str, Any] = {}
+            for fellowship, attendance_row in fellowship_result.all():
+                fellowship_id = str(fellowship.fellowship_id)
+                house_units[fellowship_id] = SimpleNamespace(
+                    location_id=fellowship_id,
+                    path=str(fellowship.path),
+                    location_name=fellowship.fellowship_name,
+                    is_active=True, opened_on=None, closed_on=None,
+                )
+                if attendance_row is None:
+                    continue
+                categories = {key: int(getattr(attendance_row, key, 0) or 0) for key in _CATEGORIES}
+                category_total = sum(categories.values())
+                legacy_total = sum(int(getattr(attendance_row, key, 0) or 0) for key in ("men", "women", "youths", "children"))
+                stored_total = int(getattr(attendance_row, "total", 0) or 0)
+                when = attendance_row.date
+                if when.tzinfo is None:
+                    when = datetime.combine(when.date(), time.min, ZoneInfo(REPORTING_TIMEZONE)).astimezone(timezone.utc)
+                count_rows.append(SimpleNamespace(
+                    id=attendance_row.id, location_id=fellowship_id, date=when,
+                    event_id=None, program_level=None, program_scope_path=None,
+                    status="approved", count_mode=None, count_group_id=None, count_group=None,
+                    total=category_total if category_total else (legacy_total if legacy_total else stored_total),
+                    source_role="regular", **categories,
+                ))
+            locations = list(house_units.values())
+        else:
+            canonical_filters = []
+            # Resolve the canonical type and events in one query. The empty event
+            # result retains legacy name matching without another type lookup.
+            if type_id is not None:
+                canonical_filters.append(Count.program_type_id == type_id)
+            canonical_filters.append(and_(
+                Count.event_id.is_(None),
+                func.lower(func.trim(Count.program_type)) == program.label.casefold(),
+                or_(Count.program_domain.is_(None), func.lower(func.trim(Count.program_domain)).in_({"weekly programs", "weekly_programs"})),
+            ))
+            count_filters = [
+                Count.is_deleted.is_(False), Count.date >= start_at, Count.date < end_at,
+                or_(*canonical_filters),
+            ]
+            storage_filters = []
+            location_ids = [str(row.location_id) for row in locations]
+            event_ids = [row.id for row in events]
+            if location_ids:
+                storage_filters.append(Count.location_id.in_(location_ids))
+            if event_ids:
+                storage_filters.append(Count.event_id.in_(event_ids))
+            storage_filters.append(and_(
+                Count.event_id.is_(None),
+                func.lower(func.coalesce(Count.program_level, "")).in_({"group", "region", "state"}),
+                scope_filter(Count.program_scope_path, scope_path),
+            ))
+            count_result = await db.execute(select(Count).options(joinedload(Count.count_group)).where(*count_filters, or_(*storage_filters)))
+            count_rows = list(count_result.scalars().all())
 
         def build(path: str, when: date) -> dict[str, Any]:
             active_locations = [
@@ -666,6 +742,7 @@ class SundayWorshipAnalytics:
                 locations=active_locations, events=active_events,
                 count_rows=daily_counts, include_pending=include_pending,
                 estimates_by_location=estimates_by_location,
+                program=program,
             )
 
         scope_history = [build(scope_path, when) for when in occurrence_dates]
