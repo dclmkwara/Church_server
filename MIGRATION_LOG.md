@@ -65,3 +65,14 @@ The B6 revision also adds six non-null, zero-default population category columns
 | 13:02 | `pg_dump --format=custom --no-owner --no-privileges` via the Supabase session pooler to `_dev_db_snapshots/pre_b6_admin_20261110.dump` | Remote read / local backup | Fresh archive: 942,535 bytes; SHA-256 `379B0A5DA1AFE2D16EB768826CF59A75B2690C9CA4086DCE60B3E550EBDBC9E4`. `pg_restore --list` succeeded with 1,373 entries; full decompression via `pg_restore --file NUL` succeeded. |
 | 13:03 | Read-only remote preflight | Remote read | Ledger `b5f7a9c2d341`. Six fellowship activity tables contain 3 rows total: one orphan each in `fellowship_members`, `fellowship_attendance`, and `fellowship_offerings`; 0 malformed UUIDs. B6 deletes these orphan development rows before adding the FKs. |
 | 13:04 | `alembic upgrade c6d7e8f9a012` | **REMOTE WRITE** | Success. Remote ledger advanced from `b5f7a9c2d341` to `c6d7e8f9a012`. Post-check confirmed all six UUID columns and FKs, six attendance categories, and zero activity rows after removal of the three previously identified orphan development rows. |
+
+## 2026-11-10 - Admin role policy reconciliation
+
+| Time (Africa/Lagos) | Step | Mode | Result |
+|---|---|---|---|
+| 13:05 | Export `roles`, `permissions`, and `role_permissions` to `output/remote-rbac-before-admin-role-20261110.json` | Remote read | Baseline: 20 roles, 82 permission rows, 928 grants. Migration identity is PostgreSQL with `rolbypassrls = true`. `church_permissions_write` permits writes only when `app.role_score >= 9`; `church_rls_permissions_read` permits SELECT. No RLS policy was changed. |
+| 13:08 | First `alembic upgrade d71a9c4e2b60` attempt | **REMOTE WRITE attempt, rolled back** | PostgreSQL rejected the permission insert because `permissions.operation` is NOT NULL. Alembic's transaction rolled back; read-only check confirmed ledger `c6d7e8f9a012` and baseline counts unchanged. The migration was corrected to set `operation='CREATE'`. |
+| 13:10 | Retry `alembic upgrade d71a9c4e2b60` | **REMOTE WRITE** | Success. Migration added 3 permission rows and 49 grants, and removed 4 inappropriate admin `users:assign_roles` grants. |
+| 13:11 | Export after state to `output/remote-rbac-after-admin-role-20261110.json` and structural diff | Remote read | Ledger `d71a9c4e2b60`; 20 roles, 85 permissions, 973 grants. Added permissions: `population_estimates:manage`, `programs:approve_events`, `workers:request_changes`. Remote-only `resource:read` remains. No roles or permission rows were removed. |
+
+The migration has an exact baseline guard for 20/82/928 and requires a superuser or `BYPASSRLS` role. The permission write policy was not weakened. The pre/post JSON exports contain role and permission metadata, no credentials or person data.

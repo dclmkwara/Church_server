@@ -1,11 +1,11 @@
 # Admin Role and Permission Audit
 
-**Scope:** Location, Group, Region and State governance personas; local source and tests reviewed at commit `87eed27` plus the current uncommitted role-policy changes. The permission matrix below is generated from `app/db/init_rbac.py` defaults and is not a claim about the live database until the reviewed RBAC reconciliation is applied.
+**Scope:** Location, Group, Region and State governance personas; permission defaults and guards reviewed at the current policy implementation. The matrix is generated from `app/db/init_rbac.py`; its grant reconciliation was applied to remote development at `d71a9c4e2b60` and is verified by before/after exports.
 
 ## Earlier plan status
 
 - **Step 0 - hygiene:** completed per `ANALYTICS_FULL_PLAN_STEP0_REPORT.md`. It reports 253 passing tests, redacted DB error logging, a secrets scan, and the generated State expected-attendance CSV template.
-- **Step 1 - remote migration/deployment:** the November 7 report records `e2b4c6d8f013`; the later B5 close-out in `MIGRATION_LOG.md` records the remote at `b5f7a9c2d341`, after `a4d92c16e7b3`, `b5e6f8a1c234`, and `b5f7a9c2d341` were applied. FastAPI Cloud deployment was not completed. The current RBAC reconciliation attempt failed at the `permissions` write policy; a post-failure read confirmed the remote RBAC tables remained unchanged (20 roles, 82 permissions, 928 grants).
+- **Step 1 - remote migration/deployment:** the November 7 report records `e2b4c6d8f013`; the later B5 close-out in `MIGRATION_LOG.md` records the remote at `b5f7a9c2d341`, after `a4d92c16e7b3`, `b5e6f8a1c234`, and `b5f7a9c2d341` were applied. FastAPI Cloud deployment was not completed. B6 was applied remotely at `c6d7e8f9a012`. The approved admin role data revision was applied at `d71a9c4e2b60`; the RBAC totals are now 20 roles, 85 permissions and 973 grants. FastAPI Cloud deployment remains pending.
 - **Navigation page audit:** exists at repository root as [`NAVIGATION_PAGE_AUDIT.md`](NAVIGATION_PAGE_AUDIT.md). No menu consolidation has been done.
 
 ## Governance roles and scope
@@ -109,4 +109,4 @@ The "same level modules" statement reflects the source configuration; the Count 
 
 ## Verification boundary
 
-The role defaults and route guards have been changed locally; they have **not yet been reconciled to the remote database**. Before that write, export remote roles, permissions and grants to JSON, compare with proposed defaults, review removals, take a fresh dump, apply only the approved grant delta, export again and diff. Do not run `init_rbac.py` blindly because it replaces permission sets. Full-suite and role-specific test results are recorded in the implementation handoff after the current work is complete.
+The role defaults and route guards are reconciled to remote development at `d71a9c4e2b60`. The reviewed before/after exports are linked in `ADMIN_ROLE_RECONCILIATION_REPORT.md`. `init_rbac.py` was not run against remote. The mobile changes, printable report/export work and Slice E validation are still separate plan items.

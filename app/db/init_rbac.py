@@ -101,7 +101,7 @@ DEFAULT_PERMISSIONS = [
     _perm("reports:read", "Read Reports", "Can view reports"),
     _perm("reports:refresh", "Refresh Reports", "Can refresh report materializations"),
     _perm("statistics:read", "Read Statistics", "Can view statistics endpoints"),
-    _perm("population_estimates:manage", "Manage Expected Population", "Can set versioned expected Sunday attendance within the assigned State"),
+    _perm("population_estimates:manage", "Manage Documented Population", "Can manage versioned location-level population records within the assigned State"),
 
     # Notifications and media
     _perm("notifications:read", "Read Notifications", "Can poll notifications"),

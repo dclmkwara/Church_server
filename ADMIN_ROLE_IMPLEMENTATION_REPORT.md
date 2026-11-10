@@ -1,7 +1,7 @@
 ﻿# Admin Role Policy Implementation Report
 
-**Date:** 9 November 2026
-**Scope:** Step A from the approved plan. Local policy and authorization changes are implemented and tested. Remote RBAC grant reconciliation is blocked by the database's score-9 write policy; no remote role, permission, or grant was changed.
+**Date:** 9 November 2026 (historical report; remote status updated 10 November)
+**Scope:** Step A local policy and authorization implementation. Its initial remote attempt was blocked under the application identity. The subsequent approved migration-role reconciliation is complete; see [ADMIN_ROLE_RECONCILIATION_REPORT.md](ADMIN_ROLE_RECONCILIATION_REPORT.md).
 
 ## Mobile checkpoint
 
@@ -29,7 +29,7 @@ A same-day public-schema snapshot was captured before the attempt and validated 
 
 Both exports contain 20 roles, 82 permissions, and 928 grants; a structural comparison is identical. The reviewed local-default diff before attempting the write was 49 grants to add and 4 to remove (`users:assign_roles` from Location, Group, Region, and State Admin). Three permission records are absent remotely: `population_estimates:manage`, `programs:approve_events`, and `workers:request_changes`. The remote-only `resource:read` permission remains outside the local defaults.
 
-Calling the RBAC initializer failed on the first permission insert: remote RLS rejects writes to `permissions` unless `app.role_score >= 9`. The app-role query returned no visible active, approved score-9 account, so I could not establish a verified actor context. I did not set a synthetic score or bypass RLS. A post-attempt export confirmed no changes. Remote RBAC application therefore needs an authorized score-9 session or a database-owner deployment path.
+The first remote attempt used the application identity and failed because the permissions write policy requires `app.role_score >= 9`. No synthetic score was set and the post-attempt export showed no changes. This blocker was resolved on 10 November by applying the reviewed Alembic data revision through the migration identity, which had `BYPASSRLS`; see [ADMIN_ROLE_RECONCILIATION_REPORT.md](ADMIN_ROLE_RECONCILIATION_REPORT.md) and [MIGRATION_LOG.md](MIGRATION_LOG.md). The policy itself was not changed.
 
 ## Verification
 
@@ -38,10 +38,9 @@ Calling the RBAC initializer failed on the first permission insert: remote RLS r
 
 ## Not completed
 
-- Applying the reviewed RBAC diff to remote development.
-- Deployment of these role-policy changes.
-- Steps B6, C, and D from the larger plan.
+- FastAPI Cloud deployment and live persona smoke tests.
+- Universal audit coverage for admin setup actions, printable report/export, and Slice E validation; these remain later plan items.
 
 ## Checkpoint
 
-Local Step A code and audit are committed as `9f957e0` (`Implement scoped admin role policies`). The commit has not been pushed or deployed because remote RBAC remains out of sync. This report intentionally does not claim remote RBAC synchronization or deployment.
+Local Step A code and audit were committed as `9f957e0` (`Implement scoped admin role policies`). The remote RBAC synchronization is now recorded at `d71a9c4e2b60`. The application deployment remains unverified.
