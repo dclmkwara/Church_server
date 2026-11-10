@@ -397,7 +397,9 @@ async def _render_event_matrix_page(request: Request, ctx, *, mode: str, campaig
         detail_panel,
         no_campaign,
     )
-    return shell_layout(ctx, request_path=request.url.path, active_key="programs", title="Retreat" if mode == "retreat" else "Crusade", subtitle="Event reporting", primary_action=None, content=Div(content, id="program-analytics-content"), show_shell_intro=False, show_scope_breadcrumb=False)
+    report_mode = "retreat" if mode == "retreat" else "crusade"
+    report_url = scope_link(ctx, "/dashboard/pastor-report", scope_path=await DashboardService.scope_path(request, ctx), period="event", event_mode=report_mode, campaign_id=campaign_id, include_pending=str(include_pending).lower())
+    return shell_layout(ctx, request_path=request.url.path, active_key="programs", title="Retreat" if mode == "retreat" else "Crusade", subtitle="Event reporting", primary_action=A("Print / export report", href=report_url, cls="btn btn-outline-primary"), content=Div(content, id="program-analytics-content"), show_shell_intro=False, show_scope_breadcrumb=False)
 
 
 async def _event_matrix_page(request: Request, ctx, *, mode: str, campaign_id: str = "", event_id: str = "", metric: str = "attendance", include_pending: bool = False):

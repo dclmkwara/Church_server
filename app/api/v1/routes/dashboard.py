@@ -649,9 +649,10 @@ async def get_sunday_worship_overview(
 )
 async def get_sunday_worship_series(
     scope_path: Optional[str] = Query(None),
-    weeks: int = Query(4, ge=4, le=8),
+    weeks: int = Query(4, ge=4, le=26),
     latest_date: Optional[date] = Query(None),
     include_pending: bool = Query(False),
+    include_locations: bool = Query(False),
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ):
@@ -664,6 +665,7 @@ async def get_sunday_worship_series(
     occurrence_dates = [latest - timedelta(weeks=index) for index in reversed(range(weeks))]
     return await SundayWorshipAnalytics.series(
         db, effective_scope, occurrence_dates=occurrence_dates, include_pending=include_pending,
+        include_locations=include_locations,
     )
 
 
@@ -673,7 +675,7 @@ async def get_sunday_worship_series(
 )
 async def get_sunday_worship_dashboard_payload(
     scope_path: Optional[str] = Query(None),
-    weeks: int = Query(4, ge=4, le=8),
+    weeks: int = Query(4, ge=4, le=26),
     latest_date: Optional[date] = Query(None),
     include_pending: bool = Query(False),
     db: AsyncSession = Depends(deps.get_db),

@@ -29,6 +29,7 @@ from .routes.people import register_people_routes
 from .routes.placeholders import register_placeholder_routes
 from .routes.programs import register_program_routes
 from .routes.reports import register_report_routes
+from .routes.pastor_report import register_pastor_report_routes
 from .routes.system import register_system_routes
 from .routes.workflows import register_workflow_routes
 from .theme import DCLM_THEME, setup_theme_defaults
@@ -329,6 +330,7 @@ register_population_analytics_routes(app)
 register_workflow_routes(app)
 register_communication_routes(app)
 register_report_routes(app)
+register_pastor_report_routes(app)
 register_system_routes(app)
 register_placeholder_routes(app)
 

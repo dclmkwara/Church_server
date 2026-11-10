@@ -200,6 +200,7 @@ def _build_overview(
     received_units: set[str] = set()
     counted_units: set[str] = set()
     location_totals: dict[str, int] = {}
+    location_reports: dict[str, dict[str, Any]] = {}
     included_combined_count_scopes: set[str] = set()
     unreported_location_ids: list[str] = []
 
@@ -225,6 +226,7 @@ def _build_overview(
             combined_rows = rows_by_event.get(str(event.id), []) if event is not None else rows_by_scope[count_scope]
             review = _report_review_state(combined_rows)
             if review:
+                location_reports[location_id] = {"status": review, "total": None, "categories": {key: None for key in _CATEGORIES}}
                 received_units.add(location_id)
                 coverage[review] += 1
                 if review == "approved" or (include_pending and review == "pending"):
@@ -236,6 +238,7 @@ def _build_overview(
                         included_combined_count_scopes.add(count_scope)
             else:
                 state = receipt_state(occurrence_date, now, received=False)
+                location_reports[location_id] = {"status": state, "total": None, "categories": {key: None for key in _CATEGORIES}}
                 coverage[state] += 1
                 if state in {"missing", "late", "awaiting"}:
                     unreported_location_ids.append(location_id)
@@ -244,6 +247,13 @@ def _build_overview(
         rows = own_rows or event_rows
         review = _report_review_state(rows)
         if review:
+            values = _count_values(rows)
+            visible = review == "approved" or (include_pending and review == "pending")
+            location_reports[location_id] = {
+                "status": review,
+                "total": values["total"] if visible else None,
+                "categories": {key: values[key] for key in _CATEGORIES} if visible else {key: None for key in _CATEGORIES},
+            }
             received_units.add(location_id)
             coverage[review] += 1
             if review == "approved" or (include_pending and review == "pending"):
@@ -266,6 +276,7 @@ def _build_overview(
                     location_totals[location_id] = _count_values(rows)["total"]
         else:
             state = receipt_state(occurrence_date, now, received=False)
+            location_reports[location_id] = {"status": state, "total": None, "categories": {key: None for key in _CATEGORIES}}
             coverage[state] += 1
             if state in {"missing", "late", "awaiting"}:
                 unreported_location_ids.append(location_id)
@@ -373,6 +384,7 @@ def _build_overview(
         "coverage": coverage_output,
         "unreported_location_ids": unreported_location_ids,
         "location_totals": location_totals,
+        "location_reports": location_reports,
         "service_reports": service_reports,
         "multiple_service_locations": sorted(multiple_service_locations),
         "daily_total_defined": not bool(multiple_service_locations),
@@ -508,6 +520,7 @@ class SundayWorshipAnalytics:
         include_pending: bool = False,
         now: datetime | None = None,
         program_key: str = "sunday_worship_service",
+        include_locations: bool = False,
     ) -> dict[str, Any]:
         """Load all weeks and direct children in a small fixed set of queries."""
         program = STANDING_PROGRAMS.get(program_key)
@@ -757,13 +770,25 @@ class SundayWorshipAnalytics:
             for location_id in scope_history[-1].get("unreported_location_ids", [])
             if location_id in location_by_id
         ]
-        return {
+        result = {
             "scope": scope_history,
             "ancestors": ancestors,
             "location_nodes": [
                 {"path": str(location.path), "name": str(location.location_name), "location_id": str(location.location_id)}
                 for location in locations
             ],
+            "locations": [
+                {
+                    "path": str(location.path),
+                    "name": str(location.location_name),
+                    "location_id": str(location.location_id),
+                    "history": [
+                        {**(record := build(str(location.path), when)), **(record.get("location_reports") or {}).get(str(location.location_id), {})}
+                        for when in occurrence_dates
+                    ],
+                }
+                for location in locations
+            ] if include_locations else [],
             "missing_locations": missing_locations,
             "program_type_id": type_id,
             "children": [
@@ -776,3 +801,4 @@ class SundayWorshipAnalytics:
                 for child in children
             ],
         }
+        return result

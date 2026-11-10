@@ -651,6 +651,11 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
                         cls="analytics-subtitle",
                     ),
                     A("Expected attendance", href="/analytics/expected-population", cls="analytics-expected-link") if can_manage_expected else None,
+                    Div(
+                        A("Print report", href=scope_link(ctx, "/dashboard/pastor-report", scope_path=scope_path, period=f"{weeks}w", include_pending=str(include_pending).lower()), cls="btn btn-outline-primary btn-sm"),
+                        A("Export data", href=scope_link(ctx, "/dashboard/pastor-report/export.xlsx", scope_path=scope_path, period=f"{weeks}w", include_pending=str(include_pending).lower()), cls="btn btn-outline-secondary btn-sm"),
+                        cls="analytics-report-actions d-flex flex-wrap gap-2 mt-2",
+                    ),
                     cls="analytics-heading",
                 ),
                 _coverage_panel(current, latest, include_pending),

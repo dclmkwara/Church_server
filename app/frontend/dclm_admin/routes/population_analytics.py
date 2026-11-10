@@ -287,7 +287,8 @@ def register_population_analytics_routes(app) -> None:
         weeks = 8 if weeks == 8 else 4
         target = scope_link(ctx, "/church-data/population-attendance/content", program_key=program_key, weeks=str(weeks), include_pending=str(include_pending).lower())
         body = Div(P("Loading population reports…", cls="placeholder-glow text-muted"), id="population-page-load", hx_get=target, hx_trigger="load", hx_swap="outerHTML", cls="min-vh-25")
-        return shell_layout(ctx, request_path=request.url.path, active_key="church", title="Population attendance", subtitle="Recurring program attendance and reporting coverage.", primary_action=None, content=page_stack(body), show_shell_intro=False)
+        report_url = scope_link(ctx, "/dashboard/pastor-report", scope_path=await DashboardService.scope_path(request, ctx), period="4w", include_pending=str(include_pending).lower())
+        return shell_layout(ctx, request_path=request.url.path, active_key="church", title="Population attendance", subtitle="Recurring program attendance and reporting coverage.", primary_action=A("Print / export report", href=report_url, cls="btn btn-outline-primary"), content=page_stack(body), show_shell_intro=False)
 
     @app.get("/church-data/population-attendance/content")
     async def population_attendance_content(request: Request, program_key: str = "sunday_worship_service", weeks: int = 4, include_pending: bool = False, scope_path: str = ""):

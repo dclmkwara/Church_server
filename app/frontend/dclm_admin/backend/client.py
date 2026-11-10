@@ -943,6 +943,7 @@ class BackendClient:
         weeks: int = 4,
         include_pending: bool = False,
         latest_date: str | None = None,
+        include_locations: bool = False,
     ) -> dict[str, Any]:
         """Fetch all selected Sunday occurrences and direct-child rows together."""
         params: dict[str, Any] = {"weeks": weeks, "include_pending": include_pending}
@@ -950,6 +951,8 @@ class BackendClient:
             params["scope_path"] = scope_path
         if latest_date:
             params["latest_date"] = latest_date
+        if include_locations:
+            params["include_locations"] = True
         return await self._request("GET", "/dashboard/sunday-worship/series", access_token=access_token, params=params)
 
     async def get_program_occurrences(
@@ -1133,6 +1136,17 @@ class BackendClient:
         if end_date:
             params["end_date"] = end_date
         return await self._request("GET", "/reports/financial", access_token=access_token, params=params or None)
+
+    async def get_offerings_by_program(self, access_token: str, *, scope_path: str, start_date: str, end_date: str) -> list[dict[str, Any]]:
+        return await self._request("GET", "/reports/offerings-by-program", access_token=access_token, params={
+            "scope_path": scope_path, "start_date": start_date, "end_date": end_date,
+        })
+
+    async def audit_report_export(self, access_token: str, *, export_kind: str, export_format: str, scope_path: str, start_date: str, end_date: str) -> dict[str, Any]:
+        return await self._request("POST", "/reports/export-audit", access_token=access_token, params={
+            "export_kind": export_kind, "export_format": export_format, "scope_path": scope_path,
+            "start_date": start_date, "end_date": end_date,
+        })
 
     async def get_report_attendance(self, access_token: str, *, scope_path: str | None = None, start_date: str | None = None, end_date: str | None = None) -> list[dict[str, Any]]:
         params: dict[str, Any] = {}

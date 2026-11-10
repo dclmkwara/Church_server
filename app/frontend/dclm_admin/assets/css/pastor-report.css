@@ -1,0 +1,35 @@
+﻿.pastor-report-page { min-width: 0; }
+.pastor-report-document { background: #fff; color: #1b2b3c; border: 1px solid #dbe3ee; border-radius: 14px; padding: 24px; max-width: 1100px; margin: 20px auto; box-shadow: 0 8px 30px #18365b12; }
+.pastor-report-cover { display: flex; align-items: center; gap: 18px; border-bottom: 3px solid #174ea6; padding: 0 0 18px; margin-bottom: 18px; }
+.pastor-report-logo { width: 76px; height: auto; object-fit: contain; }
+.pastor-report-overline { font-size: .75rem; letter-spacing: .12em; color: #53657a; font-weight: 700; margin: 0 0 4px; }
+.pastor-report-title { font-size: 2rem; margin: 0; color: #173f7a; }
+.pastor-report-scope { font-size: 1.3rem; margin: 3px 0; }
+.pastor-report-period, .pastor-report-generated, .pastor-report-status { margin: 3px 0; color: #53657a; }
+.pastor-report-section { margin: 0 0 14px; break-inside: auto; }
+.pastor-insight { border-left: 3px solid #174ea6; padding: 8px 12px; background: #f5f8fc; border-radius: 0 8px 8px 0; }
+.pastor-report-table { width: 100%; font-size: .83rem; }
+.pastor-report-table th { background: #eef4fc; color: #173f7a; }
+.pastor-report-table td, .pastor-report-table th { vertical-align: top; overflow-wrap: anywhere; }
+.pastor-report-footer { border-top: 1px solid #ccd7e5; padding-top: 10px; text-align: center; color: #53657a; font-size: .85rem; margin-top: 22px; }
+.pastor-report-controls { align-items: end; }
+.pastor-report-controls > label { min-width: 150px; }
+@page { size: A4; margin: 14mm; @bottom-left { content: "Powered by: Kwara State ICT Unit"; color: #53657a; font-size: 8pt; } @bottom-right { content: "Page " counter(page); color: #53657a; font-size: 8pt; } }
+@media print {
+  body * { visibility: hidden !important; }
+  #pastor-report-printable, #pastor-report-printable * { visibility: visible !important; }
+  #pastor-report-printable { position: static !important; left: auto; top: auto; width: 100%; max-width: none !important; margin: 0 !important; padding: 0 !important; border: 0 !important; box-shadow: none !important; border-radius: 0 !important; }
+  .pastor-report-controls, .pastor-report-actions, .admin-topbar, .admin-sidebar, .admin-bottom-nav, .sidebar-overlay { display: none !important; }
+  .pastor-report-section { break-inside: auto !important; }
+  .pastor-report-table tr { break-inside: avoid; page-break-inside: avoid; }
+  .pastor-report-table thead { display: table-header-group; }
+  .pastor-report-footer { position: static; width: auto; background: #fff; }
+}
+@media (max-width: 640px) {
+  .pastor-report-document { padding: 14px; border-radius: 10px; }
+  .pastor-report-cover { align-items: flex-start; }
+  .pastor-report-logo { width: 54px; }
+  .pastor-report-title { font-size: 1.5rem; }
+  .pastor-table-scroll { overflow-x: auto; max-width: 100%; }
+  .pastor-report-controls > * { min-width: calc(50% - 8px); flex: 1; }
+}

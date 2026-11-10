@@ -848,7 +848,7 @@ class DashboardService:
             return {"error": str(exc)}
 
     @staticmethod
-    async def sunday_worship_series(request, ctx, *, weeks: int = 4, scope_path: str | None = None, latest_date: str | None = None) -> dict[str, Any]:
+    async def sunday_worship_series(request, ctx, *, weeks: int = 4, scope_path: str | None = None, latest_date: str | None = None, include_locations: bool = False) -> dict[str, Any]:
         """Fetch a scope's selected Sunday series and direct children in one call."""
         if not await DashboardService.live_enabled(request):
             return {"unavailable": True, "message": "Sunday Worship reporting requires the live backend."}
@@ -862,6 +862,7 @@ class DashboardService:
                 weeks=weeks,
                 include_pending=str(extras.get("include_pending") or "").lower() == "true",
                 latest_date=latest_date,
+                include_locations=include_locations,
             )
         except BackendClientError as exc:
             return {"error": str(exc)}

@@ -13,9 +13,72 @@ from app.models.user import User
 from typing import List, Optional
 from datetime import date, timedelta
 from statistics import pstdev
+from zoneinfo import ZoneInfo
+from datetime import datetime, time
 
 router = APIRouter()
 _REPORT_CACHE_TTL = 20.0
+
+
+@router.post("/export-audit", dependencies=[Depends(deps.PermissionChecker("reports:read"))])
+async def audit_report_export(
+    export_kind: str = Query(..., min_length=1, max_length=60),
+    export_format: str = Query(..., pattern="^(print|pdf|xlsx|csv_zip)$"),
+    scope_path: Optional[str] = None,
+    start_date: date = Query(...),
+    end_date: date = Query(...),
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+):
+    if start_date > end_date:
+        raise HTTPException(status_code=400, detail="start_date must not be after end_date")
+    scope = _resolve_scope(current_user, scope_path)
+    add_audit_record(
+        db, actor=current_user, action=f"EXPORT_{export_kind.upper()}", resource_type="report_export",
+        resource_id=export_format, scope_path=scope,
+        fields={"report_type": export_kind, "format": export_format, "start_date": str(start_date), "end_date": str(end_date)},
+    )
+    await db.commit()
+    return {"recorded": True}
+
+
+@router.get("/offerings-by-program", dependencies=[Depends(deps.PermissionChecker("reports:read"))])
+async def get_offerings_by_program(
+    scope_path: Optional[str] = None,
+    start_date: date = Query(...),
+    end_date: date = Query(...),
+    db: AsyncSession = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+):
+    """Return date/program/fund/status offering totals without exposing submitter details."""
+    if start_date > end_date:
+        raise HTTPException(status_code=400, detail="start_date must not be after end_date")
+    from sqlalchemy import select, func
+    from app.models.offerings import Offering
+    from app.models.programs import ProgramEvent, ProgramType
+
+    scope = _resolve_scope(current_user, scope_path)
+    start_at = datetime.combine(start_date, time.min, ZoneInfo("Africa/Lagos"))
+    end_at = datetime.combine(end_date + timedelta(days=1), time.min, ZoneInfo("Africa/Lagos"))
+    program_label = func.coalesce(Offering.program_type, ProgramType.name, ProgramEvent.title, "Unclassified")
+    stmt = select(
+        func.date(Offering.date).label("date"), program_label.label("program"),
+        Offering.fund_type, Offering.status, func.sum(Offering.amount).label("amount"),
+        func.count(Offering.id).label("records"),
+    ).select_from(Offering).outerjoin(ProgramEvent, ProgramEvent.id == Offering.event_id).outerjoin(
+        ProgramType, ProgramType.id == func.coalesce(Offering.program_type_id, ProgramEvent.program_type_id)
+    ).where(
+        _scope_filter(Offering.path, scope), Offering.is_deleted.is_(False),
+        Offering.date >= start_at, Offering.date < end_at,
+    ).group_by(func.date(Offering.date), program_label, Offering.fund_type, Offering.status).order_by(
+        func.date(Offering.date), program_label, Offering.fund_type, Offering.status,
+    )
+    result = await db.execute(stmt)
+    return [
+        {"date": str(row.date), "program": str(row.program), "fund_type": row.fund_type,
+         "status": row.status, "amount": float(row.amount or 0), "records": int(row.records or 0)}
+        for row in result.all()
+    ]
 
 
 def _resolve_scope(

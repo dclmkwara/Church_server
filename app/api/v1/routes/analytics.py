@@ -24,7 +24,7 @@ _POPULATION_PROGRAM_KEYS = {
 async def read_standing_program_series(
     scope_path: str | None = Query(None),
     program_key: str = Query("sunday_worship_service"),
-    weeks: int = Query(4, ge=4, le=8),
+    weeks: int = Query(4, ge=4, le=26),
     latest_date: date | None = Query(None),
     include_pending: bool = Query(False),
     db: AsyncSession = Depends(deps.get_db),

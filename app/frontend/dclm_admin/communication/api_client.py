@@ -570,6 +570,7 @@ class APIClient:
         weeks: int = 4,
         include_pending: bool = False,
         latest_date: str | None = None,
+        include_locations: bool = False,
     ) -> dict[str, Any]:
         """Forward the grouped Sunday series request to the backend adapter."""
         return await self._backend_client.get_dashboard_sunday_worship_series(
@@ -578,7 +579,14 @@ class APIClient:
             weeks=weeks,
             include_pending=include_pending,
             latest_date=latest_date,
+            include_locations=include_locations,
         )
+
+    async def get_offerings_by_program(self, access_token: str, **params):
+        return await self._backend_client.get_offerings_by_program(access_token, **params)
+
+    async def audit_report_export(self, access_token: str, **params):
+        return await self._backend_client.audit_report_export(access_token, **params)
 
     async def get_sunday_worship_dashboard_payload(self, access_token: str, **params) -> dict[str, Any]:
         return await self._backend_client.get_sunday_worship_dashboard_payload(access_token, **params)

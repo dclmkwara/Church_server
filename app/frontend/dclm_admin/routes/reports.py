@@ -16,7 +16,7 @@ from faststrap import Button, PlaceholderCard, Spinner
 from ..backend import BackendClientError
 from ..auth_context import build_context
 from ..communication import ReportService
-from ..communication.active_scope import active_scope_context
+from ..communication.active_scope import active_scope_context, scope_link
 from ..communication.count_aggregation import aggregate_count_submissions
 from ..components.chartjs import sparkline_chart as _sparkline
 from ..components.feedback import simple_toast_response
@@ -676,7 +676,11 @@ def register_report_routes(app) -> None:
             active_key="reports",
             title="Reports",
             subtitle="Summary, trends, anomalies, and exports.",
-            primary_action=refresh_button,
+            primary_action=Div(
+                A("Pastor’s report / export", href=scope_link(ctx, "/dashboard/pastor-report", scope_path=ctx.current_scope_path, period="4w"), cls="btn btn-outline-primary"),
+                refresh_button,
+                cls="d-flex flex-wrap gap-2",
+            ),
             content=body,
             show_shell_intro=False,
         )
