@@ -75,7 +75,10 @@ def test_attention_rolls_pending_and_missing_up_to_the_child_scope():
     assert "Ilorin Region: 1 of 4 locations did not report" in html
     assert "Ilorin Region: 2 pending count group(s)" in html
     assert "12h" not in html
-    assert "28h · 24+ hours" in html
+    assert "Oldest waiting 28 hours · 24+ hours" in html
+    assert "Oldest waiting 2 days" not in html
+    assert "analytics-attention-copy" in html
+    assert "analytics-attention-meta" in html
     assert "loc-a" not in html and "loc-b" not in html
 
 
@@ -87,4 +90,6 @@ def test_mobile_css_reflows_analytics_and_does_not_clip_at_the_page_root():
     assert ".analytics-child-table-wrap .analytics-table tr.analytics-row" in analytics_css
     assert "grid-template-columns:repeat(2,minmax(0,1fr))" in analytics_css
     assert "scroll-padding-top:76px" in analytics_css
-    assert "padding-bottom:90px" in analytics_css
+    assert "padding-bottom:72px!important" in analytics_css
+    assert "grid-template-columns:minmax(0,1fr)!important" in analytics_css
+    assert "font-size:34px" in analytics_css

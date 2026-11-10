@@ -26,7 +26,7 @@ authenticated_sweep_requires_env = pytest.mark.skipif(
 
 PERSONAS = ("state", "region", "group", "location")
 VIEWPORTS = ((360, 740), (390, 844), (768, 1024))
-PAGES = {
+ANALYTICS_PAGES = {
     "dashboard": "/dashboard",
     "retreat": "/church-data/programs/analytics/retreat",
     "crusade": "/church-data/programs/analytics/crusade",
@@ -35,6 +35,12 @@ PAGES = {
     "count-review": "/church-data/count-review",
     "expected-attendance": "/analytics/expected-population",
     "attendance": "/church-data/attendance",
+    "recurring-program-attendance": "/church-data/population-attendance",
+    "finance-analytics": "/church-data/finance",
+    "newcomers": "/church-data/newcomers",
+}
+PAGES = {
+    **ANALYTICS_PAGES,
     "Inbox": "/inbox",
     "People": "/people/workers",
     "Church data": "/church-data/programs",
@@ -73,6 +79,11 @@ def _layout_violations(page, viewport_width: int) -> list[str]:
             const rect = element.getBoundingClientRect();
             if (!rect.width || !rect.height) continue;
             const style = getComputedStyle(element);
+            if (element.closest('.prototype-dashboard,#program-analytics-content,#count-review-content,.expected-population-table') &&
+                style.fontSize && parseFloat(style.fontSize) < 10) {
+              problems.push(`${element.tagName}.${element.className} text is ${style.fontSize}`);
+              break;
+            }
             const scroller = element.closest('[style*="overflow-x: auto"], .table-responsive, .analytics-table-wrap');
             if (rect.right > viewportWidth + 1 && !scroller && style.position !== 'fixed') {
               problems.push(`${element.tagName}.${element.className} extends to ${Math.round(rect.right)}px`);
@@ -83,6 +94,19 @@ def _layout_violations(page, viewport_width: int) -> list[str]:
                 !element.matches('.visually-hidden,[aria-hidden="true"]')) {
               problems.push(`${element.tagName}.${element.className} clips content`);
               break;
+            }
+          }
+          for (const button of document.querySelectorAll('.analytics-attention-item button')) {
+            const buttonRect = button.getBoundingClientRect();
+            const content = button.closest('.analytics-attention-copy') || button.parentElement;
+            for (const textNode of content.querySelectorAll('.analytics-attention-title,.analytics-attention-meta')) {
+              const textRect = textNode.getBoundingClientRect();
+              const overlaps = buttonRect.left < textRect.right && buttonRect.right > textRect.left &&
+                buttonRect.top < textRect.bottom && buttonRect.bottom > textRect.top;
+              if (overlaps) {
+                problems.push('an attention action overlaps its title or metadata');
+                break;
+              }
             }
           }
           return problems;
@@ -113,13 +137,13 @@ def test_analytics_and_existing_admin_pages_fit_mobile_viewports():
                         f"{persona} {page_name} {width}px: {issue}"
                         for issue in _layout_violations(page, width)
                     )
-                    if page_name == "dashboard" and width < 640:
+                    if page_name in ANALYTICS_PAGES and width < 640:
                         card_rows = page.locator(".analytics-child-table-wrap tbody tr.analytics-row")
                         if card_rows.count():
                             display = card_rows.first.evaluate("element => getComputedStyle(element).display")
                             if display != "grid":
                                 failures.append(f"{persona} dashboard {width}px: child rows are not stacked cards")
-                    for control in page.locator(".analytics-remind-form button, .analytics-child-link, .analytics-attention-title").all():
+                    for control in page.locator(".analytics-remind-form button, .analytics-child-link, .analytics-attention-title, .analytics-info summary").all():
                         if control.is_visible() and control.evaluate("element => element.getBoundingClientRect().height") < 40:
                             failures.append(f"{persona} {page_name} {width}px: analytics action/link target is under 40px")
             context.close()
@@ -127,8 +151,8 @@ def test_analytics_and_existing_admin_pages_fit_mobile_viewports():
     assert not failures, "Mobile layout violations:\n" + "\n".join(failures)
 
 
-def test_analytics_dashboard_stacks_content_panels_below_640px():
-    """Keep the groups table and attention panel full-width in the shell cascade."""
+def test_analytics_dashboard_stacks_content_panels_on_tablet_and_phone():
+    """Keep dashboard content full width through tablet sizes."""
     from playwright.sync_api import sync_playwright
 
     assets = Path(__file__).parents[1] / "app/frontend/dclm_admin/assets/css"
@@ -154,7 +178,7 @@ def test_analytics_dashboard_stacks_content_panels_below_640px():
             panel_widths = page.locator(".analytics-content-split > *").evaluate_all(
                 "elements => elements.map(element => Math.round(element.getBoundingClientRect().width))"
             )
-            expected_columns = 1 if width <= 640 else 2
+            expected_columns = 1 if width <= 900 else 2
             assert len(grid_columns.split()) == expected_columns, (
                 f"Expected {expected_columns} column(s) at {width}px, got {grid_columns}"
             )
@@ -169,4 +193,88 @@ def test_dashboard_does_not_reintroduce_a_stale_analytics_stylesheet():
     dashboard_route = (root / "app/frontend/dclm_admin/routes/analytics_dashboard.py").read_text(encoding="utf-8")
     shell = (root / "app/frontend/dclm_admin/components/shell.py").read_text(encoding="utf-8")
     assert "analytics-dashboard.css" not in dashboard_route
-    assert 'analytics-dashboard.css?v=10' in shell
+    assert 'analytics-dashboard.css?v=20261110_01' in shell
+
+
+def test_rendered_dashboard_components_fit_phone_and_tablet_widths():
+    """Exercise the real dashboard components without requiring login credentials."""
+    from playwright.sync_api import sync_playwright
+    from datetime import date
+    from types import SimpleNamespace
+    from urllib.parse import urlencode
+    from fasthtml.common import to_xml
+    from app.frontend.dclm_admin.routes.analytics_dashboard import (
+        _attention_panel,
+        _children_table,
+        _line_chart,
+    )
+
+    css_root = Path(__file__).parents[1] / "app/frontend/dclm_admin/assets/css"
+    base_css = (css_root / "admin.css").read_text(encoding="utf-8")
+    analytics_css = (css_root / "analytics-dashboard.css").read_text(encoding="utf-8")
+    personas = {
+        "State": ("org.234.kw", "org.234.kw.region"),
+        "Region": ("org.234.kw.region", "org.234.kw.region.group"),
+        "Group": ("org.234.kw.region.group", "org.234.kw.region.group.location"),
+        "Location": ("org.234.kw.region.group.location", ""),
+    }
+
+    def make_context(kind, path):
+        def url_for(url, **params):
+            return f"{url}?{urlencode(params)}" if params else url
+        return SimpleNamespace(
+            current_scope_path=path, current_scope_kind=kind,
+            current_scope_label=f"{kind} name", current_scope_level={"State": 5, "Region": 4, "Group": 3, "Location": 2}[kind],
+            profile=SimpleNamespace(root_path=path, key=kind.lower()),
+            query_extras={"scope_path": path, "home_path": path, "period": "month", "weeks": "8", "include_pending": "false"},
+            url_for=url_for, has_permission=lambda _permission: True,
+        )
+
+    with sync_playwright() as runtime:
+        browser = _launch_chromium(runtime)
+        for kind, (scope_path, child_path) in personas.items():
+            context = browser.new_context(viewport={"width": 390, "height": 844})
+            page = context.new_page()
+            ctx = make_context(kind, scope_path)
+            children = [{"name": f"{kind} child", "path": child_path}] if child_path else []
+            rows = [{"overview": {"n_expected": 4, "n_received": 2, "n_counted": 2, "total": 470, "expected_population_total": 400, "expected_population_percent": 117.5, "coverage": {"pending": 1, "missing": 2}}}] if child_path else []
+            table_html = to_xml(_children_table(children, rows, kind, ctx))
+            queue = [{"location_id": "loc-a", "program_scope_path": child_path or scope_path, "age_hours": 61 * 24, "program_type": "Sunday Worship"}]
+            attention_html = to_xml(_attention_panel(
+                {}, queue, children,
+                [{"overview": {"n_expected": 4, "n_received": 2, "coverage": {"missing": 2}}}] if child_path else [],
+                {"missing_locations": [{"location_id": "loc-missing", "path": (child_path or scope_path) + ".missing"}]},
+                ctx, date(2026, 11, 8), "sunday-worship",
+            ))
+            chart_html = to_xml(_line_chart([
+                {"date": f"2026-10-{day:02d}", "average": 120 + day, "counted": 3, "expected": 4}
+                for day in (4, 11, 18, 25)
+            ], 4))
+            page.set_content(
+                f"<style>{base_css}</style><style>{analytics_css}</style>"
+                f"<main class='prototype-dashboard'><div class='analytics-dashboard-main'>"
+                f"<h1 class='analytics-title'>{kind} name</h1><div class='analytics-content-split'>"
+                f"{table_html}{attention_html}</div><section class='panel analytics-trend-panel'>"
+                f"<h2>Weekly trend</h2>{chart_html}</section></div></main>"
+            )
+            for width, height in ((360, 740), (390, 844), (768, 1024)):
+                page.set_viewport_size({"width": width, "height": height})
+                problems = _layout_violations(page, width)
+                assert not problems, f"{kind} at {width}px: {problems}"
+                if width < 640 and child_path:
+                    assert page.locator(".analytics-child-table-wrap tr.analytics-row").first.evaluate(
+                        "element => getComputedStyle(element).display"
+                    ) == "grid"
+                title = page.locator(".analytics-attention-title").first
+                if title.count():
+                    action = page.locator(".analytics-attention-item button").first
+                    if action.count():
+                        assert action.bounding_box()["y"] >= title.bounding_box()["y"] + title.bounding_box()["height"]
+                effective_svg_font = page.locator(".analytics-svg-label").first.evaluate(
+                    "element => parseFloat(getComputedStyle(element).fontSize) * element.ownerSVGElement.getBoundingClientRect().width / element.ownerSVGElement.viewBox.baseVal.width"
+                )
+                assert effective_svg_font >= 11, f"{kind} SVG label is {effective_svg_font:.1f}px at {width}px"
+                for control in page.locator(".analytics-child-link, .analytics-attention-title, .analytics-remind-form button, .analytics-info summary").all():
+                    assert control.evaluate("element => element.getBoundingClientRect().height") >= 40
+            context.close()
+        browser.close()

@@ -6,7 +6,7 @@ from html import escape
 from typing import Any
 
 from fasthtml.common import A, Details, Div, Form, H1, H2, H3, Input, Label, Link, Main, NotStr, P, Script, Span, Strong, Summary, Table, Tbody, Td, Th, Thead, Tr
-from faststrap import Badge, Button
+from faststrap import Button
 from starlette.requests import Request
 
 from ..backend import format_scope_display_id
@@ -15,6 +15,7 @@ from ..communication.active_scope import active_scope_context, scope_link
 from ..communication.church_data_service import ChurchDataService
 from app.core import dashboard_perf
 from app.services.analytics.program_config import ATTENTION_DECLINE_PCT, ATTENTION_MIN_COMPARABLE_LOCATIONS, reporting_today
+from ..backend.config import get_backend_config
 from ..auth_context import build_context
 
 
@@ -65,6 +66,13 @@ def _period_delta(current: int | float, previous: int | float, *, previous_recor
     return f"{direction} {abs(change)}% vs previous {noun}"
 
 
+def _age_label(age_hours: Any) -> str:
+    age = _integer(age_hours)
+    if age < 48:
+        return f"{age} hours"
+    return f"{age // 24} days"
+
+
 def _waiting_on_decision(summary: dict[str, Any], weeks: int) -> Any:
     pending = summary.get("pending_approvals") or []
     rows = []
@@ -72,7 +80,7 @@ def _waiting_on_decision(summary: dict[str, Any], weeks: int) -> Any:
         label = str(item.get("label") or "Pending item")
         count = _integer(item.get("count"))
         age = item.get("oldest_age_hours")
-        age_text = "age unavailable" if age is None else f"oldest waiting {_integer(age)}h"
+        age_text = "age unavailable" if age is None else f"oldest waiting {_age_label(age)}"
         rows.append(Div(Span(label), Strong(_number(count)), Span(age_text, cls="analytics-muted"), cls="analytics-decision-row"))
     body = Div(*rows, cls="analytics-decision-list") if rows else P("No requests waiting for a decision.", cls="analytics-muted")
     return Div(H2("Waiting on a decision", cls="analytics-panel-title"), P("Pending approvals in this scope, ordered by their oldest waiting item.", cls="analytics-note"), body, cls="panel analytics-decision-panel")
@@ -152,9 +160,28 @@ def _line_chart(points: list[dict[str, Any]], selected_weeks: int) -> Any:
     )
 
 
-def _metric(label: str, value: str, note: str, badge: str) -> Any:
+_METRIC_DEFINITIONS = {
+    "Adds up": "Approved reports are added across the locations in this scope.",
+    "Pooled": "The percentage compares total counted population with total documented population for locations with both values.",
+    "Recomputed": "This is recalculated from the weekly averages; weeks without a counted report are excluded.",
+    "Snapshot": "This is the worker register at the time of this report.",
+    "Roster check": "The attendance rate is withheld until the expected worker roster can be counted once per meeting.",
+    "Approved only": "Only reports approved by the reviewer are included.",
+    "Reports": "A report is a submitted record; it does not identify a unique person.",
+}
+
+
+def _metric(label: str, value: str, note: str, classification: str) -> Any:
     return Div(
-        Div(Span(label, cls="analytics-kicker"), Badge(badge, variant="light", cls="analytics-badge"), cls="analytics-card-head"),
+        Div(
+            Span(label, cls="analytics-kicker"),
+            Details(
+                Summary("i", aria_label=f"Definition: {label}", title="Show definition"),
+                P(_METRIC_DEFINITIONS.get(classification, "This figure is calculated from the reports in the selected period.")),
+                cls="analytics-info",
+            ),
+            cls="analytics-card-head",
+        ),
         H3(value, cls="analytics-value"),
         P(note, cls="analytics-note"),
         cls="analytics-metric panel",
@@ -167,10 +194,10 @@ def _coverage_panel(payload: dict[str, Any], occurrence: date, include_pending: 
     parts = _coverage_values(payload)
     total = max(n_expected, 1)
     bars = []
-    for key, label, css in (("approved", "Approved", "approved"), ("pending", "Pending review", "pending"), ("returned", "Returned", "returned"), ("conflict", "Conflict", "returned"), ("missing", "Not reported", "missing")):
+    for key, label, css in (("approved", "Approved", "approved"), ("pending", "Pending review", "pending"), ("returned", "Returned", "returned"), ("conflict", "Conflict", "conflict"), ("missing", "Not reported", "missing")):
         count = parts[key]
         bars.append(Div(cls=f"analytics-coverage-segment {css}", style=f"width:{100 * count / total:.4f}%", title=f"{label}: {count}"))
-    legend = [Span(Span(cls=f"analytics-dot {css}"), f"{label} {parts[key]}", cls="analytics-legend-item") for key, label, css in (("approved", "Approved", "approved"), ("pending", "Pending review", "pending"), ("returned", "Returned", "returned"), ("conflict", "Conflict", "returned"), ("missing", "Not reported", "missing"))]
+    legend = [Span(Span(cls=f"analytics-dot {css}"), f"{label} {parts[key]}", cls="analytics-legend-item") for key, label, css in (("approved", "Approved", "approved"), ("pending", "Pending review", "pending"), ("returned", "Returned", "returned"), ("conflict", "Conflict", "conflict"), ("missing", "Not reported", "missing"))]
     return Div(
         Div(
                 Div(Span(f"Reporting coverage · Sunday Worship · {_short_date(occurrence)}", cls="analytics-kicker"), H2(f"{received} of {n_expected} locations have submitted", cls="analytics-coverage-title")),
@@ -215,9 +242,9 @@ def _children_table(children: list[dict[str, Any]], rows: list[dict[str, Any]], 
             Td(
                 Div(Span("Latest report", cls="analytics-mobile-key"), latest),
                 Div(Span("Average per location", cls="analytics-mobile-key"), "—" if average is None else _number(average)),
-                Div(Span("Expected attendance", cls="analytics-mobile-key"), "—" if expected_population is None else _number(expected_population)),
-                Div(Span("% of expected", cls="analytics-mobile-key"), "—" if expected_pct is None else f"{float(expected_pct):.1f}%"),
-                Div(Span("Review", cls="analytics-mobile-key"), f"{coverage['pending']} pending" if coverage["pending"] else "None"),
+                Div(Span("Documented population", cls="analytics-mobile-key"), "—" if expected_population is None else _number(expected_population)),
+                Div(Span("% of documented population", cls="analytics-mobile-key"), "—" if expected_pct is None else f"{float(expected_pct):.1f}%"),
+                *([Div(Span("Review", cls="analytics-mobile-key"), f"{coverage['pending']} pending")] if coverage["pending"] else []),
                 cls="analytics-mobile-numbers",
             ),
             cls="analytics-row",
@@ -321,6 +348,9 @@ def _scope_breadcrumb(ctx: Any, ancestors: list[dict[str, Any]], selected_path: 
     selected_parts = [part for part in selected_path.split(".") if part]
     maximum_parts = [part for part in maximum.split(".") if part]
     paths = [".".join(selected_parts[:depth]) for depth in range(len(maximum_parts), len(selected_parts) + 1)]
+    paths = [path for path in paths if _path_within(path, maximum)]
+    if len(paths) <= 1:
+        return None
     names = {str(item.get("path") or ""): str(item.get("name") or "") for item in ancestors}
     crumbs = []
     for index, path in enumerate(paths):
@@ -427,7 +457,7 @@ def _attention_panel(
         age = int(bucket["age"])
         flags = " · 24+ hours" if age >= 24 else (" · 10+ hours" if age >= 10 else "")
         title = A(f"{label}: {bucket['count']} pending count group(s)", href=href, hx_get=hx_href, hx_push_url=href, hx_target="#analytics-dashboard-body", hx_swap="outerHTML", cls="analytics-attention-title")
-        items.append((95 if age >= 24 else 80 if age >= 10 else 50, Div(Span(cls="analytics-attention-dot pending"), Div(title, P(f"Oldest waiting {age}h{flags}", cls="analytics-muted"), cls="analytics-attention-copy"), cls="analytics-attention-item")))
+        items.append((95 if age >= 24 else 80 if age >= 10 else 50, Div(Span(cls="analytics-attention-dot pending"), Div(title, P(f"Oldest waiting {_age_label(age)}{flags}", cls="analytics-muted analytics-attention-meta"), cls="analytics-attention-copy"), cls="analytics-attention-item")))
 
     if ctx.has_permission("counts:review") and program_type_id and _scope_level(scope_path, ctx.current_scope_kind.title()) == "Location":
         for location_id, row in missing_nodes.items():
@@ -611,7 +641,18 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
             filters,
             Main(
                 _scope_breadcrumb(ctx, ancestors, scope_path),
-                Div(P(f"{level.upper()}", cls="analytics-eyebrow"), H1(named_scope, cls="analytics-title"), P(f"Sunday Worship · week of {latest.strftime('%d %b %Y').lstrip('0')} · figures from current development records", cls="analytics-subtitle"), A("Expected attendance", href="/analytics/expected-population", cls="analytics-expected-link") if can_manage_expected else None, cls="analytics-heading"),
+                Div(
+                    P(f"{level.upper()}", cls="analytics-eyebrow"),
+                    H1(named_scope, cls="analytics-title"),
+                    P(
+                        f"Sunday Worship · week of {latest.strftime('%d %b %Y').lstrip('0')} · ",
+                        "Including reports pending review" if include_pending else "Approved reports only",
+                        Span("Demo data", cls="analytics-demo-label") if not get_backend_config().enabled else None,
+                        cls="analytics-subtitle",
+                    ),
+                    A("Expected attendance", href="/analytics/expected-population", cls="analytics-expected-link") if can_manage_expected else None,
+                    cls="analytics-heading",
+                ),
                 _coverage_panel(current, latest, include_pending),
                 Div(
                     H2("Sunday services reported separately", cls="h6"),
