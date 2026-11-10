@@ -7,6 +7,7 @@ from app.db.filters import ltree_subpath as _ltree_subpath
 from app.db.filters import scope_filter as _scope_filter
 from app.models.core import validate_path
 from app.services.report_service import ReportService
+from app.services.audit_service import add_audit_record
 from app.schemas.report import DailyCountSummary, MonthlyFinancialSummary, AttendanceTrend
 from app.models.user import User
 from typing import List, Optional
@@ -59,8 +60,17 @@ async def export_report_csv(
 
     effective_scope = _resolve_scope(current_user, scope_path)
 
+    def audit_export():
+        add_audit_record(
+            db, actor=current_user, action="EXPORT_REPORT_CSV", resource_type="report_export",
+            resource_id=report_type, scope_path=effective_scope,
+            fields={"report_type": report_type, "start_date": str(start_date), "end_date": str(end_date), "format": "csv"},
+        )
+
     if report_type == "counts":
         buffer = await ReportService.export_counts_csv(db, effective_scope, start_date, end_date)
+        audit_export()
+        await db.commit()
         filename = f"counts_{start_date}_{end_date}.csv"
         return StreamingResponse(
             iter([buffer.getvalue()]),
@@ -69,6 +79,8 @@ async def export_report_csv(
         )
     if report_type == "financial":
         buffer = await ReportService.export_financial_csv(db, effective_scope, start_date, end_date)
+        audit_export()
+        await db.commit()
         filename = f"financial_{start_date}_{end_date}.csv"
         return StreamingResponse(
             iter([buffer.getvalue()]),
@@ -77,6 +89,8 @@ async def export_report_csv(
         )
     if report_type == "attendance":
         buffer = await ReportService.export_attendance_csv(db, effective_scope, start_date, end_date)
+        audit_export()
+        await db.commit()
         filename = f"attendance_{start_date}_{end_date}.csv"
         return StreamingResponse(
             iter([buffer.getvalue()]),
@@ -563,6 +577,13 @@ async def export_excel(
 
     effective_scope = deps.effective_scope_path(current_user)
 
+    def audit_export(export_format: str) -> None:
+        add_audit_record(
+            db, actor=current_user, action=f"EXPORT_REPORT_{export_format.upper()}", resource_type="report_export",
+            resource_id=report_type, scope_path=effective_scope,
+            fields={"report_type": report_type, "start_date": str(start_date), "end_date": str(end_date), "format": export_format},
+        )
+
     # Get data (reuse existing service)
     if report_type == "counts":
         data = await ReportService.get_daily_counts(db, effective_scope, start_date, end_date)
@@ -605,6 +626,8 @@ async def export_excel(
         buffer = BytesIO()
         wb.save(buffer)
         buffer.seek(0)
+        audit_export("xlsx")
+        await db.commit()
 
         filename = f"counts_{start_date}_{end_date}.xlsx"
         return StreamingResponse(
@@ -623,6 +646,8 @@ async def export_excel(
         buffer = BytesIO()
         wb.save(buffer)
         buffer.seek(0)
+        audit_export("xlsx")
+        await db.commit()
         filename = f"financial_{start_date}_{end_date}.xlsx"
         return StreamingResponse(
             iter([buffer.getvalue()]),
@@ -640,6 +665,8 @@ async def export_excel(
         buffer = BytesIO()
         wb.save(buffer)
         buffer.seek(0)
+        audit_export("xlsx")
+        await db.commit()
         filename = f"attendance_{start_date}_{end_date}.xlsx"
         return StreamingResponse(
             iter([buffer.getvalue()]),
@@ -680,6 +707,13 @@ async def export_pdf(
         end_date = date.today()
 
     effective_scope = deps.effective_scope_path(current_user)
+
+    def audit_export(export_format: str) -> None:
+        add_audit_record(
+            db, actor=current_user, action=f"EXPORT_REPORT_{export_format.upper()}", resource_type="report_export",
+            resource_id=report_type, scope_path=effective_scope,
+            fields={"report_type": report_type, "start_date": str(start_date), "end_date": str(end_date), "format": export_format},
+        )
 
     # Get data
     if report_type == "counts":
@@ -739,6 +773,8 @@ async def export_pdf(
         # Build PDF
         doc.build(elements)
         buffer.seek(0)
+        audit_export("pdf")
+        await db.commit()
 
         filename = f"counts_{start_date}_{end_date}.pdf"
         return StreamingResponse(
@@ -771,6 +807,8 @@ async def export_pdf(
         elements.append(t)
         doc.build(elements)
         buffer.seek(0)
+        audit_export("pdf")
+        await db.commit()
         filename = f"financial_{start_date}_{end_date}.pdf"
         return StreamingResponse(
             iter([buffer.getvalue()]),
@@ -802,6 +840,8 @@ async def export_pdf(
         elements.append(t)
         doc.build(elements)
         buffer.seek(0)
+        audit_export("pdf")
+        await db.commit()
         filename = f"attendance_{start_date}_{end_date}.pdf"
         return StreamingResponse(
             iter([buffer.getvalue()]),

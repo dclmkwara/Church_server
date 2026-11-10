@@ -41,11 +41,13 @@ def _normalize_audit_row(row: dict[str, Any]) -> dict[str, Any]:
     target = resource_type.title() if not resource_id else f"{resource_type.title()} {resource_id}"
     return {
         "audit_id": str(row.get("id") or ""),
-        "time": _display_time(row.get("ts_utc")),
-        "actor": str(row.get("user_id") or "System"),
+        "time": _display_time(row.get("timestamp") or row.get("ts_utc")),
+        "actor": str(row.get("actor_name") or row.get("user_id") or "System"),
+        "role": str(row.get("role_name") or ""),
         "action": action,
         "target": target,
-        "scope_label": str(row.get("ip_address") or "Governance scope"),
+        "scope_label": str(row.get("scope_path") or "Governance scope"),
+        "changes": row.get("changes") or {},
         "status": _audit_status(str(row.get("action") or "")),
     }
 
@@ -385,6 +387,7 @@ class SystemService:
                 or term in row["action"].lower()
                 or term in row["target"].lower()
                 or term in row["scope_label"].lower()
+                or term in row.get("role", "").lower()
             ]
         if status != "all":
             rows = [row for row in rows if row["status"] == status]

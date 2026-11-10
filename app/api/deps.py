@@ -112,6 +112,20 @@ async def get_current_user(
         nation_paths=tuple(getattr(user, "_authorized_nation_paths", ()) or ()),
     )
     role_score = highest_role_score(user)
+    actor_role = max(
+        (role for role in (user.roles or [])),
+        key=lambda role: getattr(role, "score_value", 0),
+        default=None,
+    )
+    sync_session = getattr(db, "sync_session", None)
+    if sync_session is not None:
+        sync_session.info["audit_actor"] = {
+            "user_id": str(user.user_id),
+            "actor_name": str(getattr(user, "name", "User") or "User"),
+            "role_name": str(getattr(actor_role, "role_name", "") or ""),
+            "role_score": role_score,
+            "scope_path": effective_scope_path(user),
+        }
     nation_paths = tuple(getattr(user, "_authorized_nation_paths", ()) or ())
     set_scope_context(
         role_score,

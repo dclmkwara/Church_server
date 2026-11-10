@@ -260,6 +260,14 @@ async def _communication_summary(request: Request, ctx, *, oob: bool = False) ->
 
 
 def _communication_mobile_card(ctx, row: dict[str, Any], *, search: str = "", status: str = "all", meeting: str = "") -> Div:
+    actions = [Button(
+        "Open", variant="outline-primary", size="md", data_bs_toggle="offcanvas",
+        data_bs_target="#detail-drawer",
+        hx_get=ctx.url_for(f"/communication/{row['announcement_id']}/drawer", search_filter=search, status_filter=status, meeting_filter=meeting),
+        hx_target="#detail-drawer-body", hx_swap="innerHTML", cls="w-100",
+    )]
+    if ctx.has_permission("announcements:manage"):
+        actions.append(A("Edit", href=ctx.url_for(f"/communication/{row['announcement_id']}/edit"), cls="btn btn-primary"))
     return Div(
         Div(
             H4(row["title"], cls="h6 fw-semibold mb-1"),
@@ -268,26 +276,7 @@ def _communication_mobile_card(ctx, row: dict[str, Any], *, search: str = "", st
         ),
         P(f"{row['meeting_label']} - {row['meeting_date']}", cls="text-muted mb-2"),
         P(row["summary"], cls="small text-muted mb-3"),
-        Div(
-            Button(
-                "Open",
-                variant="outline-primary",
-                size="md",
-                data_bs_toggle="offcanvas",
-                data_bs_target="#detail-drawer",
-                hx_get=ctx.url_for(
-                    f"/communication/{row['announcement_id']}/drawer",
-                    search_filter=search,
-                    status_filter=status,
-                    meeting_filter=meeting,
-                ),
-                hx_target="#detail-drawer-body",
-                hx_swap="innerHTML",
-                cls="w-100",
-            ),
-            A("Edit", href=ctx.url_for(f"/communication/{row['announcement_id']}/edit"), cls="btn btn-primary"),
-            cls="d-grid gap-2",
-        ),
+        Div(*actions, cls="d-grid gap-2"),
         cls="mobile-worker-card",
     )
 
@@ -348,6 +337,14 @@ async def _communication_workspace(request: Request, ctx, *, search: str = "", s
         desktop_rows = []
         mobile_cards = []
         for row in rows:
+            row_actions = [Button(
+                "Open", variant="outline-primary", size="md", data_bs_toggle="offcanvas",
+                data_bs_target="#detail-drawer",
+                hx_get=ctx.url_for(f"/communication/{row['announcement_id']}/drawer", search_filter=search, status_filter=status, meeting_filter=meeting),
+                hx_target="#detail-drawer-body", hx_swap="innerHTML",
+            )]
+            if ctx.has_permission("announcements:manage"):
+                row_actions.append(A("Edit", href=ctx.url_for(f"/communication/{row['announcement_id']}/edit"), cls="btn btn-primary btn-sm"))
             desktop_rows.append(
                 [
                     Div(P(row["title"], cls="fw-semibold mb-1"), P(row["summary"], cls="small text-muted mb-0")),
@@ -355,25 +352,7 @@ async def _communication_workspace(request: Request, ctx, *, search: str = "", s
                     row["meeting_date"],
                     row["audience"],
                     status_badge(row["status"]),
-                    Div(
-                        Button(
-                            "Open",
-                            variant="outline-primary",
-                            size="md",
-                            data_bs_toggle="offcanvas",
-                            data_bs_target="#detail-drawer",
-                            hx_get=ctx.url_for(
-                                f"/communication/{row['announcement_id']}/drawer",
-                                search_filter=search,
-                                status_filter=status,
-                                meeting_filter=meeting,
-                            ),
-                            hx_target="#detail-drawer-body",
-                            hx_swap="innerHTML",
-                        ),
-                        A("Edit", href=ctx.url_for(f"/communication/{row['announcement_id']}/edit"), cls="btn btn-primary btn-sm"),
-                        cls="d-grid gap-2",
-                    ),
+                    Div(*row_actions, cls="d-grid gap-2"),
                 ]
             )
             mobile_cards.append(_communication_mobile_card(ctx, row, search=search, status=status, meeting=meeting))
@@ -423,30 +402,15 @@ async def _communication_drawer_content(
             cls="d-flex flex-wrap gap-2 align-items-center mb-3",
         ),
         Div(
-            Button(
-                "Edit note",
-                href=ctx.url_for(f"/communication/{row['announcement_id']}/edit"),
-                variant="primary",
-                size="md",
-            ),
-            Button(
-                action_label,
-                variant=action_variant,
-                size="md",
-                data_bs_toggle="modal",
-                data_bs_target="#confirm-modal",
-                hx_get=ctx.url_for(
-                    f"/communication/{row['announcement_id']}/status",
-                    action=action_key,
-                    title=action_title,
-                    search_filter=search_filter,
-                    status_filter=status_filter,
-                    meeting_filter=meeting_filter,
-                ),
-                hx_target="#confirm-modal-body",
-                hx_swap="innerHTML",
-            ),
-            cls="d-grid gap-2 d-md-flex mb-3",
+            *([Button(
+                "Edit note", href=ctx.url_for(f"/communication/{row['announcement_id']}/edit"), variant="primary", size="md",
+            ), Button(
+                action_label, variant=action_variant, size="md", data_bs_toggle="modal", data_bs_target="#confirm-modal",
+                hx_get=ctx.url_for(f"/communication/{row['announcement_id']}/status", action=action_key, title=action_title,
+                                   search_filter=search_filter, status_filter=status_filter, meeting_filter=meeting_filter),
+                hx_target="#confirm-modal-body", hx_swap="innerHTML",
+            )] if ctx.has_permission("announcements:manage") else []),
+            cls="d-grid gap-2 d-md-flex mb-3" if ctx.has_permission("announcements:manage") else "d-none",
         ),
         Div(
             H4("Summary", cls="h6 fw-semibold mb-2"),
@@ -523,11 +487,11 @@ def _editor_help(row: dict[str, Any] | None) -> Div:
 
 async def _communication_editor_page(request: Request, row: dict[str, Any] | None = None):
     ctx = build_context(request)
-    if ctx.level < 4:
+    if not ctx.has_permission("announcements:manage"):
         body = page_stack(section_card(
                 "Communication",
-                "Weekly information management opens from Regional leadership upward.",
-                empty_state("megaphone", "Communication unavailable", "This role cannot manage communication records."),
+                "This account can read scoped announcements but cannot edit or publish them.",
+                empty_state("megaphone", "Read-only access", "Ask the pastor at this level to edit or publish weekly information."),
         ))
         return shell_layout(
             ctx,
@@ -1006,11 +970,11 @@ def register_communication_routes(app) -> None:
     @app.get("/communication")
     async def communication_page(request: Request, search: str = "", status: str = "all", meeting: str = ""):
         ctx = build_context(request)
-        if ctx.level < 4:
+        if not ctx.has_permission("announcements:read"):
             body = page_stack(section_card(
                 "Communication",
-                "Weekly communication opens from Level 5 upward.",
-                empty_state("megaphone", "Communication unavailable", "This role cannot manage communication records."),
+                "Weekly information is outside this account's permissions.",
+                empty_state("megaphone", "Communication unavailable", "This role cannot read scoped announcements."),
             ))
             return shell_layout(
                 ctx,
@@ -1039,7 +1003,7 @@ def register_communication_routes(app) -> None:
             subtitle="Weekly notes and scoped announcements.",
             primary_action=Div(
                 Button("Media Galleries", href=ctx.url_for("/communication/media"), variant="outline-primary", size="md"),
-                Button("New Communication", href=ctx.url_for("/communication/new"), variant="primary", size="md"),
+                *([Button("New Communication", href=ctx.url_for("/communication/new"), variant="primary", size="md")] if ctx.has_permission("announcements:manage") else []),
                 cls="d-grid d-sm-flex gap-2",
             ),
             content=body,
@@ -1096,7 +1060,7 @@ def register_communication_routes(app) -> None:
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
         ctx = build_context(data)
-        if ctx.level < 4:
+        if not ctx.has_permission("announcements:manage"):
             return RedirectResponse(ctx.url_for("/communication"), status_code=303)
         try:
             created = (
@@ -1116,7 +1080,7 @@ def register_communication_routes(app) -> None:
         data = {key: str(value) for key, value in form.items()}
         ctx = build_context(data)
         row = await _announcement_row(request, ctx, announcement_id)
-        if ctx.level < 4 or row is None:
+        if not ctx.has_permission("announcements:manage") or row is None:
             return RedirectResponse(ctx.url_for("/communication"), status_code=303)
         try:
             updated = (
@@ -1133,6 +1097,8 @@ def register_communication_routes(app) -> None:
     @app.get("/communication/{announcement_id}/status")
     async def communication_status_confirm(request: Request, announcement_id: str, action: str = "publish", title: str = ""):
         ctx = build_context(request)
+        if not ctx.has_permission("announcements:manage"):
+            return P("Only the pastor at this level can publish or change announcement status.", cls="text-muted")
         row = await _announcement_row(request, ctx, announcement_id)
         if row is None:
             return P("Communication entry not found.", cls="text-muted")
@@ -1168,6 +1134,8 @@ def register_communication_routes(app) -> None:
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
         ctx = build_context(data)
+        if not ctx.has_permission("announcements:manage"):
+            return P("Only the pastor at this level can publish or change announcement status.", cls="text-muted")
         row = await _announcement_row(request, ctx, announcement_id)
         if row is None:
             return P("Communication entry not found.", cls="text-muted")

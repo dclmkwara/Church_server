@@ -4,6 +4,7 @@ Database session management with async SQLAlchemy.
 import logging
 import ssl
 import time
+import uuid
 from typing import AsyncGenerator
 from urllib.parse import quote
 
@@ -11,10 +12,101 @@ from sqlalchemy import event, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session
+from sqlalchemy import inspect as sa_inspect
 
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Operational setup changes are captured centrally so API and admin-UI paths
+# cannot accidentally bypass the audit trail. Only non-sensitive fields are
+# included; free-text reasons, contact data and announcement bodies are never
+# copied into this general-purpose log.
+_AUDITED_FIELDS = {
+    "program_campaigns": ("title", "campaign_code", "domain_id", "event_mode", "reporting_scope", "status", "start_date", "end_date", "path"),
+    "program_events": ("title", "campaign_id", "program_type_id", "date", "event_mode", "reporting_scope", "approval_status", "path"),
+    "event_assignments": ("event_id", "worker_id", "assignment_type", "source_role", "status", "path"),
+    "worker_transfers": ("from_location_id", "to_location_id", "status", "workflow_stage", "current_level"),
+    "worker_removal_requests": ("worker_id", "status", "current_level", "path"),
+    "status_change_requests": ("worker_id", "old_status", "new_status", "status", "current_level", "path"),
+    "transfer_requests": ("worker_id", "from_location_id", "to_location_id", "status", "current_level", "workflow_stage", "path"),
+    "nations": ("country_name", "nation_code", "continent", "path"),
+    "states": ("state_name", "state_code", "path", "nation_id"),
+    "regions": ("region_name", "region_code", "path", "state_id"),
+    "dclm_groups": ("group_name", "group_code", "path", "region_id"),
+    "locations": ("location_name", "location_code", "path", "group_id", "is_active"),
+    "fellowships": ("fellowship_name", "fellowship_code", "path", "location_id"),
+}
+
+
+def _audit_value(value):
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+@event.listens_for(Session, "before_flush")
+def _audit_governance_setup_changes(session: Session, flush_context, instances) -> None:
+    actor = session.info.get("audit_actor")
+    if not actor or session.info.get("_adding_governance_audit"):
+        return
+    from app.models.audit import AuditLog
+
+    pending = []
+    for obj in tuple(session.new) + tuple(session.dirty) + tuple(session.deleted):
+        table = getattr(getattr(obj, "__table__", None), "name", "")
+        fields = _AUDITED_FIELDS.get(table)
+        if not fields:
+            continue
+        state = sa_inspect(obj)
+        if obj in session.deleted:
+            action = "DELETE"
+            changed = {key: _audit_value(getattr(obj, key, None)) for key in fields if hasattr(obj, key)}
+        elif obj in session.new:
+            action = "CREATE"
+            changed = {key: _audit_value(getattr(obj, key, None)) for key in fields if hasattr(obj, key)}
+        else:
+            changed = {}
+            for key in fields:
+                if key not in state.attrs:
+                    continue
+                history = state.attrs[key].history
+                if history.has_changes():
+                    changed[key] = {
+                        "before": _audit_value(history.deleted[0] if history.deleted else None),
+                        "after": _audit_value(history.added[0] if history.added else getattr(obj, key, None)),
+                    }
+            if not changed:
+                continue
+            action = "UPDATE"
+        try:
+            resource_id = getattr(obj, "id", None)
+            if resource_id is None and table in {"program_campaigns", "program_events", "event_assignments"}:
+                resource_id = uuid.uuid4()
+                setattr(obj, "id", resource_id)
+            if resource_id is None:
+                resource_id = getattr(obj, "worker_id", None) or getattr(obj, "location_id", None)
+        except Exception:
+            resource_id = None
+        scope_path = getattr(obj, "path", None) or actor.get("scope_path", "")
+        details = {
+            "actor_name": actor.get("actor_name", "User"),
+            "role_name": actor.get("role_name", ""),
+            "role_score": actor.get("role_score", 0),
+            "scope_path": str(scope_path or ""),
+            "actor_scope_path": actor.get("scope_path", ""),
+            "fields": changed,
+        }
+        pending.append(AuditLog(
+            user_id=actor.get("user_id"), action=f"{action}_{table.upper()}",
+            resource_type=table, resource_id=str(resource_id or ""), changes=details,
+        ))
+    if pending:
+        session.info["_adding_governance_audit"] = True
+        session.add_all(pending)
+        session.info.pop("_adding_governance_audit", None)
 
 
 def _quote_database_url_password(db_url: str) -> str:

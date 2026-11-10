@@ -24,7 +24,7 @@ SYSTEM_ITEMS = [
     ("versions", "App Versions", "/system/app-versions", 5),
     ("sync", "Sync Governance", "/system/sync", 5),
     ("health", "Health", "/system/health", 5),
-    ("audit", "Audit Logs", "/system/audit-logs", 5),
+    ("audit", "Audit Logs", "/system/audit-logs", 2),
     ("rbac", "Roles & Permissions", "/system/rbac", 5),
     ("utilities", "Utilities", "/system/utilities", 5),
 ]
@@ -50,6 +50,10 @@ def _system_guard(ctx, min_level: int, title: str, body_text: str) -> Div | None
     )
 
 
+def _audit_allowed(ctx) -> bool:
+    return 2 <= ctx.level <= 5 and ctx.has_permission("system:read_audit_logs")
+
+
 async def _system_nav(ctx, active: str) -> Div:
     return Div(
         *[
@@ -60,7 +64,7 @@ async def _system_nav(ctx, active: str) -> Div:
                 **({"aria_current": "page"} if key == active else {}),
             )
             for key, label, path, min_level in SYSTEM_ITEMS
-            if ctx.level >= min_level and (key != "rbac" or ctx.level <= 5)
+            if ((key == "audit" and _audit_allowed(ctx)) or (key != "audit" and ctx.level >= min_level and (key != "rbac" or ctx.level <= 5)))
         ],
         cls="workspace-tab-strip mb-4",
     )
@@ -723,14 +727,16 @@ async def _audit_workspace(request: Request, ctx, *, search: str = "", status: s
         results = empty_state("journal-text", "No audit logs match this view", "Try a different status or search term.")
     else:
         desktop_rows = [
-            [row["time"], row["actor"], row["action"], row["target"], row["scope_label"], status_badge(row["status"])]
+            [row["time"], f"{row['actor']} ({row.get('role') or 'role not recorded'})", row["action"], row["target"], row["scope_label"], status_badge(row["status"])]
             for row in rows
         ]
         mobile_cards = [
             Div(
                 H4(row["actor"], cls="h6 fw-semibold mb-1"),
+                P(row.get("role") or "Role not recorded", cls="small text-muted mb-1"),
                 P(row["action"], cls="text-body-emphasis mb-1"),
                 P(row["target"], cls="text-muted mb-2"),
+                P(", ".join(sorted((row.get("changes") or {}).keys())) or "No field detail recorded", cls="small text-muted mb-2"),
                 Div(status_badge(row["status"]), cls="mb-2"),
                 P(f"{row['scope_label']} - {row['time']}", cls="small text-muted mb-0"),
                 cls="mobile-worker-card",
@@ -2025,7 +2031,10 @@ def register_system_routes(app) -> None:
     @app.get("/system/audit-logs")
     async def system_audit_logs_page(request: Request, search: str = "", status: str = "all"):
         ctx = build_context(request)
-        blocked = _system_guard(ctx, 5, "Audit Logs", "Audit logs open to state-level administration and above.")
+        blocked = None if _audit_allowed(ctx) else section_card(
+            "Audit Logs", "Pastor-only governance history.",
+            empty_state("shield-lock", "Access restricted", "This read-only audit view is available to pastors in their assigned scope."),
+        )
         body = page_stack(
             page_intro("System", "Inspect governance actions and important system events in plain language.", scope_label=ctx.current_scope_label, scope_kind=ctx.current_scope_kind),
             _system_nav(ctx, "audit"),
@@ -2050,12 +2059,12 @@ def register_system_routes(app) -> None:
     @app.get("/system/audit-logs/content")
     async def system_audit_logs_content(request: Request, search: str = "", status: str = "all"):
         ctx = build_context(request)
-        if not _system_allowed(ctx, 5):
+        if not _audit_allowed(ctx):
             return Div(
                 section_card(
                     "Audit Logs",
-                    "Audit logs open from national-level roles upward.",
-                    empty_state("shield-lock", "Audit Logs", "Audit logs open from national-level roles upward."),
+                    "Pastor-only governance history.",
+                    empty_state("shield-lock", "Access restricted", "This read-only audit view is available to pastors in their assigned scope."),
                 ),
                 id="system-audit-content",
             )
@@ -2071,6 +2080,8 @@ def register_system_routes(app) -> None:
     @app.get("/system/audit-logs/list")
     async def system_audit_logs_list(request: Request, search: str = "", status: str = "all"):
         ctx = build_context(request)
+        if not _audit_allowed(ctx):
+            return Div(P("Audit log access is restricted to pastors in their assigned scope.", cls="text-muted"))
         return await _audit_workspace(request, ctx, search=search, status=status)
 
     @app.get("/system/rbac")

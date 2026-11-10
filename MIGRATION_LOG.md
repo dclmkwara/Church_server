@@ -76,3 +76,12 @@ The B6 revision also adds six non-null, zero-default population category columns
 | 13:11 | Export after state to `output/remote-rbac-after-admin-role-20261110.json` and structural diff | Remote read | Ledger `d71a9c4e2b60`; 20 roles, 85 permissions, 973 grants. Added permissions: `population_estimates:manage`, `programs:approve_events`, `workers:request_changes`. Remote-only `resource:read` remains. No roles or permission rows were removed. |
 
 The migration has an exact baseline guard for 20/82/928 and requires a superuser or `BYPASSRLS` role. The permission write policy was not weakened. The pre/post JSON exports contain role and permission metadata, no credentials or person data.
+
+## 2026-11-10 - Scoped pastor audit visibility
+
+| Time (Africa/Lagos) | Step | Mode | Result |
+|---|---|---|---|
+| 14:00 | Fresh `pg_dump --format=custom --schema=public --no-owner --no-privileges` using the migration connection | Remote read / local backup | `_dev_db_snapshots/pre_admin_audit_permission_20261110.dump`, 777,392 bytes, SHA-256 `82A88C1137C266BBC1A7A0B1C27E03760E1F9CCA17C47D8D00A803EFAD256204`; `pg_restore --list` returned 990 lines and full decompression succeeded. The runtime account could not dump `auth`; the migration connection has `BYPASSRLS` and can read the application `public` schema. |
+| 14:03 | Export active role/permission pairs to external `audit_permission_before.json`; inspect RLS policies and migration identity | Remote read | Ledger `d71a9c4e2b60`, 973 active role-permission pairs. `postgres` has `rolbypassrls=true`. Permission and role-permission write policies were unchanged and require role score 9 for normal application writes. |
+| 14:05 | `uv run alembic upgrade d7a4c1e2f809` | **REMOTE WRITE**, Supabase session pooler using migration connection | Success; added `system:read_audit_logs` to the four level 2–5 pastor roles. |
+| 14:06 | Export active role/permission pairs to external `audit_permission_after.json` and diff | Remote read | Ledger `d7a4c1e2f809`, 977 pairs. Exactly four grants added: Location Pastor, Group Pastor, Region Pastor, State Overseer. No grant removed; permission catalog unchanged; no RLS policy changed. |

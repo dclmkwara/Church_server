@@ -187,6 +187,7 @@ ADMIN_PERMS = USHER_PERMS + [
 ] + REPORTING_READ + ["counts:remind", "workers:request_changes"]
 
 PASTOR_PERMS = ADMIN_PERMS + DATA_DELETE_PERMS + REPORTING_READ + [
+    "system:read_audit_logs",
     "offerings:review",
     "users:approve",
     "users:delete",

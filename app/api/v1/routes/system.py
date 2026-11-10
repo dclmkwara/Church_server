@@ -1,7 +1,7 @@
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, text
 from datetime import datetime
 
 from app.api import deps
@@ -10,7 +10,7 @@ from app.models.public_intake import PublicContactSubmission, PublicPrayerSubmis
 from app.models.user import User
 from app.models.audit import AuditLog
 from app.models.programs import ProgramDomain, ProgramType
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from app.schemas.public_intake import (
     PublicContactSubmissionResponse,
     PublicPrayerSubmissionResponse,
@@ -32,6 +32,11 @@ class AuditLogResponse(BaseModel):
     resource_id: str
     timestamp: datetime
     ip_address: str | None
+    actor_name: str = "User"
+    role_name: str = ""
+    role_score: int = 0
+    scope_path: str = ""
+    changes: dict = Field(default_factory=dict)
     
     class Config:
         from_attributes = True
@@ -71,22 +76,30 @@ async def get_audit_logs(
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ):
-    """
-    Get audit logs (admin only).
-    Permission enforced via PermissionChecker ("system:read_audit_logs").
-    """
-    stmt = select(AuditLog).order_by(AuditLog.ts_utc.desc()).offset(skip).limit(limit)
+    """Return only audit records inside the caller's assigned hierarchy scope."""
+    level = deps.highest_role_score(current_user)
+    if not 2 <= level <= 5:
+        raise HTTPException(status_code=403, detail="Scoped governance audit access is limited to levels 2 to 5")
+    scope_path = deps.effective_scope_path(current_user)
+    stmt = select(AuditLog).where(
+        text("CAST(audit_logs.changes ->> 'scope_path' AS ltree) <@ CAST(:audit_scope AS ltree)")
+    ).params(audit_scope=scope_path).order_by(AuditLog.timestamp.desc()).offset(skip).limit(limit)
     result = await db.execute(stmt)
     logs = result.scalars().all()
     
     audit_logs = [AuditLogResponse(
         id=str(log.id),
-        user_id=str(log.user_id),
+        user_id=str(log.user_id or ""),
         action=log.action,
         resource_type=log.resource_type,
         resource_id=str(log.resource_id) if log.resource_id else "",
         timestamp=log.timestamp,
-        ip_address=log.ip_address
+        ip_address=None,
+        actor_name=(log.changes or {}).get("actor_name", "User"),
+        role_name=(log.changes or {}).get("role_name", ""),
+        role_score=int((log.changes or {}).get("role_score", 0) or 0),
+        scope_path=(log.changes or {}).get("scope_path", ""),
+        changes=(log.changes or {}).get("fields", {}),
     ) for log in logs]
     
     return audit_logs
