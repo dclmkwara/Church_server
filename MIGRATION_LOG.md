@@ -57,3 +57,11 @@ No remote synthetic rows were seeded by the migration. No app deployment or synt
 | `uv run alembic upgrade head` from snapshot ledger `e2b4c6d8f013` | Disposable local database only | Passed through `a4d92c16e7b3`, `b5e6f8a1c234`, `b5f7a9c2d341`, and `c6d7e8f9a012`. Post-check: all six fellowship IDs are UUID; all six validated FKs exist; the three orphan test rows were removed by the B6 cleanup. The other activity tables remain empty. |
 
 The B6 revision also adds six non-null, zero-default population category columns to `fellowship_attendance`: `adult_male`, `adult_female`, `youth_male`, `youth_female`, `boys`, and `girls`. The migration is only verified locally. Before applying it remotely, make and validate a fresh backup, then inspect the current orphan count; the migration removes activity rows with no matching fellowship because they cannot satisfy the new FK. Restoring the pre-migration database snapshot is the recovery path for those deleted development rows.
+
+## 2026-11-10 - B6 fellowship migration
+
+| Time (Africa/Lagos) | Step | Mode | Result |
+|---|---|---|---|
+| 13:02 | `pg_dump --format=custom --no-owner --no-privileges` via the Supabase session pooler to `_dev_db_snapshots/pre_b6_admin_20261110.dump` | Remote read / local backup | Fresh archive: 942,535 bytes; SHA-256 `379B0A5DA1AFE2D16EB768826CF59A75B2690C9CA4086DCE60B3E550EBDBC9E4`. `pg_restore --list` succeeded with 1,373 entries; full decompression via `pg_restore --file NUL` succeeded. |
+| 13:03 | Read-only remote preflight | Remote read | Ledger `b5f7a9c2d341`. Six fellowship activity tables contain 3 rows total: one orphan each in `fellowship_members`, `fellowship_attendance`, and `fellowship_offerings`; 0 malformed UUIDs. B6 deletes these orphan development rows before adding the FKs. |
+| 13:04 | `alembic upgrade c6d7e8f9a012` | **REMOTE WRITE** | Success. Remote ledger advanced from `b5f7a9c2d341` to `c6d7e8f9a012`. Post-check confirmed all six UUID columns and FKs, six attendance categories, and zero activity rows after removal of the three previously identified orphan development rows. |
