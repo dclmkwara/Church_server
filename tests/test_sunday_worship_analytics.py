@@ -125,6 +125,31 @@ def test_pending_zero_is_received_but_not_counted_by_default():
     assert inclusive["total"] == 0
 
 
+def test_pending_166_population_is_not_counted_unless_pending_is_enabled():
+    """The ILE.001 Nov 1 case remains received but not counted by default."""
+    location = SimpleNamespace(location_id="ile-001", path="org.234.kw.ilr.ile.001")
+    pending = SimpleNamespace(
+        id="ile-001-nov-1", event_id=None, location_id="ile-001", status="pending", total=166,
+        adult_male=51, adult_female=57, youth_male=17, youth_female=17, boys=14, girls=10,
+    )
+    shared = dict(
+        scope_path="org.234.kw.ilr.ile.001",
+        occurrence_date=date(2026, 11, 1),
+        now=datetime(2026, 11, 2, tzinfo=ZoneInfo("Africa/Lagos")),
+        locations=[location], events=[], count_rows=[pending],
+    )
+
+    approved_only = _build_overview(**shared, include_pending=False)
+    with_pending = _build_overview(**shared, include_pending=True)
+
+    assert approved_only["total"] is None
+    assert approved_only["n_counted"] == 0
+    assert approved_only["n_received"] == 1
+    assert approved_only["coverage"]["pending"] == 1
+    assert with_pending["total"] == 166
+    assert with_pending["n_counted"] == 1
+
+
 def test_house_fellowship_units_keep_zero_separate_from_missing_and_sum_categories():
     fellowships = [
         SimpleNamespace(location_id="f1", path="org.234.kw.r.g.001.f001", location_name="Fellowship One", is_active=True, opened_on=None, closed_on=None),
