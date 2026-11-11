@@ -157,6 +157,7 @@ class AuthService:
         response.set_cookie(config.role_name_cookie_name, identity.role_name, **cookie_args)
         response.set_cookie(config.scope_cookie_name, identity.maximum_scope_path or identity.scope_path, **cookie_args)
         response.set_cookie(config.home_cookie_name, str(identity.user.get("path") or identity.home_path), **cookie_args)
+        response.set_cookie("dclm_admin_location_id", str(identity.user.get("location_id") or ""), **cookie_args)
         response.set_cookie("dclm_admin_maximum_scope", identity.maximum_scope_path or identity.home_path, **cookie_args)
         response.set_cookie(config.display_name_cookie_name, identity.display_name, **cookie_args)
         response.set_cookie(config.email_cookie_name, identity.email, **cookie_args)
@@ -179,6 +180,7 @@ class AuthService:
             config.role_name_cookie_name,
             config.scope_cookie_name,
             config.home_cookie_name,
+            "dclm_admin_location_id",
             config.display_name_cookie_name,
             config.email_cookie_name,
             "dclm_admin_permissions",
@@ -232,7 +234,8 @@ class AuthService:
                 permissions = []
         except (TypeError, ValueError):
             permissions = []
-        user = {"name": display_name, "email": email, "path": assigned_path, "permissions": permissions}
+        location_id = cls._cookie_value(request, "dclm_admin_location_id", "") or ""
+        user = {"name": display_name, "email": email, "path": assigned_path, "location_id": location_id, "permissions": permissions}
         return AuthIdentity(
             user_id=user_id,
             access_token=access_token,

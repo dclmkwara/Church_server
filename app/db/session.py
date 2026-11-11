@@ -170,7 +170,10 @@ if _ssl_required:
 # code change; just set DB_POOL_SIZE / DB_MAX_OVERFLOW in .env.
 engine = create_async_engine(
     _db_url,
-    echo=settings.DEBUG,
+    # SQLAlchemy echo prints statement parameters (including personal data) to
+    # application logs. Keep it disabled in every environment; use the scoped
+    # DCLM_* performance instrumentation when query timing is needed.
+    echo=False,
     pool_pre_ping=True,
     pool_size=settings.DB_POOL_SIZE,
     max_overflow=settings.DB_MAX_OVERFLOW,

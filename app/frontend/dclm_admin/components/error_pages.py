@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Any
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
@@ -19,6 +20,7 @@ def _error_page_layout(
     icon: str,
     tone: str = "primary",
     request_path: str = "/",
+    reference_id: str = "",
 ) -> Html:
     """Renders a standalone, fully styled DCLM Admin error page matching the design system."""
     return Html(
@@ -57,6 +59,7 @@ def _error_page_layout(
                         H2(title, cls="h4 fw-bold text-body-emphasis mb-3"),
                         # Description
                         P(message, cls="text-secondary lead fs-6 mb-4", style="max-width: 440px; margin-inline: auto;"),
+                        P(f"Reference ID: {reference_id}", cls="small text-muted mb-4") if reference_id else None,
                         # Action Buttons
                         Div(
                             A(
@@ -88,18 +91,20 @@ def _error_page_layout(
 
 def not_found_response(request: Request, exc: Exception | None = None) -> Response:
     """Custom 404 Not Found response."""
+    reference_id = uuid.uuid4().hex[:12]
     # Check if request is HTMX partial
     if request.headers.get("HX-Request"):
         return HTMLResponse(
             to_xml(
                 Alert(
                     Icon("exclamation-circle", cls="me-2 fs-5"),
-                    "The requested item or section could not be found.",
+                    f"The requested item or section could not be found. Reference ID: {reference_id}",
                     variant="warning",
                     cls="shadow-sm border-0 my-3",
                 )
             ),
             status_code=404,
+            headers={"X-Error-Reference": reference_id},
         )
 
     content = _error_page_layout(
@@ -110,8 +115,9 @@ def not_found_response(request: Request, exc: Exception | None = None) -> Respon
         icon="compass",
         tone="primary",
         request_path=str(request.url.path),
+        reference_id=reference_id,
     )
-    return HTMLResponse(to_xml(content), status_code=404)
+    return HTMLResponse(to_xml(content), status_code=404, headers={"X-Error-Reference": reference_id})
 
 
 def server_error_response(request: Request, exc: Exception | None = None) -> Response:
@@ -125,8 +131,10 @@ def server_error_response(request: Request, exc: Exception | None = None) -> Res
             return Response(status_code=200, headers={"HX-Redirect": "/login"})
         return RedirectResponse("/login", status_code=303)
 
+    reference_id = uuid.uuid4().hex[:12]
     logger.error(
-        "Unhandled server error on %s %s: %s",
+        "Unhandled server error reference_id=%s on %s %s: %s",
+        reference_id,
         request.method,
         request.url.path,
         exc,
@@ -139,12 +147,13 @@ def server_error_response(request: Request, exc: Exception | None = None) -> Res
             to_xml(
                 Alert(
                     Icon("exclamation-triangle", cls="me-2 fs-5"),
-                    "An unexpected error occurred while processing this request. Please refresh or try again.",
+                    f"We could not complete this request. Please try again or give support reference ID {reference_id}.",
                     variant="danger",
                     cls="shadow-sm border-0 my-3",
                 )
             ),
             status_code=500,
+            headers={"X-Error-Reference": reference_id},
         )
 
     content = _error_page_layout(
@@ -155,5 +164,6 @@ def server_error_response(request: Request, exc: Exception | None = None) -> Res
         icon="exclamation-triangle",
         tone="danger",
         request_path=str(request.url.path),
+        reference_id=reference_id,
     )
-    return HTMLResponse(to_xml(content), status_code=500)
+    return HTMLResponse(to_xml(content), status_code=500, headers={"X-Error-Reference": reference_id})

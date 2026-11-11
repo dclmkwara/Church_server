@@ -492,7 +492,13 @@ def register_organization_routes(app) -> None:
         )
         primary = None
         if ctx.level < 3:
-            primary = primary_button("Open My Location", href=ctx.url_for(f"/organization/locations/{ctx.current_scope_path.split('.')[-1]}"))
+            location_id = _location_home_id(ctx, AuthService.get_identity(request))
+            if location_id:
+                primary = primary_button("Open My Location", href=ctx.url_for(f"/organization/locations/{location_id}"))
+            elif not await OrganizationService.live_enabled(request):
+                # Demo profiles use path codes in place of persisted location UUIDs.
+                demo_key = ctx.current_scope_path.split(".")[-1]
+                primary = primary_button("Open My Location", href=ctx.url_for(f"/organization/locations/{demo_key}"))
         return shell_layout(
             ctx,
             request_path=request.url.path,

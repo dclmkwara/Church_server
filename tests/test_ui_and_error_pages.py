@@ -22,6 +22,8 @@ def test_custom_error_pages_direct():
     assert "404" in body404
     assert "Page Not Found" in body404
     assert "Return to Dashboard" in body404
+    assert "Reference ID:" in body404
+    assert r404.headers.get("X-Error-Reference") in body404
 
     r500 = server_error_response(req, ValueError("Something crashed"))
     assert r500.status_code == 500
@@ -29,6 +31,8 @@ def test_custom_error_pages_direct():
     assert "500" in body500
     assert "Something Went Wrong" in body500
     assert "Return to Dashboard" in body500
+    assert "Reference ID:" in body500
+    assert r500.headers.get("X-Error-Reference") in body500
 
 
 def test_custom_error_pages_htmx():

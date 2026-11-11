@@ -124,3 +124,13 @@ def test_mobile_shortcuts_follow_the_same_read_permissions(monkeypatch):
         assert ("People" in rendered) == ctx.has_permission("workers:read")
         assert ("Church" in rendered) == ctx.has_permission("programs:read")
         assert ("Finance" in rendered) == ctx.has_permission("offerings:read")
+
+
+def test_sidebar_has_no_dead_docs_link_or_nonfunctional_global_search(monkeypatch):
+    monkeypatch.setattr(shell, "get_backend_config", lambda: SimpleNamespace(enabled=False))
+    monkeypatch.setattr(auth_context, "get_backend_config", lambda: SimpleNamespace(enabled=False))
+    ctx = build_context({"profile": "state_overseer"})
+    rendered = to_xml(_sidebar(ctx, "dashboard"))
+    assert "/docs" not in rendered
+    assert "Global search" not in rendered
+    assert 'placeholder="Search workers, members, or locations"' not in rendered

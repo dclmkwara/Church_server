@@ -33,7 +33,21 @@ class ReportService:
     ) -> List[DailyCountSummary]:
         """Daily count summaries from the mv_daily_counts_by_location view."""
         query = text("""
-            SELECT * FROM mv_daily_counts_by_location
+            SELECT day,
+                   event_id::text AS event_id,
+                   event_title,
+                   location_id::text AS location_id,
+                   location_name,
+                   path::text AS path,
+                   total_attendance,
+                   total_men,
+                   total_women,
+                   total_youth_male,
+                   total_youth_female,
+                   total_boys,
+                   total_girls,
+                   record_count
+            FROM mv_daily_counts_by_location
             WHERE day >= :start_date AND day <= :end_date
               AND (path <@ CAST(:scope_path AS LTREE) OR path = CAST(:scope_path AS LTREE))
             ORDER BY day DESC, path ASC
@@ -41,7 +55,16 @@ class ReportService:
         result = await db.execute(
             query, {"start_date": start_date, "end_date": end_date, "scope_path": scope_path}
         )
-        return [DailyCountSummary.model_validate(row) for row in result.mappings()]
+        summaries = []
+        for row in result.mappings():
+            values = dict(row)
+            # asyncpg returns UUID and ltree values as typed objects, while the
+            # public report schema intentionally exposes both as strings.
+            values["location_id"] = str(values["location_id"])
+            values["event_id"] = str(values.get("event_id") or "")
+            values["path"] = str(values["path"])
+            summaries.append(DailyCountSummary.model_validate(values))
+        return summaries
 
     @staticmethod
     async def get_financial_summary(
