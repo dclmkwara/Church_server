@@ -39,6 +39,16 @@ def test_active_scope_accepts_descendant_and_normalizes_case(monkeypatch):
     assert scope.include_pending is True
 
 
+@pytest.mark.parametrize("period", ["4w", "8w", "event", "recent", "month", "quarter", "year"])
+def test_active_scope_accepts_report_periods_used_by_page_links(monkeypatch, period):
+    identity = SimpleNamespace(home_path="dcl.234.kw", scope_path="dcl.234.kw", maximum_scope_path="dcl.234.kw")
+    request = _request(f"scope_path=dcl.234.kw&period={period}".encode())
+    ctx = SimpleNamespace(current_scope_path=identity.scope_path)
+    monkeypatch.setattr(auth_context.AuthService, "get_identity", staticmethod(lambda _request: identity))
+
+    assert resolve_active_scope(request, ctx).period == period
+
+
 def test_active_scope_rejects_sibling_scope(monkeypatch):
     identity = SimpleNamespace(home_path="dcl.234.kw.ilr", scope_path="dcl.234.kw.ilr")
     request = _request(b"scope_path=dcl.234.kw.off")

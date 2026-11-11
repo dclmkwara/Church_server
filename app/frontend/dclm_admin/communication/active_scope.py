@@ -52,7 +52,10 @@ def resolve_active_scope(request: Any, ctx: Any) -> ActiveScope:
 
     query = getattr(request, "query_params", {})
     period = str(query.get("period") or "").strip()
-    if period not in {"", "recent", "month", "quarter", "year"}:
+    # Keep this allowlist aligned with the periods emitted by the dashboard,
+    # pastor report, and event report links. These are validated here before
+    # the report handlers can normalize or interpret them.
+    if period not in {"", "recent", "4w", "8w", "month", "quarter", "year", "event"}:
         raise HTTPException(status_code=400, detail="Invalid reporting period")
     include_pending_raw = str(query.get("include_pending") or "false").strip().lower()
     if include_pending_raw not in {"", "true", "false", "1", "0"}:
