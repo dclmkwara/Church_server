@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 import httpx
 from sqlalchemy import create_engine, text
 
-DEFAULT_LOCATION = "cb56bc5e-4445-448c-a3b2-1b4503b4aea9"
+DEFAULT_LOCATION = "9cc2fb04-76e3-41a8-96bd-bab6a880e2ff"
 LAGOS = ZoneInfo("Africa/Lagos")
 
 
@@ -63,29 +63,27 @@ def main() -> None:
         previous_sunday = now.date() - timedelta(days=(now.weekday() + 1) % 7 or 7)
         while previous_sunday.isoformat() in used_sundays:
             previous_sunday -= timedelta(days=7)
-        run_marker = f"B5_DEMO:E2E:{uuid.uuid4().hex[:8]}"
+        run_marker = f"F2_TEST:f2-e2e:{uuid.uuid4().hex[:8]}"
         test_service_id = f"e2e-{run_marker[-8:]}"
 
         categories_a = {"adult_male": 40, "adult_female": 30, "youth_male": 10, "youth_female": 10, "boys": 15, "girls": 15}
         categories_b = {"adult_male": 5, "adult_female": 5, "youth_male": 5, "youth_female": 5, "boys": 5, "girls": 5}
         part_a_body = count_body(args.location_id, next_sunday, "section", "Adult A", 120, run_marker, service_id=test_service_id, categories=categories_a)
-        part_a_response = client.post("/counts/", headers=headers["usher_a"], json=part_a_body)
-        assert part_a_response.is_success, part_a_response.text
-        part_a = part_a_response.json()
-        replay = client.post("/counts/", headers=headers["usher_a"], json=part_a_body).raise_for_status().json()
-        assert replay["id"] == part_a["id"], "same client id created a second part"
+        part_a = submit_count_via_sync(client, headers["usher_a"], part_a_body, headers["group_pastor"])
+        replay_result = post_count_sync_result(client, headers["usher_a"], part_a_body)
+        assert replay_result["status"] == "duplicate", "same client id was not recognized as a replay"
 
         duplicate_label = count_body(args.location_id, next_sunday, "section", "Adult A", 1, run_marker, service_id=test_service_id)
         duplicate_label["client_id"] = str(uuid.uuid4())
-        duplicate_response = client.post("/counts/", headers=headers["usher_b"], json=duplicate_label)
-        assert duplicate_response.status_code == 409 and "already been reported" in duplicate_response.text
+        duplicate_response = post_count_sync_result(client, headers["usher_b"], duplicate_label)
+        assert duplicate_response["status"] == "error" and "already been reported" in duplicate_response["error"]
 
         mixed_mode = count_body(args.location_id, next_sunday, "single", None, 10, run_marker, service_id=test_service_id)
-        response = client.post("/counts/", headers=headers["usher_b"], json=mixed_mode)
-        assert response.status_code == 409 and "different count mode" in response.text
+        response = post_count_sync_result(client, headers["usher_b"], mixed_mode)
+        assert response["status"] == "error" and "different count mode" in response["error"]
 
         part_b_body = count_body(args.location_id, next_sunday, "section", "Youth", 30, run_marker, service_id=test_service_id, categories=categories_b)
-        part_b = client.post("/counts/", headers=headers["usher_b"], json=part_b_body).raise_for_status().json()
+        part_b = submit_count_via_sync(client, headers["usher_b"], part_b_body, headers["group_pastor"])
         before_default = client.get(
             "/dashboard/sunday-worship", headers=headers["group_pastor"],
             params={"occurrence_date": next_sunday.isoformat()},
@@ -129,7 +127,7 @@ def main() -> None:
                              "youth_female": 5, "boys": 6, "girls": 7}
         single_body = count_body(args.location_id, single_sunday, "single", None, 27, run_marker,
                                  service_id=test_service_id, categories=single_categories)
-        single_report = client.post("/counts/", headers=headers["usher_a"], json=single_body).raise_for_status().json()
+        single_report = submit_count_via_sync(client, headers["usher_a"], single_body, headers["group_pastor"])
         single_review = client.get("/counts/review/groups", headers=headers["group_pastor"]).raise_for_status().json()
         assert next(item for item in single_review if item["count_group_id"] == single_report["count_group_id"])["categories"] == single_categories
         client.post(f"/counts/review/{single_report['id']}/approve", headers=headers["group_pastor"], json={}).raise_for_status()
@@ -147,27 +145,79 @@ def main() -> None:
                          "church_type": "DCLM", "program_level": "Local", "program_domain": "Weekly Programs",
                          "program_type": "Sunday Worship Service", "amount": "100.00",
                          "payment_method": "cash", "fund_type": "offering", "note": run_marker}
-        client.post("/offerings/", headers=headers["usher_a"], json=offering_body).raise_for_status()
+        offering_result = post_resource_sync_result(client, headers["usher_a"], "offerings", offering_body)
+        assert offering_result["status"] == "synced", offering_result
         offering_after = client.get("/offerings/preflight", headers=headers["usher_b"], params=offering_context).raise_for_status().json()
         assert offering_after["already_recorded"] is True and offering_after["record_count"] == 1, json.dumps(offering_after)
 
+        # Exercise the same sync resources used by the Field Utility for a real
+        # roster capture and House Caring Fellowship record.
+        worker_roster = client.get(
+            "/attendance/workers", headers=headers["group_pastor"],
+            params={"location_id": args.location_id, "limit": 500},
+        ).raise_for_status().json()
+        assert worker_roster, "The local fixture has no approved workers for attendance capture"
+        worker_saturday = single_sunday + timedelta(days=6)
+        worker_body = {
+            "client_id": str(uuid.uuid4()), "location_id": args.location_id,
+            "date": datetime.combine(worker_saturday, datetime.min.time(), LAGOS).isoformat(),
+            "church_type": "DLCF", "program_level": "Local", "program_domain": "Weekly Programs",
+            "program_type": "Saturday Workers Meeting", "expected_workers_count": len(worker_roster),
+            "present_workers": [{"worker_id": worker_roster[0]["worker_id"], "worker_name": "Synthetic attendee"}],
+            "submitted_by_worker_id": None, "note": f"{run_marker}:worker-attendance",
+        }
+        worker_result = post_resource_sync_result(client, headers["usher_a"], "worker_attendance_submissions", worker_body)
+        assert worker_result["status"] == "synced", worker_result
+        attendance_view = client.get(
+            "/attendance/submissions", headers=headers["group_pastor"], params={"limit": 500},
+        ).raise_for_status().json()
+        worker_view = next((row for row in attendance_view if row["client_id"] == worker_body["client_id"]), None)
+        assert worker_view and worker_view["present_count"] == 1 and worker_view["note"].startswith(run_marker)
+
+        # The local clone has no fellowship at this location, and the current
+        # RBAC seed grants no persona `hierarchy:create_fellowship`. Create one
+        # explicitly marked fixture row in the disposable DB so the Utility
+        # fellowship submission can be exercised without changing RBAC.
+        sync_url = args.sync_database_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+        if urlparse(args.sync_database_url).hostname not in {"localhost", "127.0.0.1", "::1"}:
+            raise SystemExit("Refusing non-local SYNC_DATABASE_URL; this test creates a marked synthetic fellowship.")
+        synthetic_fellowship = create_marked_fellowship(sync_url, args.location_id, run_marker)
+        fellowship_body = {
+            "client_id": str(uuid.uuid4()), "fellowship_id": synthetic_fellowship["fellowship_id"],
+            # The fellowship field sends an HTML date (naive midnight); its
+            # persisted column is TIMESTAMP WITHOUT TIME ZONE.
+            "date": datetime.combine(worker_saturday, datetime.min.time()).isoformat(),
+            "adult_male": 2, "adult_female": 3, "youth_male": 1, "youth_female": 2,
+            "boys": 4, "girls": 5, "topic": "F2 synthetic fellowship meeting",
+            "note": f"{run_marker}:fellowship-attendance",
+        }
+        fellowship_result = post_resource_sync_result(client, headers["usher_a"], "fellowship_attendance", fellowship_body)
+        assert fellowship_result["status"] == "synced", fellowship_result
+        fellowship_view = client.get(
+            "/fellowships/attendance", headers=headers["group_pastor"],
+            params={"fellowship_id": synthetic_fellowship["fellowship_id"], "limit": 100},
+        ).raise_for_status().json()
+        fellowship_view_row = next((row for row in fellowship_view if row["client_id"] == fellowship_body["client_id"]), None)
+        assert fellowship_view_row and fellowship_view_row["total"] == 17 and fellowship_view_row["note"].startswith(run_marker)
+
         single_a = count_body(args.location_id, conflict_sunday, "single", None, 40, run_marker, service_id=test_service_id)
         single_b = count_body(args.location_id, conflict_sunday, "single", None, 50, run_marker, service_id=test_service_id)
-        first_single = client.post("/counts/", headers=headers["usher_a"], json=single_a).raise_for_status().json()
-        client.post("/counts/", headers=headers["usher_b"], json=single_b).raise_for_status()
+        first_single = submit_count_via_sync(client, headers["usher_a"], single_a, headers["group_pastor"])
+        submit_count_via_sync(client, headers["usher_b"], single_b, headers["group_pastor"])
         conflicts = client.get("/counts/review/groups", headers=headers["group_pastor"]).raise_for_status().json()
         conflict = next(item for item in conflicts if item["count_group_id"] == first_single["count_group_id"])
         assert conflict["group_conflict"] is True and conflict["total"] is None
 
         edit_body = count_body(args.location_id, edit_sunday, "single", None, 20, run_marker, service_id=test_service_id)
-        editable = client.post("/counts/", headers=headers["usher_a"], json=edit_body).raise_for_status().json()
-        edit_payload = {"edit_id": str(uuid.uuid4()), "base_revision": 0, "values": {"total": 25}}
+        editable = submit_count_via_sync(client, headers["usher_a"], edit_body, headers["group_pastor"])
+        edit_payload = {"edit_id": str(uuid.uuid4()), "base_revision": 0,
+                        "values": {"total": 25, "adult_male": 25}}
         edited = client.post(f"/counts/{editable['id']}/edit", headers=headers["usher_a"], json=edit_payload).raise_for_status().json()
         duplicate_edit = client.post(f"/counts/{editable['id']}/edit", headers=headers["usher_a"], json=edit_payload).raise_for_status().json()
         assert edited["revision"] == duplicate_edit["revision"] == 1 and duplicate_edit["duplicate"] is True
         concurrent = [
-            {"edit_id": str(uuid.uuid4()), "base_revision": 1, "values": {"total": 26}},
-            {"edit_id": str(uuid.uuid4()), "base_revision": 1, "values": {"total": 27}},
+            {"edit_id": str(uuid.uuid4()), "base_revision": 1, "values": {"total": 26, "adult_male": 26}},
+            {"edit_id": str(uuid.uuid4()), "base_revision": 1, "values": {"total": 27, "adult_male": 27}},
         ]
         def concurrent_edit(payload: dict) -> httpx.Response:
             return httpx.post(f"{args.base_url}/counts/{editable['id']}/edit", headers=headers["usher_a"], json=payload, timeout=30)
@@ -176,19 +226,22 @@ def main() -> None:
         assert sorted(item.status_code for item in edit_responses) == [200, 409]
         latest_revision = 2
         revision_response = client.post(f"/counts/{editable['id']}/edit", headers=headers["usher_a"], json={
-            "edit_id": str(uuid.uuid4()), "base_revision": latest_revision, "values": {"total": 28},
+            "edit_id": str(uuid.uuid4()), "base_revision": latest_revision,
+            "values": {"total": 28, "adult_male": 28},
         })
         revision_response.raise_for_status()
         latest_revision += 1
         fourth = client.post(f"/counts/{editable['id']}/edit", headers=headers["usher_a"], json={
-            "edit_id": str(uuid.uuid4()), "base_revision": latest_revision, "values": {"total": 30},
+            "edit_id": str(uuid.uuid4()), "base_revision": latest_revision,
+            "values": {"total": 30, "adult_male": 30},
         })
         assert fourth.status_code == 409 and "edit limit" in fourth.text.lower()
         await_return = client.post(
             f"/counts/review/{editable['id']}/return", headers=headers["group_pastor"],
             json={"reason": "Please correct the submitted population figure."},
         ).raise_for_status().json()
-        extra_edit = {"edit_id": str(uuid.uuid4()), "base_revision": latest_revision + 1, "values": {"total": 31}}
+        extra_edit = {"edit_id": str(uuid.uuid4()), "base_revision": latest_revision + 1,
+                      "values": {"total": 31, "adult_male": 31}}
         client.post(f"/counts/{editable['id']}/edit", headers=headers["usher_a"], json=extra_edit).raise_for_status()
 
         if not args.sync_database_url:
@@ -197,8 +250,9 @@ def main() -> None:
         if db_host not in {"localhost", "127.0.0.1", "::1"}:
             raise SystemExit("Refusing non-local SYNC_DATABASE_URL; this test adjusts only a marked synthetic row.")
         expired_body = count_body(args.location_id, expired_sunday, "single", None, 8, run_marker, service_id=test_service_id)
-        expired_row = client.post("/counts/", headers=headers["usher_a"], json=expired_body).raise_for_status().json()
-        engine = create_engine(args.sync_database_url)
+        expired_row = submit_count_via_sync(client, headers["usher_a"], expired_body, headers["group_pastor"])
+        sync_url = args.sync_database_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+        engine = create_engine(sync_url)
         try:
             with engine.begin() as connection:
                 connection.execute(text("UPDATE counts SET created_at = now() - interval '25 hours' WHERE id = :id"), {"id": expired_row["id"]})
@@ -209,15 +263,23 @@ def main() -> None:
         })
         assert expired_edit.status_code == 409 and "24-hour edit window" in expired_edit.text
 
-        offline_body = count_body(args.location_id, edit_sunday + timedelta(days=14), "single", None, 9, run_marker, service_id=test_service_id)
+        offline_date = single_sunday + timedelta(days=7)
+        offline_body = count_body(args.location_id, offline_date, "single", None, 9, run_marker, service_id=test_service_id)
+        assert offline_date not in {next_sunday, conflict_sunday, edit_sunday, expired_sunday, single_sunday}
         sync_payload = {"counts": [offline_body]}
         first_sync = client.post("/sync/batch", headers=headers["usher_a"], json=sync_payload).raise_for_status().json()
-        retry_sync = client.post("/sync/batch", headers=headers["usher_a"], json=sync_payload).raise_for_status().json()
-        assert first_sync["counts"]["synced"] == 1 and retry_sync["counts"]["duplicates"] == 1
+        retry_syncs = [
+            client.post("/sync/batch", headers=headers["usher_a"], json=sync_payload).raise_for_status().json()
+            for _ in range(2)
+        ]
+        assert first_sync["counts"]["synced"] == 1
+        assert all(retry["counts"]["duplicates"] == 1 for retry in retry_syncs)
+        offline_rows = client.get("/counts/", headers=headers["group_pastor"], params={"limit": 500}).raise_for_status().json()
+        assert sum(str(row.get("client_id")) == offline_body["client_id"] for row in offline_rows) == 1
 
         expired_section = count_body(args.location_id, previous_sunday, "section", "Auto-close", 5, run_marker,
                                      service_id=f"auto-{run_marker[-8:]}")
-        auto_row = client.post("/counts/", headers=headers["usher_a"], json=expired_section).raise_for_status().json()
+        auto_row = submit_count_via_sync(client, headers["usher_a"], expired_section, headers["group_pastor"])
         notification_response = client.get(
             "/notifications/history", headers=headers["location_pastor"],
             params={"since": (datetime.now(timezone.utc) - timedelta(days=10)).isoformat(), "kind": "count_group_auto_closed"},
@@ -236,12 +298,16 @@ def main() -> None:
             "single_count_categories": {"date": single_sunday.isoformat(), "total": single_dashboard["total"],
                                         "categories": single_dashboard["categories"]},
             "offering_duplicate_warning_preflight": offering_after,
-            "duplicate_label_rejected": duplicate_response.status_code == 409,
+            "worker_attendance": {"client_id": worker_body["client_id"], "present_count": worker_view["present_count"], "visible_in_admin_list": True},
+            "fellowship_attendance": {"client_id": fellowship_body["client_id"], "total": fellowship_view_row["total"], "visible_in_admin_list": True},
+            "duplicate_label_rejected": duplicate_response["status"] == "error",
             "single_conflict": conflict["group_conflict"],
             "edit_revision": edited["revision"], "idempotent_edit": duplicate_edit["duplicate"],
             "return_and_extra_edit": await_return["status"],
             "expired_edit_refused": expired_edit.status_code == 409,
-            "offline_retry": retry_sync["counts"]["duplicates"],
+            "offline_replays": len(retry_syncs),
+            "offline_retry": retry_syncs[-1]["counts"]["duplicates"],
+            "offline_client_rows": sum(str(row.get("client_id")) == offline_body["client_id"] for row in offline_rows),
             "auto_close_notification": auto_notice["kind"],
         }, indent=2))
 
@@ -252,9 +318,32 @@ def login(client: httpx.Client, email: str, password: str) -> str:
     return response.json()["access_token"]
 
 
+def post_count_sync_result(client: httpx.Client, headers: dict, body: dict) -> dict:
+    """Submit as the Field Utility does and return its per-item outcome."""
+    return post_resource_sync_result(client, headers, "counts", body)
+
+
+def post_resource_sync_result(client: httpx.Client, headers: dict, resource: str, body: dict) -> dict:
+    response = client.post("/sync/batch", headers=headers, json={resource: [body]})
+    response.raise_for_status()
+    return response.json()[resource]["details"][0]
+
+
+def submit_count_via_sync(client: httpx.Client, headers: dict, body: dict, read_headers: dict) -> dict:
+    outcome = post_count_sync_result(client, headers, body)
+    if outcome.get("status") not in {"synced", "duplicate"}:
+        raise AssertionError(f"Field Utility count sync failed: {outcome}")
+    response = client.get("/counts/", headers=read_headers, params={"limit": 500})
+    response.raise_for_status()
+    row = next((item for item in response.json() if str(item.get("client_id")) == str(body["client_id"])), None)
+    if row is None:
+        raise AssertionError(f"Sync confirmed count {body['client_id']} but it is absent from the count list")
+    return row
+
+
 def count_body(location_id: str, occurrence: date, mode: str, label: str | None, total: int,
                marker: str, *, service_id: str = "main", categories: dict[str, int] | None = None) -> dict:
-    categories = categories or {"adult_male": 0, "adult_female": 0, "youth_male": 0, "youth_female": 0, "boys": 0, "girls": 0}
+    categories = categories or {"adult_male": total, "adult_female": 0, "youth_male": 0, "youth_female": 0, "boys": 0, "girls": 0}
     return {
         "client_id": str(uuid.uuid4()), "location_id": location_id,
         "date": datetime.combine(occurrence, datetime.min.time(), LAGOS).isoformat(),
@@ -263,6 +352,33 @@ def count_body(location_id: str, occurrence: date, mode: str, label: str | None,
         **categories, "count_mode": mode, "section_label": label,
         "service_id": service_id, "submission_channel": "field_utility", "note": marker,
     }
+
+
+def create_marked_fellowship(sync_url: str, location_id: str, marker: str) -> dict:
+    code = f"F2{marker[-8:].upper()}"
+    engine = create_engine(sync_url)
+    try:
+        with engine.begin() as connection:
+            location = connection.execute(text(
+                "SELECT location_name, church_type, path::text FROM locations WHERE location_id=:location_id"
+            ), {"location_id": location_id}).mappings().one()
+            row = connection.execute(text("""
+                INSERT INTO fellowships (
+                    location_id, fellowship_code, fellowship_name, fellowship_group,
+                    location_name, church_type, path, version
+                ) VALUES (
+                    :location_id, :code, :name, 'adult', :location_name, :church_type,
+                    (:location_path || '.' || :path_label)::ltree, 1
+                ) RETURNING fellowship_id::text, fellowship_code, fellowship_name
+            """), {
+                "location_id": location_id, "code": code,
+                "name": f"{marker} synthetic fellowship", "location_name": location["location_name"],
+                "church_type": location["church_type"], "location_path": location["path"],
+                "path_label": code,
+            }).mappings().one()
+        return dict(row)
+    finally:
+        engine.dispose()
 
 
 if __name__ == "__main__":

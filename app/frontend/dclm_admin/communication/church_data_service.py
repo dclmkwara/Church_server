@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 from decimal import Decimal
 from typing import Any
 
@@ -65,7 +66,7 @@ def _normalize_count(row: dict[str, Any], *, event_map: dict[str, dict[str, Any]
         "submitted_at": str(row.get("created_at") or ""),
         "event_id": str(row.get("event_id") or ""),
         "event_title": event["title"] if event else str(row.get("program_type") or row.get("event_id") or "Unknown program"),
-        "date": str((event or {}).get("date") or str(row.get("date") or str(row.get("created_at") or "")[:10])[:10]),
+        "date": _date_in_reporting_timezone((event or {}).get("date") or row.get("date") or row.get("created_at")),
         "program_type": str(row.get("program_type") or (event or {}).get("program_type_name") or ""),
         "program_level": str(row.get("program_level") or ""),
         "program_scope_path": str(row.get("program_scope_path") or ""),
@@ -110,6 +111,7 @@ def _normalize_offering(row: dict[str, Any], *, event_map: dict[str, dict[str, A
     event = event_map.get(str(row.get("event_id") or ""))
     location = location_map.get(str(row.get("location_id") or ""))
     amount = row.get("amount")
+    service_date = _date_in_reporting_timezone((event or {}).get("date") or row.get("date") or row.get("created_at"))
     return {
         "entry_id": str(row.get("id") or ""),
         "event_id": str(row.get("event_id") or ""),
@@ -117,7 +119,7 @@ def _normalize_offering(row: dict[str, Any], *, event_map: dict[str, dict[str, A
         "program_type": str(row.get("program_type") or ""),
         "program_level": str(row.get("program_level") or ""),
         "program_scope_path": str(row.get("program_scope_path") or ""),
-        "date": str((event or {}).get("date") or str(row.get("created_at") or "")[:10]),
+        "date": service_date,
         "location": (location or {}).get("location_name") or str(row.get("location_id") or ""),
         "location_id": str(row.get("location_id") or ""),
         "amount": float(amount if isinstance(amount, Decimal) else (amount or 0)),
@@ -126,7 +128,7 @@ def _normalize_offering(row: dict[str, Any], *, event_map: dict[str, dict[str, A
         "submitted_by": str(row.get("entered_by_id") or "Recorded in backend"),
         "notes": str(row.get("note") or ""),
         "status": str(row.get("status") or ""),
-        "entry_date": str(row.get("date") or "")[:10],
+        "entry_date": _date_in_reporting_timezone(row.get("date") or row.get("created_at")),
         "created_at": str(row.get("created_at") or ""),
         "updated_at": str(row.get("updated_at") or ""),
         "entered_by_id": str(row.get("entered_by_id") or ""),
@@ -134,6 +136,29 @@ def _normalize_offering(row: dict[str, Any], *, event_map: dict[str, dict[str, A
         "reviewed_at": str(row.get("reviewed_at") or ""),
         "review_note": str(row.get("review_note") or ""),
     }
+
+
+def _date_in_reporting_timezone(value: Any) -> str:
+    """Return a date-only field in the church reporting timezone.
+
+    PostgreSQL timestamptz values are serialized by the API in UTC. Truncating
+    that string can move a midnight Africa/Lagos service date to the prior day.
+    """
+    if not value:
+        return ""
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        text = str(value)
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return text[:10]
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(ZoneInfo("Africa/Lagos"))
+    return parsed.date().isoformat()
 
 
 def _normalize_record(row: dict[str, Any], *, event_map: dict[str, dict[str, Any]], location_map: dict[str, dict[str, Any]]) -> dict[str, Any]:

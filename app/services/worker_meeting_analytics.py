@@ -13,7 +13,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.filters import scope_filter, scope_or_ancestor_filter
 from app.models.attendance import WorkerAttendance, WorkerAttendanceSubmission
 from app.models.programs import ProgramEvent, ProgramType
-from app.models.user import Worker
 
 
 def _day(value: Any) -> str:
@@ -70,16 +69,10 @@ async def worker_meeting_analytics(
                     expected_ids.add(UUID(str(raw_id)))
                 except (TypeError, ValueError):
                     continue
-    eligible_workers: set[str] = set()
-    if expected_ids:
-        worker_query = select(Worker.worker_id).where(
-            Worker.worker_id.in_(expected_ids),
-            scope_filter(Worker.path, scope_path),
-            Worker.is_deleted.is_(False),
-        )
-        if location_id:
-            worker_query = worker_query.where(Worker.location_id == location_id)
-        eligible_workers = {str(worker_id) for worker_id in (await db.execute(worker_query)).scalars().all()}
+    # The scoped submission is the roster snapshot for this meeting. Rechecking
+    # today's Worker path/location here changes historical denominators after
+    # transfers or hierarchy repairs, and can drop valid IDs from the snapshot.
+    eligible_workers = {str(worker_id) for worker_id in expected_ids}
 
     attendance_type = aliased(ProgramType)
     attendance_event = aliased(ProgramEvent)

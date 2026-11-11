@@ -463,8 +463,8 @@ class APIClient:
     async def remind_count_location(self, access_token: str, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._backend_client.remind_count_location(access_token, payload)
 
-    async def list_offerings(self, access_token: str, *, scope_path: str | None = None, fund_type: str | None = None, location_id: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
-        return await self._backend_client.list_offerings(access_token, scope_path=scope_path, fund_type=fund_type, location_id=location_id, limit=limit)
+    async def list_offerings(self, access_token: str, *, scope_path: str | None = None, fund_type: str | None = None, location_id: str | None = None, skip: int = 0, limit: int = 200) -> list[dict[str, Any]]:
+        return await self._backend_client.list_offerings(access_token, scope_path=scope_path, fund_type=fund_type, location_id=location_id, skip=skip, limit=limit)
 
     async def create_offering(self, access_token: str, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._backend_client.create_offering(access_token, payload)

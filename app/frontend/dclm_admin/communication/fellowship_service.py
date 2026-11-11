@@ -244,11 +244,7 @@ class FellowshipService:
             except BackendClientError:
                 raise
             location_id = str(row.get("location_id") or "")
-            details = await request_cached(
-                request,
-                FellowshipService._details_key(location_id),
-                lambda: PeopleService.get_location_details(request, location_id) or {},
-            )
+            details = await maybe_await(PeopleService.get_location_details(request, location_id)) or {}
             members = await FellowshipService.list_members(request, fellowship_id)
             attendance = await FellowshipService.list_attendance(request, fellowship_id)
             offerings = await FellowshipService.list_offerings(request, fellowship_id)

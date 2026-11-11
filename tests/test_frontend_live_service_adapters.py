@@ -14,11 +14,68 @@ from app.frontend.dclm_admin.communication.program_service import ProgramService
 from app.frontend.dclm_admin.communication.report_service import ReportService
 from app.frontend.dclm_admin.communication.system_service import SystemService
 from app.frontend.dclm_admin.communication.workflow_service import WorkflowService
+from app.frontend.dclm_admin.communication.api_client import APIClient
 
 
 class _FakeRequest:
     def __init__(self):
         self.state = SimpleNamespace()
+
+
+def test_api_client_forwards_offering_page_offset_to_backend():
+    backend = SimpleNamespace(list_offerings=AsyncMock(return_value=[]))
+    client = object.__new__(APIClient)
+    client._backend_client = backend
+
+    asyncio.run(client.list_offerings("token", scope_path="org.234.KW", skip=500, limit=500))
+
+    backend.list_offerings.assert_awaited_once_with(
+        "token", scope_path="org.234.KW", fund_type=None, location_id=None, skip=500, limit=500,
+    )
+
+
+def test_offering_normalization_uses_service_date_not_creation_date_and_keeps_lagos_day():
+    normalized = church_data_service._normalize_offering(
+        {
+            "id": "offering-1",
+            "date": "2057-02-03T23:00:00Z",
+            "created_at": "2026-11-11T11:09:53Z",
+            "amount": "100.00",
+            "status": "pending",
+        },
+        event_map={},
+        location_map={},
+    )
+
+    assert normalized["date"] == "2057-02-04"
+    assert normalized["entry_date"] == "2057-02-04"
+
+
+def test_count_normalization_keeps_lagos_occurrence_day():
+    normalized = church_data_service._normalize_count(
+        {"id": "count-1", "date": "2057-02-03T23:00:00Z", "total": 1},
+        event_map={},
+        location_map={},
+    )
+
+    assert normalized["date"] == "2057-02-04"
+
+
+def test_people_service_exposes_location_details_for_fellowship_view(monkeypatch):
+    backend = SimpleNamespace(get_location_details=AsyncMock(return_value={
+        "location_id": "location-1", "location_name": "Sample Location",
+        "group_name": "Sample Group", "region_name": "Sample Region",
+    }))
+    monkeypatch.setattr(people_service.PeopleService, "use_mock", AsyncMock(return_value=False))
+    monkeypatch.setattr(people_service, "async_client", lambda _client: backend)
+    monkeypatch.setattr(people_service, "get_api_client", lambda: object())
+    monkeypatch.setattr(people_service.AuthService, "get_access_token", lambda _request: "token")
+
+    result = people_service.PeopleService.get_location_details(_FakeRequest(), "location-1")
+
+    assert result["location_name"] == "Sample Location"
+    assert result["group_name"] == "Sample Group"
+    backend.get_location_details.assert_awaited_once_with("token", "location-1")
 
 
 def test_dashboard_attendance_adapter_preserves_decimal_rate_and_zero_report(monkeypatch):

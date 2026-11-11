@@ -8,7 +8,7 @@ from uuid import UUID, uuid5
 
 from fastapi import APIRouter, Depends, HTTPException, Body, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import and_, or_, select, func, tuple_, cast, String
+from sqlalchemy import and_, or_, select, func, tuple_, cast, String, text
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timezone
 import logging
@@ -49,6 +49,23 @@ from app.crud.crud_fellowship_activities import (
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _attendance_roster_scope(location_id: str, reporting_path: str, broad_event: bool):
+    """Use the same local roster key as Utility; combined events use hierarchy path."""
+    return scope_filter(Worker.path, reporting_path) if broad_event else Worker.location_id == location_id
+
+
+def _is_allowed_worker_attendance_program(program_domain: str | None, program_type: str) -> bool:
+    normalized_domain = " ".join(
+        str(program_domain or "").strip().lower().replace("_", " ").split()
+    )
+    allowed_domains = {"weekly", "weekly programs", "retreat", "conference", "conferences"}
+    worker_program = any(
+        token in str(program_type or "").lower()
+        for token in ("worker", "leader", "leadership", "overseer")
+    )
+    return normalized_domain in allowed_domains and worker_program
 MAX_SYNC_BATCH_RECORDS = 500
 
 
@@ -431,9 +448,7 @@ async def process_attendance_submissions(
                 raise HTTPException(status_code=404, detail="Location not found")
             if item.church_type.strip().lower() != location.church_type.strip().lower():
                 raise HTTPException(status_code=422, detail="Church section does not match this location")
-            if str(item.program_domain or "").lower() not in {"weekly", "retreat", "conference"} or not any(
-                token in item.program_type.lower() for token in ("worker", "leader", "leadership", "overseer")
-            ):
+            if not _is_allowed_worker_attendance_program(item.program_domain, item.program_type):
                 raise HTTPException(status_code=422, detail="Worker attendance is only accepted for worker or leader meetings, conferences, and retreats")
             event = await db.get(ProgramEvent, item.event_id) if item.event_id else None
             if item.event_id and (not event or event.is_deleted):
@@ -468,10 +483,17 @@ async def process_attendance_submissions(
             reporting_path = str(event.path) if event else str(location.path)
             roster_path = reporting_path if broad_event else str(location.path)
 
+            # The Utility loads a location roster by Worker.location_id. Keep
+            # local validation and the roster snapshot on that same key: some
+            # imported/legacy Worker.path values are ancestors of the actual
+            # location, and using ltree here would reject workers the Utility
+            # just offered for selection. Combined events still use the event
+            # path to select workers across the covered hierarchy.
+            roster_scope = _attendance_roster_scope(item.location_id, roster_path, broad_event)
             worker_ids = [worker.worker_id for worker in item.present_workers]
             worker_result = await db.execute(select(Worker).where(
                 Worker.worker_id.in_(worker_ids),
-                scope_filter(Worker.path, roster_path),
+                roster_scope,
                 Worker.is_deleted.is_(False),
                 Worker.approval_status == "approved",
             ))
@@ -482,7 +504,7 @@ async def process_attendance_submissions(
                 raise HTTPException(status_code=422, detail=detail)
 
             roster_result = await db.execute(select(Worker.worker_id).where(
-                scope_filter(Worker.path, roster_path),
+                roster_scope,
                 Worker.is_deleted.is_(False),
                 Worker.approval_status == "approved",
             ).order_by(Worker.worker_id))
@@ -535,7 +557,8 @@ async def process_attendance_submissions(
                 db.add(WorkerAttendance(
                     submission_id=submission.id,
                     client_id=uuid5(item.client_id, str(worker_id)),
-                    path=str(worker.path), program_scope_path=reporting_path, location_id=worker.location_id, event_id=item.event_id,
+                    path=str(location.path) if not broad_event else str(worker.path),
+                    program_scope_path=reporting_path, location_id=worker.location_id, event_id=item.event_id,
                     assignment_id=assignment.id if assignment else None,
                     date=item.date,
                     church_type=worker.church_type,

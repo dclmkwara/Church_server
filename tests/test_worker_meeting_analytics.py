@@ -35,8 +35,10 @@ class _ScalarResult:
 class _Db:
     def __init__(self, responses):
         self.responses = iter(responses)
+        self.statements = []
 
-    async def execute(self, _statement):
+    async def execute(self, statement):
+        self.statements.append(statement)
         return next(self.responses)
 
 
@@ -68,7 +70,7 @@ def test_multiple_ushers_count_roster_and_workers_once_per_meeting():
         _attendance(WORKERS[1], "late"),
         _attendance(WORKERS[2], "absent"),
     ]
-    db = _Db([_Result(rows=duplicate_submissions), _Result(scalars=WORKERS), _Result(rows=rows)])
+    db = _Db([_Result(rows=duplicate_submissions), _Result(rows=rows)])
 
     result = asyncio.run(worker_meeting_analytics(db, "org.234.KW"))
     meeting = result["ranking"][0]
@@ -94,3 +96,36 @@ def test_legacy_roster_count_is_used_once_and_marked():
     assert meeting["expected"] == 20
     assert meeting["present"] == 1
     assert meeting["legacy_roster_meetings"] == 1
+
+
+def test_location_meeting_roster_uses_captured_ids_not_stale_ltree_path():
+    submission = _submission([str(worker) for worker in WORKERS])
+    submission.program_scope_path = "org.234.KW.R.G.L"
+    submission.path = "org.234.KW.R.G.L"
+    db = _Db([
+        _Result(rows=[(submission, "saturday_workers_meeting", "Saturday Workers Meeting", 1, "org.234.KW.R.G.L")]),
+        _Result(rows=[_attendance(WORKERS[0], "present")]),
+    ])
+
+    result = asyncio.run(worker_meeting_analytics(db, "org.234.KW.R.G.L", location_id="location-1"))
+
+    assert result["ranking"][0]["expected"] == 3
+    assert result["ranking"][0]["attendance_rate"] == 33.3
+    assert len(db.statements) == 2
+
+
+def test_historical_roster_snapshot_survives_current_worker_path_change():
+    submission = _submission([str(worker) for worker in WORKERS])
+    submission.program_scope_path = "org.234.KW.R.G.L"
+    submission.path = "org.234.KW.R.G.L"
+    duplicate = (submission, "saturday_workers_meeting", "Saturday Workers Meeting", 1, submission.path)
+    db = _Db([
+        _Result(rows=[duplicate]),
+        _Result(rows=[_attendance(WORKERS[0], "present")]),
+    ])
+
+    result = asyncio.run(worker_meeting_analytics(db, "org.234.KW.R.G"))
+
+    assert result["ranking"][0]["expected"] == 3
+    assert result["ranking"][0]["attendance_rate"] == 33.3
+    assert len(db.statements) == 2

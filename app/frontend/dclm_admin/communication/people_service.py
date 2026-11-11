@@ -261,6 +261,27 @@ class PeopleService:
         return True
 
     @staticmethod
+    async def get_location_details(request, location_id: str) -> dict[str, Any]:
+        """Return the hierarchy names/codes needed by location-scoped views."""
+        if await PeopleService.use_mock(request):
+            location = STORE.get_location_profile(location_id)
+            if not location:
+                return {}
+            return _normalize_location_details(location)
+        client = async_client(get_api_client())
+        access_token = AuthService.get_access_token(request)
+        row = await request_cached(
+            request,
+            ("people", "location_details", location_id),
+            lambda: ttl_cached(
+                ("people", "location_details", location_id),
+                120.0,
+                lambda: client.get_location_details(access_token, location_id),
+            ),
+        )
+        return _normalize_location_details(row or {})
+
+    @staticmethod
     async def list_workers(request, ctx, *, search: str = "", status: str = "", approval: str = "") -> list[dict[str, Any]]:
         scope_path = await PeopleService.effective_scope_path(request, ctx)
         if await PeopleService.use_mock(request):
