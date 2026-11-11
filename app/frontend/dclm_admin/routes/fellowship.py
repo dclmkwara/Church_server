@@ -26,6 +26,11 @@ WORKSPACE_TABS = [
 ]
 
 
+def _fellowship_filter_locations(rows: list[dict]) -> list[str]:
+    """The live adapter exposes normalized rows with `location`, not `location_name`."""
+    return [str(row.get("location") or row.get("location_name") or "") for row in rows if row.get("location") or row.get("location_name")]
+
+
 async def _fellowship_cards(request: Request, ctx, *, search: str = "", location: str = "", status: str = "", oob: bool = False):
     rows = await FellowshipService.list_fellowships(request, ctx, search=search, location=location, status=status) if await FellowshipService.live_enabled(request) else STORE.list_fellowships(ctx.current_scope_path, search=search, location=location, status=status)
     attrs = {"id": "fellowship-results", "cls": "fellowship-grid"}
@@ -381,7 +386,7 @@ async def _fellowship_page_content(request: Request, ctx, *, search: str = "", l
 
     if live:
         raw_locations, summary, cards = await asyncio.gather(locations_coro, summary_coro, cards_coro)
-        locations = [row["location_name"] for row in raw_locations]
+        locations = _fellowship_filter_locations(raw_locations)
     else:
         cards = await cards_coro
         locations = [row["location"] for row in STORE.visible_locations(ctx.current_scope_path)]

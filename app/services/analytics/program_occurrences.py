@@ -5,7 +5,7 @@ from datetime import date
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import case, func, or_, select, union_all
+from sqlalchemy import String, case, cast, func, or_, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -74,7 +74,22 @@ async def get_program_occurrences(
             select(Count, Location.location_name, Location.path, CountGroup.state, CountGroup.service_id)
             .join(Location, Location.location_id == Count.location_id)
             .outerjoin(CountGroup, CountGroup.id == Count.count_group_id)
-            .where(Count.event_id.in_(event_ids), Count.is_deleted.is_(False), scope_filter(Count.path, scope_path))
+            .where(
+                Count.event_id.in_(event_ids), Count.is_deleted.is_(False),
+                scope_filter(Count.path, scope_path),
+                # A report stored at a venue can have a broader reporting
+                # scope (for example a retreat counted at a regional camp).
+                # Keep it visible at that reporting scope and its ancestors,
+                # but do not leak a region-level aggregate into child groups
+                # and locations just because its physical venue is there.
+                scope_filter(
+                    func.coalesce(
+                        func.nullif(Count.program_scope_path, ""),
+                        cast(Count.path, String),
+                    ),
+                    scope_path,
+                ),
+            )
         )
         raw_rows = list((await db.execute(count_query)).all())
         logical_groups: dict[tuple[Any, ...], list[tuple[Any, str, str, str | None, str | None]]] = {}

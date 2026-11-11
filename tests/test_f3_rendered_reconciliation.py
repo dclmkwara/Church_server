@@ -44,11 +44,12 @@ def _independent_counts(connection, scope_path: str, start: date, end: date) -> 
           SELECT c.*, coalesce(nullif(c.program_scope_path, ''), c.path) AS report_path
           FROM counts c
           WHERE c.status='approved' AND c.is_deleted IS NOT TRUE
+            AND c.program_type_id=1
             AND c.date::date BETWEEN :start_date AND :end_date
         ), local_rows AS (
           SELECT a.* FROM accepted a
           WHERE lower(coalesce(a.program_level,'local')) IN ('local','location')
-            AND a.path LIKE :scope_path || '.%'
+            AND (a.path=:scope_path OR a.path LIKE :scope_path || '.%')
             AND NOT EXISTS (
               SELECT 1 FROM accepted x
               WHERE lower(x.program_level) IN ('group','region','state')

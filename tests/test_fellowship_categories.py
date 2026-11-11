@@ -7,6 +7,7 @@ import pytest
 from app.crud.crud_fellowship_activities import fellowship_attendance_total
 from app.frontend.dclm_admin.communication import fellowship_service
 from app.frontend.dclm_admin.communication.fellowship_service import FellowshipService
+from app.frontend.dclm_admin.routes.fellowship import _fellowship_filter_locations
 from app.models.fellowship_activities import FellowshipAttendance
 from app.schemas.fellowship_activities import FellowshipAttendanceCreate
 
@@ -40,6 +41,14 @@ def test_fellowship_attendance_total_preserves_legacy_payload_meaning():
     )
 
     assert fellowship_attendance_total(submission) == 30
+
+
+def test_fellowship_location_filter_accepts_normalized_live_adapter_rows():
+    assert _fellowship_filter_locations([
+        {"location": "Living Spring", "fellowship_name": "North"},
+        {"location_name": "Legacy Location"},
+        {"location": ""},
+    ]) == ["Living Spring", "Legacy Location"]
 
 
 @pytest.mark.asyncio
