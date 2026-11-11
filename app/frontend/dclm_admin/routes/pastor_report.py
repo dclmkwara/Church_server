@@ -22,6 +22,7 @@ from app.services.analytics.program_config import STANDING_PROGRAMS, reporting_t
 from app.services.analytics.pastor_report_config import (
     CONSECUTIVE_MISSING_SUNDAYS, DECLINE_ATTENTION_PERCENT, DEFINITIONS, MIN_COMPARABLE_LOCATIONS,
 )
+from app.core.program_page_perf import program_page_trace
 from ..auth_context import build_context
 from ..backend import BackendClientError
 from ..communication import AuthService, ProgramService
@@ -658,7 +659,9 @@ def register_pastor_report_routes(app) -> None:
     async def load(request: Request, *, period: str = "4w", include_pending: bool = False, campaign_id: str = "", event_mode: str = ""):
         ctx = build_context(request)
         try:
-            data = await _report_data(request, ctx, period=period, include_pending=include_pending, campaign_id=campaign_id, event_mode=event_mode)
+            scoped_ctx = active_scope_context(request, ctx)
+            with program_page_trace("pastor_report", str(scoped_ctx.current_scope_path or "")):
+                data = await _report_data(request, scoped_ctx, period=period, include_pending=include_pending, campaign_id=campaign_id, event_mode=event_mode)
             return data, None
         except BackendClientError as exc:
             return None, str(exc)
