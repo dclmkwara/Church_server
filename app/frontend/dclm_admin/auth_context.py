@@ -226,11 +226,13 @@ VISIBLE_MODULES = {
 
 _DEMO_ADMIN_PERMISSIONS = frozenset({
     "reports:read", "statistics:read", "counts:remind", "workers:request_changes",
-    "programs:manage", "programs:create_event",
+    "programs:manage", "programs:create_event", "workers:read", "users:read",
+    "programs:read", "counts:read", "offerings:read", "records:read",
+    "attendance:read", "fellowship:read", "announcements:read",
 })
 _DEMO_PASTOR_PERMISSIONS = _DEMO_ADMIN_PERMISSIONS | frozenset({
     "reports:refresh", "programs:approve_events", "counts:review", "offerings:review",
-    "workers:approve", "users:assign_roles", "rbac:read",
+    "workers:approve", "users:assign_roles", "rbac:read", "system:read_audit_logs",
 })
 
 DEMO_ROLE_PERMISSIONS = {

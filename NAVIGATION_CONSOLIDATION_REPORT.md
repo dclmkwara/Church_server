@@ -69,3 +69,59 @@ No existing page route is being renamed or removed. The new menu links point to 
 ## Verification and release
 
 Pending implementation: menu visibility tests for all eight personas, old-route compatibility tests, responsive menu checks at 360/390/768 px, and the shared mobile polish checks. No deployment or push is included.
+
+## Implementation and verification update
+
+**Implemented locally; not pushed.** The shared shell now uses the proposed task-oriented menu. Menus are filtered by module, minimum hierarchy level and page permission. The mobile shortcut bar also checks the read permission for People, Programs and Finance. The deployed routes and their URLs are unchanged, so old links still open directly; there were no renamed URLs to redirect.
+
+### Final menu by persona
+
+Common to all eight Level 2–5 personas: Dashboard; Pastor Report; Reports; Recurring Program Attendance; Attendance; Saturday Workers Meeting; Tuesday Leaders Meeting; Newcomers; My Requests; Programs; Retreat; Crusade; Program Counts; Workers; Members; App Users; Offerings and Tithes; Finance Analytics; Fellowship; Inbox.
+
+| Persona | Additional menu entries |
+|---|---|
+| Location Pastor | Count Review; Audit Log |
+| Location Admin | None |
+| Group Pastor | Count Review; Organization; Audit Log |
+| Group Admin | Organization |
+| Region Pastor | Count Review; Organization; Communication; Audit Log |
+| Region Admin | Organization; Communication |
+| State Overseer | Count Review; Organization; Communication; Documented Population; Audit Log; Roles and Permissions |
+| State Admin | Organization; Communication; Documented Population |
+
+These are the current demo-role menu results. In live mode the menu uses the authenticated account's permissions; the server continues to enforce each route and scope. Officials remains disabled in the live menu because source configuration marks that route family unsupported. Help & Docs is not included because the old `/docs` target returned 404 in the prior audit. No existing page was deleted or merged.
+
+### Mobile and wording fixes
+
+- The region/group card clipping came from a two-column mobile grid rule that left the coverage cell in an auto-sized second column. The corrected mobile card uses one full-width column, then a two-column metric list. No horizontal document overflow at 360, 390 and 768 px in the local component checks.
+- The dashboard cards use plain badge wording; the waiting age is displayed in hours, including long waits. Returned and Conflict use separate colors. The expected-population link is now labelled Documented Population and highlights the correct menu item.
+- The child table now has seven cells matching its seven headers; mobile detail figures share the final review cell rather than creating an extra blank column.
+- No metric calculation, permission grant, database schema, or API was changed for this menu slice.
+
+### Test results
+
+Focused command: `.venv\\Scripts\\python.exe -m pytest -q tests/test_navigation_consolidation.py tests/test_analytics_mobile_layout.py tests/test_analytics_dashboard_chart.py tests/test_analytics_mobile_playwright.py`
+
+Result: **20 passed, 1 skipped**. The skip is the authenticated remote/mobile sweep because this run did not have the four persona browser storage-state files configured. The local rendered-sidebar test covers all eight personas at 360, 390 and 768 px; dashboard card rendering covers State, Region, Group and Location at those widths. The test suite also checks that visible menu destinations have registered routes and that prior URLs remain registered.
+
+The opt-in authenticated sweep is still needed for deployed visual confirmation. No screenshots from that authenticated sweep are claimed here. No push was made.
+
+### Before/after menu by persona
+
+The previous live menu used Core, People, Church Data and More. Across Levels 2–5, it showed Dashboard, Inbox, Workers, Members, App Users, Programs, Program Counts, both meeting pages, Offerings & Tithes, Newcomers, Attendance, Workflows, Fellowship and Reports. Count Review was pastor-only; Organization appeared from Group level; Communication appeared from Region level; Roles & Permissions appeared for the State Overseer. Officials was suppressed in live mode. Documented Population was only linked from the State dashboard, while Finance Analytics was nested as a Reports tab.
+
+| Persona | Previous menu additions/limits | Consolidated menu additions/limits |
+|---|---|---|
+| Location Pastor | Count Review | Count Review; Audit Log |
+| Location Admin | No review queue | No review queue |
+| Group Pastor | Count Review; Organization | Count Review; Organization; Audit Log |
+| Group Admin | Organization | Organization |
+| Region Pastor | Count Review; Organization; Communication | Count Review; Organization; Communication; Audit Log |
+| Region Admin | Organization; Communication | Organization; Communication |
+| State Overseer | Count Review; Organization; Communication; Roles & Permissions | Count Review; Organization; Communication; Documented Population; Audit Log; Roles and Permissions |
+| State Admin | Organization; Communication | Organization; Communication; Documented Population |
+
+The page set is unchanged; the update reorganizes and names the links, makes Finance Analytics and Documented Population easier to find, and adds Audit Log to the pastor's accountability links. No page was merged or deleted: each has different record detail, approval state, source, or reporting definition. Existing URLs stay in service and open directly rather than redirecting.
+
+
+Full Church_server suite after the final CSS and card markup adjustments: **377 passed, 3 skipped**. `git diff --cached --check` passed for the staged implementation. The 3 full-suite skips include the opt-in authenticated browser checks.

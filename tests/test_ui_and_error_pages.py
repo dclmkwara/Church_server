@@ -57,9 +57,9 @@ def test_shell_mobile_nav_items():
     ctx = AdminContext(
         profile=ProfileConfig(
             key="test_profile",
-            level=9,
+            level=5,
             user_name="Test Admin",
-            role_label="Administrator",
+            role_label="State Overseer",
             mode_label="State Mode",
             root_kind="state",
             root_label="Kwara",
@@ -71,6 +71,7 @@ def test_shell_mobile_nav_items():
         current_scope_kind="state",
         current_scope_label="Kwara",
         current_scope_path="org.kwara",
+        permissions=frozenset({"workers:read", "programs:read", "offerings:read"}),
     )
     nav = _mobile_bottom_nav(ctx, "dashboard")
     xml = to_xml(nav)

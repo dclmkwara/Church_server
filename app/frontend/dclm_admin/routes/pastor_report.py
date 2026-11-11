@@ -713,7 +713,7 @@ def register_pastor_report_routes(app) -> None:
                 Script("if(new URLSearchParams(location.search).get('print')==='1'){fetch('/dashboard/pastor-report/record-print?'+new URLSearchParams(location.search),{credentials:'same-origin'}).then(r=>{if(!r.ok)throw new Error();window.print()}).catch(()=>document.querySelector('.pastor-report-page').insertAdjacentHTML('afterbegin','<div role=alert class=alert alert-danger>Could not record report access; printing was not started.</div>'))}"),
                 cls="pastor-report-page",
             )
-        return shell_layout(ctx, request_path=request.url.path, active_key="dashboard", title="Pastor’s report", subtitle="A printable, scoped report with definitions and data-quality notes.", primary_action=None, content=page_stack(content))
+        return shell_layout(ctx, request_path=request.url.path, active_key="pastor-report", title="Pastor’s report", subtitle="A printable, scoped report with definitions and data-quality notes.", primary_action=None, content=page_stack(content))
 
     @app.get("/dashboard/pastor-report/export.xlsx")
     async def pastor_report_xlsx(request: Request, period: str = "4w", include_pending: bool = False, campaign_id: str = "", event_mode: str = ""):

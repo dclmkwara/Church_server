@@ -189,7 +189,7 @@ def register_expected_population_routes(app) -> None:
             except BackendClientError as exc:
                 content = section_card("Expected Sunday attendance", "Estimates could not be loaded.", P(str(exc), role="alert", cls="text-danger mb-0"))
         return shell_layout(
-            ctx, request_path=request.url.path, active_key="dashboard",
+            ctx, request_path=request.url.path, active_key="expected-population",
             title="Expected Sunday attendance", subtitle="Versioned location estimates.",
             primary_action=None, content=content, show_shell_intro=False,
         )

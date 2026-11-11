@@ -68,9 +68,7 @@ def _period_delta(current: int | float, previous: int | float, *, previous_recor
 
 def _age_label(age_hours: Any) -> str:
     age = _integer(age_hours)
-    if age < 48:
-        return f"{age} hours"
-    return f"{age // 24} days"
+    return f"{age} hours"
 
 
 def _waiting_on_decision(summary: dict[str, Any], weeks: int) -> Any:
@@ -161,13 +159,13 @@ def _line_chart(points: list[dict[str, Any]], selected_weeks: int) -> Any:
 
 
 _METRIC_DEFINITIONS = {
-    "Adds up": "Approved reports are added across the locations in this scope.",
-    "Pooled": "The percentage compares total counted population with total documented population for locations with both values.",
-    "Recomputed": "This is recalculated from the weekly averages; weeks without a counted report are excluded.",
-    "Snapshot": "This is the worker register at the time of this report.",
-    "Roster check": "The attendance rate is withheld until the expected worker roster can be counted once per meeting.",
-    "Approved only": "Only reports approved by the reviewer are included.",
-    "Reports": "A report is a submitted record; it does not identify a unique person.",
+    "Total": "Approved counts from locations in this scope are added together.",
+    "Pooled ratio": "This compares the total counted population with the total documented population for locations that have both values.",
+    "Average": "This is the mean of weekly per-location averages; weeks without a counted report are excluded.",
+    "Current register": "This is the worker register at the time of this report.",
+    "Roster data": "Not enough roster data is available to calculate this attendance rate yet.",
+    "Approved": "Only reports approved by the reviewer are included.",
+    "Reported totals": "These are totals from reports; a report does not identify a unique person.",
 }
 
 
@@ -238,14 +236,17 @@ def _children_table(children: list[dict[str, Any]], rows: list[dict[str, Any]], 
             Td("—" if average is None else _number(average), cls="text-end analytics-numeric"),
             Td("—" if expected_population is None else f"{_number(expected_population)} expected", cls="text-end analytics-numeric", title=expected_note),
             Td("—" if expected_pct is None else f"{float(expected_pct):.1f}%", cls="text-end analytics-numeric", title=f"{expected_note}; {no_estimate} locations without an estimate"),
-            Td(f"{coverage['pending']} pending" if coverage["pending"] else "", cls="text-end analytics-muted"),
             Td(
-                Div(Span("Latest report", cls="analytics-mobile-key"), latest),
-                Div(Span("Average per location", cls="analytics-mobile-key"), "—" if average is None else _number(average)),
-                Div(Span("Documented population", cls="analytics-mobile-key"), "—" if expected_population is None else _number(expected_population)),
-                Div(Span("% of documented population", cls="analytics-mobile-key"), "—" if expected_pct is None else f"{float(expected_pct):.1f}%"),
-                *([Div(Span("Review", cls="analytics-mobile-key"), f"{coverage['pending']} pending")] if coverage["pending"] else []),
-                cls="analytics-mobile-numbers",
+                Span(f"{coverage['pending']} pending" if coverage["pending"] else "", cls="analytics-desktop-review"),
+                Div(
+                    Div(Span("Latest report", cls="analytics-mobile-key"), latest),
+                    Div(Span("Average per location", cls="analytics-mobile-key"), "—" if average is None else _number(average)),
+                    Div(Span("Documented population", cls="analytics-mobile-key"), "—" if expected_population is None else _number(expected_population)),
+                    Div(Span("% of documented population", cls="analytics-mobile-key"), "—" if expected_pct is None else f"{float(expected_pct):.1f}%"),
+                    *([Div(Span("Pending review", cls="analytics-mobile-key"), f"{coverage['pending']} reports")] if coverage["pending"] else []),
+                    cls="analytics-mobile-numbers",
+                ),
+                cls="text-end analytics-muted analytics-review-cell",
             ),
             cls="analytics-row",
             data_dashboard_href=link,
@@ -669,14 +670,14 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
                     cls="analytics-panel analytics-service-breakdown",
                 ) if multiple_services else None,
                 Div(
-                    _metric("Latest Sunday population", population_value, "Multiple services reported separately; no daily total is defined." if multiple_services else f"{_integer(current.get('n_counted'))} locations counted · {_short_date(latest)}", "Adds up"),
-                    _metric("% of expected Sunday attendance", expected_value, expected_note, "Pooled"),
-                    _metric(f"Average per reporting location · {weeks} weeks", "—" if avg is None else _number(avg), "Mean of the weekly per-location averages in this period; weeks without a counted report are excluded.", "Recomputed"),
-                    _metric("Active workers", _number(active_workers), worker_note, "Snapshot"),
-                    _metric("Workers’ meeting attendance rate", "Rate withheld" if expected_attendance else "No report", attendance_note, "Roster check"),
-                    _metric(f"Approved offerings · last {weeks} Sundays", offerings_value, offerings_note, "Approved only"),
-                    _metric(f"Newcomers · last {weeks} Sundays", _number(newcomers_current), newcomers_note, "Reports"),
-                    _metric(f"Converts · last {weeks} Sundays", _number(converts_current), converts_note, "Reports"),
+                    _metric("Latest Sunday population", population_value, "Multiple services reported separately; no daily total is defined." if multiple_services else f"{_integer(current.get('n_counted'))} locations counted · {_short_date(latest)}", "Total"),
+                    _metric("% of expected Sunday attendance", expected_value, expected_note, "Pooled ratio"),
+                    _metric(f"Average per reporting location · {weeks} weeks", "—" if avg is None else _number(avg), "Mean of the weekly per-location averages in this period; weeks without a counted report are excluded.", "Average"),
+                    _metric("Active workers", _number(active_workers), worker_note, "Current register"),
+                    _metric("Workers’ meeting attendance rate", "Rate withheld" if expected_attendance else "No report", attendance_note, "Roster data"),
+                    _metric(f"Approved offerings · last {weeks} Sundays", offerings_value, offerings_note, "Approved"),
+                    _metric(f"Newcomers · last {weeks} Sundays", _number(newcomers_current), newcomers_note, "Reported totals"),
+                    _metric(f"Converts · last {weeks} Sundays", _number(converts_current), converts_note, "Reported totals"),
                     cls="analytics-metrics",
                 ),
                     Div(

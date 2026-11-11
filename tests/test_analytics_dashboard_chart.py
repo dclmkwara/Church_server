@@ -117,6 +117,6 @@ def test_waiting_on_decision_shows_category_count_and_oldest_age():
     assert "Waiting on a decision" in rendered
     assert "Count reports" in rendered and "3" in rendered and "oldest waiting 26 hours" in rendered
     old = str(_waiting_on_decision({"pending_approvals": [{"label": "Old request", "count": 1, "oldest_age_hours": 61 * 24}]}, 4))
-    assert "oldest waiting 61 days" in old
+    assert "oldest waiting 1464 hours" in old
     empty = str(_waiting_on_decision({"pending_approvals": []}, 8))
     assert "No requests waiting for a decision." in empty

@@ -76,7 +76,7 @@ def test_attention_rolls_pending_and_missing_up_to_the_child_scope():
     assert "Ilorin Region: 2 pending count group(s)" in html
     assert "12h" not in html
     assert "Oldest waiting 28 hours · 24+ hours" in html
-    assert "Oldest waiting 2 days" not in html
+    assert "Oldest waiting 28 hours" in html
     assert "analytics-attention-copy" in html
     assert "analytics-attention-meta" in html
     assert "loc-a" not in html and "loc-b" not in html

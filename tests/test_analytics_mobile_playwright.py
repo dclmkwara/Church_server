@@ -191,13 +191,59 @@ def test_analytics_dashboard_stacks_content_panels_on_tablet_and_phone():
         browser.close()
 
 
+def test_consolidated_menu_fits_mobile_and_tablet_for_all_personas(monkeypatch):
+    """Render the real permission-filtered sidebar for all eight personas."""
+    from types import SimpleNamespace
+    from fasthtml.common import to_xml
+    from app.frontend.dclm_admin.auth_context import build_context
+    from app.frontend.dclm_admin import auth_context
+    from app.frontend.dclm_admin.components import shell
+    from app.frontend.dclm_admin.components.shell import _sidebar
+    from playwright.sync_api import sync_playwright
+
+    monkeypatch.setattr(shell, "get_backend_config", lambda: SimpleNamespace(enabled=False))
+    monkeypatch.setattr(auth_context, "get_backend_config", lambda: SimpleNamespace(enabled=False))
+    css_root = Path(__file__).parents[1] / "app/frontend/dclm_admin/assets/css"
+    admin_css = (css_root / "admin.css").read_text(encoding="utf-8")
+    analytics_css = (css_root / "analytics-dashboard.css").read_text(encoding="utf-8")
+    personas = (
+        "location_pastor", "location_admin", "group_pastor", "group_admin",
+        "region_pastor", "region_admin", "state_overseer", "state_admin",
+    )
+
+    with sync_playwright() as runtime:
+        browser = _launch_chromium(runtime)
+        page = browser.new_page()
+        for persona in personas:
+            ctx = build_context({"profile": persona})
+            sidebar = to_xml(_sidebar(ctx, "dashboard"))
+            for width, height in ((360, 740), (390, 844), (768, 1024)):
+                page.set_viewport_size({"width": width, "height": height})
+                page.set_content(
+                    f"<meta name='viewport' content='width=device-width, initial-scale=1'>"
+                    f"<style>body{{margin:0}}</style><style>{admin_css}</style><style>{analytics_css}</style>"
+                    f"<div class='admin-sidebar-shell' style='box-sizing:border-box;width:min(100%, 320px);height:100vh;padding:12px'>"
+                    f"{sidebar}</div>"
+                )
+                assert page.evaluate("document.documentElement.scrollWidth") <= width, persona
+                links = page.locator(".sidebar-link")
+                assert links.count() > 0
+                for link in links.all():
+                    assert link.evaluate("e => e.getBoundingClientRect().height") >= 40, (
+                        persona, width, link.inner_text()
+                    )
+                if persona.endswith("admin") or persona == "state_admin":
+                    assert page.get_by_text("Count Review", exact=True).count() == 0, persona
+        browser.close()
+
+
 def test_dashboard_does_not_reintroduce_a_stale_analytics_stylesheet():
     """The dashboard fragment must use the shared shell stylesheet exactly once."""
     root = Path(__file__).parents[1]
     dashboard_route = (root / "app/frontend/dclm_admin/routes/analytics_dashboard.py").read_text(encoding="utf-8")
     shell = (root / "app/frontend/dclm_admin/components/shell.py").read_text(encoding="utf-8")
     assert "analytics-dashboard.css" not in dashboard_route
-    assert 'analytics-dashboard.css?v=20261110_01' in shell
+    assert 'analytics-dashboard.css?v=20261111_01' in shell
 
 
 def test_rendered_dashboard_components_fit_phone_and_tablet_widths():

@@ -15,47 +15,77 @@ from .ui import active_scope_breadcrumb
 
 NAV_GROUPS = [
     {
-        "label": "Core",
+        "label": "Overview",
         "module": "dashboard",
         "items": [
             {"label": "Dashboard", "icon": "grid", "href": "/dashboard", "key": "dashboard"},
-            {"label": "Inbox", "icon": "inbox", "href": "/inbox", "key": "inbox"},
+        ],
+    },
+    {
+        "label": "Reports and decisions",
+        "module": "reports",
+        "items": [
+            {"label": "Pastor Report", "icon": "file-earmark-text", "href": "/dashboard/pastor-report", "key": "pastor-report", "permission": "reports:read"},
+            {"label": "Reports", "icon": "clipboard-data", "href": "/reports", "key": "reports", "permission": "reports:read"},
+            {"label": "Recurring Program Attendance", "icon": "graph-up", "href": "/church-data/population-attendance", "key": "church", "permission": "counts:read"},
+            {"label": "Attendance", "icon": "clipboard-check", "href": "/church-data/attendance", "key": "attendance", "permission": "attendance:read"},
+            {"label": "Saturday Workers Meeting", "icon": "people", "href": "/church-data/meetings/workers-saturday", "key": "workers-meeting", "permission": "attendance:read"},
+            {"label": "Tuesday Leaders Meeting", "icon": "person-badge", "href": "/church-data/meetings/leaders-tuesday", "key": "leaders-meeting", "permission": "attendance:read"},
+            {"label": "Newcomers", "icon": "person-hearts", "href": "/church-data/newcomers", "key": "newcomers", "permission": "records:read"},
+            {"label": "Count Review", "icon": "clipboard-check", "href": "/church-data/count-review", "key": "count-review", "permission": "counts:review"},
+            {"label": "My Requests", "icon": "diagram-3", "href": "/workflows", "key": "workflows", "module": "workflows"},
+        ],
+    },
+    {
+        "label": "Programs and events",
+        "module": "church-data",
+        "items": [
+            {"label": "Programs", "icon": "calendar-event", "href": "/church-data/programs", "key": "programs", "permission": "programs:read"},
+            {"label": "Retreat", "icon": "calendar-heart", "href": "/church-data/programs/analytics/retreat", "key": "programs", "permission": "programs:read"},
+            {"label": "Crusade", "icon": "broadcast", "href": "/church-data/programs/analytics/crusade", "key": "programs", "permission": "programs:read"},
+            {"label": "Program Counts", "icon": "bar-chart", "href": "/church-data/counts", "key": "counts", "permission": "counts:read"},
         ],
     },
     {
         "label": "People",
         "module": "people",
         "items": [
-            {"label": "Workers", "icon": "people", "href": "/people/workers", "key": "workers"},
-            {"label": "Members", "icon": "person-vcard", "href": "/people/members", "key": "members"},
-            {"label": "App Users", "icon": "person-badge", "href": "/people/users", "key": "users"},
-            {"label": "Officials", "icon": "person-check", "href": "/people/officials", "key": "officials", "min_level": 4},
+            {"label": "Workers", "icon": "people", "href": "/people/workers", "key": "workers", "permission": "workers:read"},
+            {"label": "Members", "icon": "person-vcard", "href": "/people/members", "key": "members", "permission": "records:read"},
+            {"label": "App Users", "icon": "person-badge", "href": "/people/users", "key": "users", "permission": "users:read"},
         ],
     },
     {
-        "label": "Church Data",
+        "label": "Money",
         "module": "church-data",
         "items": [
-            {"label": "Programs", "icon": "calendar-event", "href": "/church-data/programs", "key": "programs"},
-            {"label": "Program Counts", "icon": "bar-chart", "href": "/church-data/counts", "key": "counts"},
-            {"label": "Count Review", "icon": "clipboard-check", "href": "/church-data/count-review", "key": "count-review", "permission": "counts:review"},
-            {"label": "Saturday Workers Meeting", "icon": "people", "href": "/church-data/meetings/workers-saturday", "key": "workers-meeting"},
-            {"label": "Tuesday Leaders Meeting", "icon": "person-badge", "href": "/church-data/meetings/leaders-tuesday", "key": "leaders-meeting"},
-            {"label": "Offerings & Tithes", "icon": "cash-stack", "href": "/church-data/finance", "key": "finance"},
-            {"label": "Newcomers", "icon": "person-hearts", "href": "/church-data/newcomers", "key": "newcomers"},
-            {"label": "Attendance", "icon": "clipboard-check", "href": "/church-data/attendance", "key": "attendance"},
+            {"label": "Offerings and Tithes", "icon": "cash-stack", "href": "/church-data/finance", "key": "finance", "permission": "offerings:read"},
+            {"label": "Finance Analytics", "icon": "graph-up-arrow", "href": "/reports?tab=financial", "key": "reports", "module": "reports", "permission": "reports:read"},
         ],
     },
     {
-        "label": "More",
-        "module": "workflows",
+        "label": "Church life and structure",
+        "module": "fellowship",
         "items": [
-            {"label": "Workflows", "icon": "diagram-3", "href": "/workflows", "key": "workflows"},
-            {"label": "Fellowship", "icon": "house-heart", "href": "/fellowship", "key": "fellowship"},
-            {"label": "Organization", "icon": "geo-alt", "href": "/organization", "key": "organization"},
-            {"label": "Communication", "icon": "megaphone", "href": "/communication", "key": "communication", "module": "communication"},
-            {"label": "Reports", "icon": "clipboard-data", "href": "/reports", "key": "reports", "module": "reports"},
-            {"label": "Roles & Permissions", "icon": "shield-lock", "href": "/system/rbac", "key": "system", "module": "system", "min_level": 5, "permission": "rbac:read"},
+            {"label": "Fellowship", "icon": "house-heart", "href": "/fellowship", "key": "fellowship", "permission": "fellowship:read"},
+            {"label": "Organization", "icon": "geo-alt", "href": "/organization", "key": "organization", "module": "organization", "min_level": 3},
+        ],
+    },
+    {
+        "label": "Messages",
+        "module": "inbox",
+        "items": [
+            {"label": "Inbox", "icon": "inbox", "href": "/inbox", "key": "inbox"},
+            {"label": "Communication", "icon": "megaphone", "href": "/communication", "key": "communication", "module": "communication", "min_level": 4, "permission": "announcements:read"},
+        ],
+    },
+    {
+        "label": "Settings and accountability",
+        "module": "system",
+        "items": [
+            {"label": "Documented Population", "icon": "people-fill", "href": "/analytics/expected-population", "key": "expected-population", "min_level": 5, "permission": "population_estimates:manage"},
+            {"label": "Audit Log", "icon": "journal-text", "href": "/system/audit-logs", "key": "system", "permission": "system:read_audit_logs"},
+            {"label": "Roles and Permissions", "icon": "shield-lock", "href": "/system/rbac", "key": "system", "min_level": 5, "permission": "rbac:read"},
         ],
     },
 ]
@@ -233,29 +263,35 @@ def _user_menu(ctx: AdminContext) -> Any:
     )
 
 
+def _nav_item_visible(ctx: AdminContext, item: dict[str, Any], *, backend_mode: bool) -> bool:
+    if item.get("module", "dashboard") not in ctx.visible_modules:
+        return False
+    if ctx.level < item.get("min_level", 0):
+        return False
+    if item.get("permission") and not ctx.has_permission(item["permission"]):
+        return False
+    if backend_mode and item["key"] == "officials":
+        return False
+    return True
+
+
 def _sidebar(ctx: AdminContext, active_key: str) -> Any:
     backend_mode = get_backend_config().enabled
-    unsupported_live_keys = {"officials"}
     initials = "".join(part[0] for part in ctx.profile.user_name.split()[:2]).upper()
     groups = []
     for group in NAV_GROUPS:
         items = []
         for item in group["items"]:
-            module = item.get("module", group["module"])
-            if module not in ctx.visible_modules:
+            if not _nav_item_visible(ctx, {"module": group["module"], **item}, backend_mode=backend_mode):
                 continue
-            if ctx.level < item.get("min_level", 0):
-                continue
-            if item.get("permission") and not ctx.has_permission(item["permission"]):
-                continue
-            if backend_mode and item["key"] in unsupported_live_keys:
-                continue
+            item_path, _, query = item["href"].partition("?")
+            query_values = dict(part.split("=", 1) for part in query.split("&") if "=" in part)
             items.append(
                 A(
                     Span(Icon(item["icon"], cls="me-3")),
                     Span(item["label"]),
                     Span(cls="spinner-border spinner-border-sm sidebar-nav-spinner"),
-                    href=scope_link(ctx, item["href"]),
+                    href=scope_link(ctx, item_path, **query_values),
                     cls=f"sidebar-link {Fx.base} {'active' if active_key == item['key'] else ''}",
                 )
             )
@@ -305,11 +341,11 @@ def _sidebar(ctx: AdminContext, active_key: str) -> Any:
 def _mobile_bottom_nav(ctx: AdminContext, active_key: str) -> Any:
     """Persistent bottom navigation bar shown on mobile (< lg breakpoint)."""
     nav_items = [
-        ("Home", "house", "/dashboard", "dashboard"),
-        ("People", "people", "/people/workers", "workers"),
-        ("Church", "calendar-event", "/church-data/programs", "programs"),
-        ("Finance", "cash-stack", "/church-data/finance", "finance"),
-        ("Inbox", "inbox", "/inbox", "inbox"),
+        ("Home", "house", "/dashboard", "dashboard", None, None),
+        ("People", "people", "/people/workers", "workers", "people", "workers:read"),
+        ("Church", "calendar-event", "/church-data/programs", "programs", "church-data", "programs:read"),
+        ("Finance", "cash-stack", "/church-data/finance", "finance", "church-data", "offerings:read"),
+        ("Inbox", "inbox", "/inbox", "inbox", "inbox", None),
     ]
     items = [
         BottomNavItem(
@@ -318,7 +354,9 @@ def _mobile_bottom_nav(ctx: AdminContext, active_key: str) -> Any:
             icon=icon,
             active=(active_key == key),
         )
-        for label, icon, href, key in nav_items
+        for label, icon, href, key, module, permission in nav_items
+        if (module is None or module in ctx.visible_modules)
+        and (permission is None or ctx.has_permission(permission))
     ]
     # Menu button — triggers the mobile side-nav offcanvas without anchor navigation or focus underline
     items.append(
@@ -356,7 +394,7 @@ def shell_layout(
         Link(rel="apple-touch-icon", sizes="180x180", href="/assets/apple-touch-icon.png"),
         Link(rel="manifest", href="/manifest.json"),
         Link(rel="stylesheet", href="/assets/css/admin.css?v=20261031_0930"),
-        Link(rel="stylesheet", href="/assets/css/analytics-dashboard.css?v=20261110_01"),
+        Link(rel="stylesheet", href="/assets/css/analytics-dashboard.css?v=20261111_01"),
         Script("""
 (function(){
   try {

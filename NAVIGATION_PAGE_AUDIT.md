@@ -197,3 +197,30 @@ Route registration does not prove successful action: worker import preview/commi
 6. Complete worker roster snapshot/deduplication before publishing a meeting attendance rate.
 7. Verify person-level fields against approved scope/privacy rules by role.
 8. No pastor permission delegation editor or level-specific permission history was found; retain approved governance workflow until that design is implemented.
+
+## 11. Navigation consolidation implementation update (11 November 2026)
+
+The proposed groups are now implemented in the shared sidebar. All page URLs remain the same; no route was renamed or removed, so bookmarks continue to resolve directly and no redirect aliases were needed. Visibility is filtered by the user's module, minimum level and explicit page permission. The server-side route and data-scope checks remain authoritative.
+
+| Group | Page entries | Visibility notes |
+|---|---|---|
+| Overview | Dashboard | All Level 2–5 roles. |
+| Reports and decisions | Pastor Report, Reports, Recurring Program Attendance, Attendance, Saturday Workers Meeting, Tuesday Leaders Meeting, Newcomers, Count Review, My Requests | Explicit report, count, attendance, or record read/review permissions apply where configured. Count Review is hidden from admins lacking `counts:review`. |
+| Programs and events | Programs, Retreat, Crusade, Program Counts | Program and count read permissions apply. Retreat and Crusade remain distinct. |
+| People | Workers, Members, App Users | Worker, record, and user read permissions respectively. Officials remains intentionally hidden in live mode. |
+| Money | Offerings and Tithes, Finance Analytics | Finance Analytics opens the existing Reports financial tab; record and report permissions apply separately. |
+| Church life and structure | Fellowship, Organization | Fellowship permission applies; Organization is limited to levels 3–5. |
+| Messages | Inbox, Communication | Communication is limited to levels 4–5 and requires `announcements:read`. |
+| Settings and accountability | Documented Population, Audit Log, Roles and Permissions | Documented Population is State-only with `population_estimates:manage`; Audit Log requires `system:read_audit_logs`; Roles and Permissions is State-only with `rbac:read`. |
+
+The test fixtures render eight role menus. Current demo-menu differences are: all eight roles see the common pages above; pastors additionally see Count Review and Audit Log; Group, Region and State roles additionally see Organization; Region and State roles additionally see Communication; both State roles additionally see Documented Population; the State Overseer additionally sees Roles and Permissions. In live mode each item is still gated by the permissions returned for that signed-in account.
+
+The compact bottom navigation now applies the same read grants to People, Church and Finance shortcuts. Inbox and Dashboard remain available. The mobile full menu remains reachable from the Menu button.
+
+Mobile review found a concrete source of the clipped group and region cards: a later CSS rule assigned a second auto-sized grid column to the coverage cell. On narrow screens that column shrank the name and metric area to only a few characters. The final mobile rule now puts every card row in one full-width column, with the name, coverage, then two-column figures. It also keeps the review count in the actual final table column, uses plain badge wording, displays waiting age in hours, and separates the conflict color from returned.
+
+The authenticated live-site sweep remains opt-in because it needs storage-state files for all four scopes. Local Playwright tests render the real sidebar for all eight personas at 360, 390 and 768 px and exercise the dashboard child cards at the same widths. See `NAVIGATION_CONSOLIDATION_REPORT.md` for implementation and test status.
+
+### Previous menu structure recorded for comparison
+
+The previous menu grouped entries under Core, People, Church Data and More. Dashboard/Inbox were under Core; Workers/Members/App Users under People; Programs, Program Counts, Count Review, both meetings, Offerings & Tithes, Newcomers and Attendance under Church Data; Workflows, Fellowship, Organization, Communication, Reports and Roles & Permissions under More. Live Officials was suppressed. The level and permission differences are now listed in the consolidation report's persona table. Finance Analytics was reachable as a tab inside Reports; Documented Population was linked from the dashboard rather than the main navigation.
