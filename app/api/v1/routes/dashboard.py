@@ -31,6 +31,7 @@ from app.services.dashboard_service import DashboardService
 from app.services.statistics_service import StatisticsService
 from app.services.analytics.sunday_worship import SundayWorshipAnalytics
 from app.services.analytics.program_config import reporting_today
+from app.services.analytics.reporting_policy import counted_status_filter
 from app.services.worker_meeting_analytics import worker_meeting_analytics
 
 _DASHBOARD_CACHE_TTL = 20.0
@@ -428,7 +429,7 @@ async def _get_timeseries(db: AsyncSession, scope_path: str, *, metric: str) -> 
             Offering.date >= start_date,
             _scope_filter(Offering.path, scope_path),
             Offering.is_deleted == False,
-            Offering.status == "approved",
+            counted_status_filter(Offering.status),
         ).group_by(period).order_by(period)
         rows = await db.execute(stmt)
         return [{'date': str(row.period.date()), 'value': float(row.total or 0)} for row in rows]

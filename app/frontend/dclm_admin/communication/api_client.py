@@ -691,8 +691,8 @@ class APIClient:
             months=months,
         )
 
-    async def get_report_summary(self, access_token: str, *, scope_path: str | None = None, start_date: str | None = None, end_date: str | None = None) -> list[dict[str, Any]]:
-        return await self._backend_client.get_report_summary(access_token, scope_path=scope_path, start_date=start_date, end_date=end_date)
+    async def get_report_summary(self, access_token: str, *, scope_path: str | None = None, start_date: str | None = None, end_date: str | None = None, include_pending: bool = False) -> list[dict[str, Any]]:
+        return await self._backend_client.get_report_summary(access_token, scope_path=scope_path, start_date=start_date, end_date=end_date, include_pending=include_pending)
 
     async def get_report_financial(self, access_token: str, *, scope_path: str | None = None, start_date: str | None = None, end_date: str | None = None) -> list[dict[str, Any]]:
         return await self._backend_client.get_report_financial(access_token, scope_path=scope_path, start_date=start_date, end_date=end_date)
@@ -751,14 +751,14 @@ class APIClient:
     async def refresh_reports(self, access_token: str) -> dict[str, Any]:
         return await self._backend_client.refresh_reports(access_token)
 
-    async def export_report_csv(self, access_token: str, *, report_type: str, scope_path: str | None = None, start_date: str | None = None, end_date: str | None = None) -> tuple[bytes, dict[str, str]]:
-        return await self._backend_client.export_report_csv(access_token, report_type=report_type, scope_path=scope_path, start_date=start_date, end_date=end_date)
+    async def export_report_csv(self, access_token: str, *, report_type: str, scope_path: str | None = None, start_date: str | None = None, end_date: str | None = None, include_pending: bool = False) -> tuple[bytes, dict[str, str]]:
+        return await self._backend_client.export_report_csv(access_token, report_type=report_type, scope_path=scope_path, start_date=start_date, end_date=end_date, include_pending=include_pending)
 
-    async def export_report_excel(self, access_token: str, *, report_type: str, start_date: str | None = None, end_date: str | None = None) -> tuple[bytes, dict[str, str]]:
-        return await self._backend_client.export_report_excel(access_token, report_type=report_type, start_date=start_date, end_date=end_date)
+    async def export_report_excel(self, access_token: str, *, report_type: str, scope_path: str | None = None, start_date: str | None = None, end_date: str | None = None, include_pending: bool = False) -> tuple[bytes, dict[str, str]]:
+        return await self._backend_client.export_report_excel(access_token, report_type=report_type, scope_path=scope_path, start_date=start_date, end_date=end_date, include_pending=include_pending)
 
-    async def export_report_pdf(self, access_token: str, *, report_type: str, start_date: str | None = None, end_date: str | None = None) -> tuple[bytes, dict[str, str]]:
-        return await self._backend_client.export_report_pdf(access_token, report_type=report_type, start_date=start_date, end_date=end_date)
+    async def export_report_pdf(self, access_token: str, *, report_type: str, scope_path: str | None = None, start_date: str | None = None, end_date: str | None = None, include_pending: bool = False) -> tuple[bytes, dict[str, str]]:
+        return await self._backend_client.export_report_pdf(access_token, report_type=report_type, scope_path=scope_path, start_date=start_date, end_date=end_date, include_pending=include_pending)
 
     async def get_worker(self, access_token: str, worker_id: str) -> dict[str, Any]:
         return await self._backend_client.get_worker(access_token, worker_id)

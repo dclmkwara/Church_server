@@ -20,6 +20,9 @@ class DailyCountSummary(BaseModel):
     total_boys: int
     total_girls: int
     record_count: int
+    service_id: Optional[str] = None
+    program_type: Optional[str] = None
+    status: Optional[str] = None
 
 class MonthlyFinancialSummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)

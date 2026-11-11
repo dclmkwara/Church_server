@@ -7,6 +7,7 @@ from app.db.filters import ltree_subpath as _ltree_subpath
 from app.db.filters import scope_filter as _scope_filter
 from app.models.core import validate_path
 from app.services.report_service import ReportService
+from app.services.analytics.reporting_policy import counted_status_filter
 from app.services.audit_service import add_audit_record
 from app.schemas.report import DailyCountSummary, MonthlyFinancialSummary, AttendanceTrend
 from app.models.user import User
@@ -110,6 +111,7 @@ async def export_report_csv(
     scope_path: Optional[str] = None,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
+    include_pending: bool = False,
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ):
@@ -131,7 +133,7 @@ async def export_report_csv(
         )
 
     if report_type == "counts":
-        buffer = await ReportService.export_counts_csv(db, effective_scope, start_date, end_date)
+        buffer = await ReportService.export_counts_csv(db, effective_scope, start_date, end_date, include_pending=include_pending)
         audit_export()
         await db.commit()
         filename = f"counts_{start_date}_{end_date}.csv"
@@ -171,6 +173,7 @@ async def get_summary_report(
     scope_path: Optional[str] = None,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
+    include_pending: bool = Query(False),
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ):
@@ -187,7 +190,9 @@ async def get_summary_report(
     effective_scope = _resolve_scope(current_user, scope_path)
 
     # We use user's scope as base to restrict access
-    return await ReportService.get_daily_counts(db, effective_scope, start_date, end_date)
+    return await ReportService.get_count_summary_rows(
+        db, effective_scope, start_date, end_date, include_pending=include_pending
+    )
 
 @router.get(
     "/financial",
@@ -320,6 +325,7 @@ async def get_timeseries_analysis(
                 Count.date < end_date + timedelta(days=1),
                 _scope_filter(Count.path, effective_scope),
                 Count.is_deleted == False,
+                counted_status_filter(Count.status),
             ).group_by(period).order_by(period)
 
             result = await db.execute(query)
@@ -341,7 +347,7 @@ async def get_timeseries_analysis(
                 Offering.date < end_date + timedelta(days=1),
                 _scope_filter(Offering.path, effective_scope),
                 Offering.is_deleted == False,
-                Offering.status == "approved",
+                counted_status_filter(Offering.status),
             ).group_by(period).order_by(period)
             result = await db.execute(query)
             data = [{"date": str(row.period.date()), "value": float(row.total)} for row in result]
@@ -427,6 +433,7 @@ async def get_hierarchical_breakdown(
                 Count.date < end_date + timedelta(days=1),
                 _scope_filter(Count.path, effective_scope),
                 Count.is_deleted == False,
+                counted_status_filter(Count.status),
             ).group_by(group_path).order_by(group_path)
             result = await db.execute(query)
             return {"metric": metric, "level": level, "breakdown": [{"path": str(row.group_path), "total": row.total} for row in result]}
@@ -441,7 +448,7 @@ async def get_hierarchical_breakdown(
                 Offering.date < end_date + timedelta(days=1),
                 _scope_filter(Offering.path, effective_scope),
                 Offering.is_deleted == False,
-                Offering.status == "approved",
+                counted_status_filter(Offering.status),
             ).group_by(group_path).order_by(group_path)
             result = await db.execute(query)
             return {"metric": metric, "level": level, "breakdown": [{"path": str(row.group_path), "total": str(row.total)} for row in result]}
@@ -507,6 +514,7 @@ async def detect_anomalies(
         Count.date < end_date + timedelta(days=1),
         _scope_filter(Count.path, effective_scope),
         Count.is_deleted == False,
+        counted_status_filter(Count.status),
     ).group_by(func.date(Count.date), Count.location_id)
 
     result = await db.execute(query)
@@ -570,12 +578,13 @@ async def get_growth_rate(
         query = select(bucket, func.sum(Count.total).label("total")).where(
             Count.date >= start_date, Count.date < end_date + timedelta(days=1), _scope_filter(Count.path, effective_scope),
             Count.is_deleted == False,
+            counted_status_filter(Count.status),
         ).group_by(bucket).order_by(bucket)
     elif metric == "offerings":
         bucket = func.date_trunc(period, Offering.date).label("period")
         query = select(bucket, func.coalesce(func.sum(Offering.amount), 0).label("total")).where(
             Offering.date >= start_date, Offering.date < end_date + timedelta(days=1), _scope_filter(Offering.path, effective_scope),
-            Offering.is_deleted == False, Offering.status == "approved",
+            Offering.is_deleted == False, counted_status_filter(Offering.status),
         ).group_by(bucket).order_by(bucket)
     else:
         bucket = func.date_trunc(period, WorkerAttendance.date).label("period")
@@ -617,8 +626,10 @@ async def get_growth_rate(
 )
 async def export_excel(
     report_type: str = Query(..., description="counts, financial, or attendance"),
+    scope_path: Optional[str] = None,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
+    include_pending: bool = Query(False),
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ):
@@ -638,7 +649,7 @@ async def export_excel(
     if not end_date:
         end_date = date.today()
 
-    effective_scope = deps.effective_scope_path(current_user)
+    effective_scope = _resolve_scope(current_user, scope_path)
 
     def audit_export(export_format: str) -> None:
         add_audit_record(
@@ -649,7 +660,7 @@ async def export_excel(
 
     # Get data (reuse existing service)
     if report_type == "counts":
-        data = await ReportService.get_daily_counts(db, effective_scope, start_date, end_date)
+        data = await ReportService.get_count_summary_rows(db, effective_scope, start_date, end_date, include_pending=include_pending)
 
         # Create Excel workbook
         wb = openpyxl.Workbook()
@@ -745,8 +756,10 @@ async def export_excel(
 )
 async def export_pdf(
     report_type: str = Query(..., description="counts, financial, or attendance"),
+    scope_path: Optional[str] = None,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
+    include_pending: bool = Query(False),
     db: AsyncSession = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ):
@@ -769,7 +782,7 @@ async def export_pdf(
     if not end_date:
         end_date = date.today()
 
-    effective_scope = deps.effective_scope_path(current_user)
+    effective_scope = _resolve_scope(current_user, scope_path)
 
     def audit_export(export_format: str) -> None:
         add_audit_record(
@@ -780,7 +793,7 @@ async def export_pdf(
 
     # Get data
     if report_type == "counts":
-        data = await ReportService.get_daily_counts(db, effective_scope, start_date, end_date)
+        data = await ReportService.get_count_summary_rows(db, effective_scope, start_date, end_date, include_pending=include_pending)
 
         # Create PDF
         buffer = BytesIO()

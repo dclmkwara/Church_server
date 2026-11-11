@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from datetime import date
 from typing import Any, Iterable
+from app.services.analytics.reporting_policy import is_counted_status, is_pending_status, is_rejected_status
 
 
 COUNT_FIELDS = ("adult_male", "adult_female", "youth_male", "youth_female", "boys", "girls")
 
 
-def aggregate_count_submissions(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+def aggregate_count_submissions(rows: Iterable[dict[str, Any]], *, include_pending: bool = False) -> list[dict[str, Any]]:
     """Summarize submissions without allowing pending or rejected counts into totals."""
     grouped: dict[tuple[str, str, str], dict[str, Any]] = {}
     for row in rows:
@@ -68,10 +69,10 @@ def aggregate_count_submissions(rows: Iterable[dict[str, Any]]) -> list[dict[str
             group["total"] = int(group["total"] or 0) + int(row.get("total") or 0)
             for field in COUNT_FIELDS:
                 group[field] += int(row.get(field) or 0)
-        elif review_status == "pending":
+        elif is_pending_status(review_status):
             group["pending_submissions"] += 1
             group["pending_total"] += int(row.get("total") or 0)
-        elif review_status in {"rejected", "returned"}:
+        elif is_rejected_status(review_status):
             group["rejected_submissions"] += 1
         section = str(row.get("usher_section") or row.get("assignment_id") or "").strip()
         if section and section not in group["sections"]:
@@ -92,6 +93,8 @@ def aggregate_count_submissions(rows: Iterable[dict[str, Any]]) -> list[dict[str
         if labels and len(labels) != len(set(labels)):
             split_conflict = True
         all_approved = group["approved_submissions"] == group["submissions"]
+        all_counted = all(is_counted_status(source.get("status") or "approved", include_pending) for source in group["source_rows"])
+        source_statuses = {str(source.get("status") or "approved").lower() for source in group["source_rows"]}
         group["split_count"] = has_split_mode
         group["mode_recorded"] = bool(group["mode_recorded"])
         group["auto_accepted"] = bool(group["approved_submissions"]) and group["approved_submissions"] == len(group["source_rows"]) and all(
@@ -110,16 +113,45 @@ def aggregate_count_submissions(rows: Iterable[dict[str, Any]]) -> list[dict[str
         if split_conflict:
             group["status"] = "conflict"
             group["total"] = None
-        elif has_split_mode and not all_approved:
+        elif has_split_mode and not all_counted:
             group["status"] = "partial_approval"
             group["total"] = None
         elif has_split_mode:
             group["total"] = sum(int(source.get("total") or 0) for source in group["source_rows"])
+        elif include_pending and all(is_pending_status(status) for status in source_statuses):
+            group["total"] = group["pending_total"]
     return sorted(
         grouped.values(),
         key=lambda group: (group["date"], group["latest_submission_at"], group["event_title"], group["location"]),
         reverse=True,
     )
+
+
+def report_count_occurrences(rows: Iterable[dict[str, Any]], *, include_pending: bool = False) -> list[dict[str, Any]]:
+    """Build Reports rows without merging legacy submissions or occurrences.
+
+    Only rows sharing an explicit count_group_id are summed. A legacy row with
+    no group identity remains its own occurrence, even on the same day.
+    """
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for index, row in enumerate(rows):
+        group_id = str(row.get("count_group_id") or "").strip()
+        key = ("group", group_id) if group_id else ("row", str(row.get("count_id") or row.get("id") or index))
+        grouped.setdefault(key, []).append(row)
+    output: list[dict[str, Any]] = []
+    for items in grouped.values():
+        statuses = {str(row.get("status") or "approved").lower() for row in items}
+        if len(statuses) != 1 or not is_counted_status(next(iter(statuses)), include_pending):
+            continue
+        first = items[0]
+        row = dict(first)
+        for field in (*COUNT_FIELDS, "total"):
+            row[field] = sum(int(item.get(field) or 0) for item in items)
+        row["submissions"] = len(items)
+        row["status"] = next(iter(statuses))
+        row["service_id"] = str(first.get("service_id") or "main")
+        output.append(row)
+    return sorted(output, key=lambda row: (str(row.get("date") or ""), str(row.get("location") or "")), reverse=True)
 
 
 def summarize_count_submissions(rows: Iterable[dict[str, Any]], *, today: date | None = None) -> dict[str, int]:

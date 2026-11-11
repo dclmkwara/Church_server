@@ -22,6 +22,7 @@ from ..mock_data import STORE, UNITS
 from ..source_intake import reject_source_submission, source_intake_notice
 from app.core.program_page_perf import program_page_trace
 from app.services.analytics.program_config import reporting_today
+from app.services.analytics.reporting_policy import is_counted_status, is_pending_status
 
 
 FUND_TYPES = ["offering", "tithe"]
@@ -50,8 +51,7 @@ def _finance_rows_in_view(rows, *, date_from: str = "", date_to: str = "", inclu
         filtered = [row for row in filtered if str(row.get("date") or "")[:10] >= date_from]
     if date_to:
         filtered = [row for row in filtered if str(row.get("date") or "")[:10] <= date_to]
-    statuses = {"approved", "pending", "corrected"} if include_pending else {"approved"}
-    return [row for row in filtered if str(row.get("status") or "").lower() in statuses]
+    return [row for row in filtered if is_counted_status(row.get("status"), include_pending)]
 
 
 def _finance_summary_for_rows(rows, *, date_from: str, date_to: str):
@@ -60,8 +60,8 @@ def _finance_summary_for_rows(rows, *, date_from: str, date_to: str):
         period = [row for row in period if str(row.get("date") or "")[:10] >= date_from]
     if date_to:
         period = [row for row in period if str(row.get("date") or "")[:10] <= date_to]
-    approved = [row for row in period if str(row.get("status") or "").lower() == "approved"]
-    pending = [row for row in period if str(row.get("status") or "").lower() in {"pending", "corrected"}]
+    approved = [row for row in period if is_counted_status(row.get("status"))]
+    pending = [row for row in period if is_pending_status(row.get("status"))]
     rejected = [row for row in period if str(row.get("status") or "").lower() == "rejected"]
     return {
         "approved_total": sum((Decimal(str(row.get("amount") or 0)) for row in approved), Decimal("0")),

@@ -25,6 +25,7 @@ from app.models.programs import ProgramDomain, ProgramEvent, ProgramType
 from app.models.records import Record
 from app.models.user import User, Worker
 from app.services.worker_meeting_analytics import worker_meeting_analytics
+from app.services.analytics.reporting_policy import counted_status_filter
 
 
 def _status_case(column, expected: str):
@@ -43,7 +44,7 @@ class DashboardService:
         tf = [_scope_filter(TransferRequest.path, scope_path), TransferRequest.status.in_(("pending", "pending_region"))]
         sf = [_scope_filter(StatusChangeRequest.path, scope_path), StatusChangeRequest.status == "pending"]
         rmf = [_scope_filter(WorkerRemovalRequest.path, scope_path), WorkerRemovalRequest.status.in_(("pending", "escalated"))]
-        of = [_scope_filter(Offering.path, scope_path), Offering.is_deleted == False, Offering.status == "approved"]
+        of = [_scope_filter(Offering.path, scope_path), Offering.is_deleted == False, counted_status_filter(Offering.status)]
         pending_count_filters = [_scope_filter(Count.path, scope_path), Count.is_deleted == False, Count.status.in_(("pending", "corrected"))]
         pending_offering_filters = [_scope_filter(Offering.path, scope_path), Offering.is_deleted == False, Offering.status.in_(("pending", "corrected"))]
         from app.services.analytics.program_config import reporting_now, reporting_today

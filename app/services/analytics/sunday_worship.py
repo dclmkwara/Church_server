@@ -25,11 +25,11 @@ from .program_config import (
     REPORTING_TIMEZONE,
     STANDING_PROGRAMS,
 )
+from .reporting_policy import is_counted_status, is_rejected_status
 
 
 _PROGRAM = STANDING_PROGRAMS["sunday_worship_service"]
 _CATEGORIES = ("adult_male", "adult_female", "youth_male", "youth_female", "boys", "girls")
-_RETURNED_STATUSES = {"rejected", "returned"}
 
 
 def latest_sunday(today: date) -> date:
@@ -83,13 +83,13 @@ def _report_review_state(rows: Iterable[Any]) -> str | None:
     states = {str(getattr(row, "status", "pending") or "pending").lower() for row in rows}
     if not states:
         return None
-    if split and states & _RETURNED_STATUSES:
+    if split and any(is_rejected_status(state) for state in states):
         return "conflict"
     if split and len(states) > 1:
         return "conflict"
-    current_rows = [row for row in rows if str(getattr(row, "status", "pending") or "pending").lower() not in _RETURNED_STATUSES]
+    current_rows = [row for row in rows if not is_rejected_status(getattr(row, "status", "pending") or "pending")]
     if not current_rows:
-        return "returned" if states & _RETURNED_STATUSES else None
+        return "returned" if any(is_rejected_status(state) for state in states) else None
     current_states = {str(getattr(row, "status", "pending") or "pending").lower() for row in current_rows}
     if current_states == {"approved"}:
         return "approved"
@@ -105,7 +105,7 @@ def _count_values(rows: Iterable[Any]) -> dict[str, int]:
         rows = []
     elif modes and len({str(getattr(row, "status", "pending") or "pending").lower() for row in rows}) > 1:
         rows = []
-    rows = [row for row in rows if str(getattr(row, "status", "pending") or "pending").lower() not in _RETURNED_STATUSES]
+    rows = [row for row in rows if not is_rejected_status(getattr(row, "status", "pending") or "pending")]
     return {key: sum(int(getattr(row, key, 0) or 0) for row in rows) for key in (*_CATEGORIES, "total")}
 
 
@@ -229,7 +229,7 @@ def _build_overview(
                 location_reports[location_id] = {"status": review, "total": None, "categories": {key: None for key in _CATEGORIES}}
                 received_units.add(location_id)
                 coverage[review] += 1
-                if review == "approved" or (include_pending and review == "pending"):
+                if is_counted_status(review, include_pending):
                     counted_units.add(location_id)
                     # A combined total cannot be attributed to each covered
                     # location. Keep it in scope totals but out of per-location
@@ -248,7 +248,7 @@ def _build_overview(
         review = _report_review_state(rows)
         if review:
             values = _count_values(rows)
-            visible = review == "approved" or (include_pending and review == "pending")
+            visible = is_counted_status(review, include_pending)
             location_reports[location_id] = {
                 "status": review,
                 "total": values["total"] if visible else None,
@@ -256,7 +256,7 @@ def _build_overview(
             }
             received_units.add(location_id)
             coverage[review] += 1
-            if review == "approved" or (include_pending and review == "pending"):
+            if is_counted_status(review, include_pending):
                 counted_units.add(location_id)
                 groups = _service_groups(rows)
                 if len(groups) > 1:
@@ -268,7 +268,7 @@ def _build_overview(
                             "location_id": location_id,
                             "location_name": str(getattr(location, "location_name", None) or getattr(location, "name", None) or location_id),
                             "service_id": getattr(group, "service_id", None) or "legacy service",
-                            "counted_population": _count_values(group_rows)["total"] if group_review == "approved" or (include_pending and group_review == "pending") else None,
+                            "counted_population": _count_values(group_rows)["total"] if is_counted_status(group_review, include_pending) else None,
                             "review_state": group_review,
                         })
                 else:
@@ -289,7 +289,7 @@ def _build_overview(
         if not event_rows or not _within(str(event.path), scope_path):
             continue
         review = _report_review_state(event_rows)
-        if review == "approved" or (include_pending and review == "pending"):
+        if is_counted_status(review, include_pending):
             included_rows.extend(event_rows)
     # Add each eventless combined report once even when it covers many locations.
     for report_scope in included_combined_count_scopes:
@@ -336,7 +336,7 @@ def _build_overview(
         }
         if covered and covered.issubset(expected_by_location):
             review = _report_review_state(rows)
-            if review == "approved" or (include_pending and review == "pending"):
+            if is_counted_status(review, include_pending):
                 estimated_counted_locations.update(covered)
                 expected_total += sum(expected_by_location[item] for item in covered)
                 expected_counted_population += _count_values(rows)["total"]
@@ -350,7 +350,7 @@ def _build_overview(
         }
         if covered and covered.issubset(expected_by_location):
             review = _report_review_state(rows)
-            if review == "approved" or (include_pending and review == "pending"):
+            if is_counted_status(review, include_pending):
                 estimated_counted_locations.update(covered)
                 expected_total += sum(expected_by_location[item] for item in covered)
                 expected_counted_population += _count_values(rows)["total"]

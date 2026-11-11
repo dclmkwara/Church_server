@@ -17,7 +17,7 @@ from ..backend import BackendClientError
 from ..auth_context import build_context
 from ..communication import ReportService
 from ..communication.active_scope import active_scope_context, scope_link
-from ..communication.count_aggregation import aggregate_count_submissions
+from ..communication.count_aggregation import report_count_occurrences
 from ..components.chartjs import sparkline_chart as _sparkline
 from ..components.feedback import simple_toast_response
 from ..components.shell import shell_layout
@@ -77,9 +77,10 @@ def _trend_label(points: list[tuple[str, int]]) -> str:
 async def _summary_rows(request: Request, ctx) -> list[dict[str, Any]]:
     ctx = active_scope_context(request, ctx)
     start, end = _report_window(request)
+    include_pending = str(request.query_params.get("include_pending") or "").lower() in {"1", "true", "yes", "on"}
     if await ReportService.live_enabled(request):
         return await ReportService.summary_rows(request, ctx)
-    rows = aggregate_count_submissions(STORE.list_counts(_report_scope_path(request, ctx)))
+    rows = report_count_occurrences(STORE.list_counts(_report_scope_path(request, ctx)), include_pending=include_pending)
     rows = [row for row in rows if start <= str(row.get("date") or "") <= end]
     for row in rows:
         row["submitted_by"] = f"{row['submissions']} usher section(s)"
@@ -241,18 +242,19 @@ async def _summary_tab(request: Request, ctx) -> Div:
     rows = await _summary_rows(request, ctx)
     latest = rows[0] if rows else None
     counts_summary = {
-        "latest_total": int(latest.get("total") or 0) if latest else 0,
+        "latest_total": int(latest.get("total") or 0) if latest else None,
         "locations_reporting": len({row.get("location_id") or row.get("location") for row in rows}),
     }
 
     desktop_rows = [
-        [row["date"], row["location"], row["event_title"], row["total"], row["submitted_by"]]
+        [row["date"], row["location"], row["event_title"], row.get("service_id") or "main", row["total"], row.get("status", "approved"), row["submitted_by"]]
         for row in rows
     ]
     mobile_cards = [
         Div(
             H4(row["location"], cls="h6 fw-semibold mb-1"),
             P(f"{row['event_title']} - {row['date']}", cls="text-muted mb-2"),
+            P(f"Service: {row.get('service_id') or 'main'} · {str(row.get('status') or 'approved').replace('_', ' ').title()}", cls="small text-muted mb-1"),
             P(f"Total recorded: {row['total']}", cls="small text-body-emphasis mb-1"),
             P(f"Submitted by {row['submitted_by']}", cls="small text-muted mb-0"),
             cls="mobile-count-card",
@@ -261,8 +263,40 @@ async def _summary_tab(request: Request, ctx) -> Div:
     ]
 
     return Div(
+        P(
+            "Each row is one submitted count occurrence or service; split parts are summed within that count only. Pending appears only when selected, and rejected or returned rows are excluded.",
+            cls="small text-muted mb-2",
+        ),
+        Form(
+            Input(type="hidden", name="tab", value="summary"),
+            Input(type="hidden", name="profile", value=ctx.profile.key),
+            Input(type="hidden", name="scope_path", value=ctx.current_scope_path),
+            Input(type="hidden", name="start_date", value=_report_window(request)[0]),
+            Input(type="hidden", name="end_date", value=_report_window(request)[1]),
+            *[
+                Input(type="hidden", name=name, value=value)
+                for name, value in ctx.query_extras.items()
+                if name in {"period", "weeks"} and value
+            ],
+            Label(
+                Input(
+                    type="checkbox", name="include_pending", value="true",
+                    checked=str(request.query_params.get("include_pending") or "").lower() in {"1", "true", "yes", "on"},
+                    onchange="this.form.requestSubmit()",
+                ),
+                " Include pending count reports",
+                cls="form-check-label",
+            ),
+            action="/reports",
+            method="get",
+            hx_get="/reports/content",
+            hx_target="#reports-content",
+            hx_swap="outerHTML",
+            hx_push_url="true",
+            cls="form-check mb-3",
+        ),
         Div(
-            stat_card("Latest total", str(counts_summary["latest_total"]), "Most recent recorded attendance", "bar-chart", tone="success"),
+            stat_card("Latest occurrence", str(counts_summary["latest_total"]) if counts_summary["latest_total"] is not None else "No counted report", "One latest count group; not a sum across sessions or dates", "bar-chart", tone="success"),
             stat_card("Locations reporting", str(counts_summary["locations_reporting"]), "Branches that have submitted", "geo-alt", tone="info"),
             cls="counts-stat-grid",
         ),
@@ -270,7 +304,7 @@ async def _summary_tab(request: Request, ctx) -> Div:
             "Daily summary",
             "This keeps the latest count records near the top so oversight remains practical.",
             responsive_table(
-                ["Date", "Location", "Event", "Total", "Submitted By"],
+                ["Date", "Location", "Program", "Service/session", "Total", "Status", "Submitted By"],
                 desktop_rows,
                 mobile_cards,
                 results_id="reports-summary-table",
@@ -280,213 +314,78 @@ async def _summary_tab(request: Request, ctx) -> Div:
     )
 
 
+def _dedicated_report_link(ctx, title: str, definition: str, path: str, action: str, note: str) -> Div:
+    """A Reports-tab handoff that avoids presenting a competing calculation."""
+    return section_card(
+        title,
+        definition,
+        Div(
+            P(note, cls="small text-muted mb-3"),
+            Button(action, variant="outline-primary", size="md", href=scope_link(ctx, path, scope_path=ctx.current_scope_path)),
+            cls="d-flex flex-column align-items-start",
+        ),
+    )
+
+
 async def _financial_tab(request: Request, ctx) -> Div:
-    rows = await _financial_rows(request, ctx)
-    total = sum(float(row.get("amount") or 0) for row in rows)
-    transactions = sum(int(row.get("transaction_count") or 1) for row in rows)
-    summary = {"month_total": total, "year_total": total, "average_entry": round(total / transactions, 2) if transactions else 0, "entries": transactions}
-    desktop_rows = [
-        [row["date"], row["location"], row["fund_type"].title(), format_naira(row["amount"]), row["method"], row["submitted_by"]]
-        for row in rows
-    ]
-    mobile_cards = [
-        Div(
-            H4(format_naira(row["amount"]), cls="h6 fw-semibold mb-1"),
-            P(f"{row['location']} - {row['date']}", cls="text-muted mb-2"),
-            Div(status_badge(row["fund_type"]), cls="mb-2"),
-            P(f"{row['method']} by {row['submitted_by']}", cls="small text-muted mb-0"),
-            cls="mobile-count-card",
-        )
-        for row in rows
-    ]
-    return Div(
-        Div(
-            stat_card("Approved total", format_naira(summary["year_total"]), "Approved offerings and tithes within the selected dates", "cash-stack", tone="primary"),
-            stat_card("Transactions", str(summary["entries"]), "Approved finance entries within the selected dates", "cash-coin", tone="success"),
-            stat_card("Average entry", format_naira(summary["average_entry"]), "Helps spot unusual values quickly", "calculator", tone="warning"),
-            stat_card("Entry count", str(summary["entries"]), "Recorded finance submissions", "receipt", tone="info"),
-            cls="counts-stat-grid",
-        ),
-        section_card(
-            "Financial summary",
-            "Approved offering and tithe entries within the selected date window.",
-            responsive_table(
-                ["Date", "Location", "Type", "Amount", "Method", "Recorded By"],
-                desktop_rows,
-                mobile_cards,
-                results_id="reports-financial-table",
-            ),
-        ),
+    return _dedicated_report_link(
+        ctx, "Financial", "Approved offerings and tithes for the selected dates; pending and rejected submissions are excluded.",
+        "/church-data/finance", "Open Finance Analytics", "Finance Analytics is the authoritative page for financial totals and their detail rows.",
     )
 
 
 async def _attendance_tab(request: Request, ctx) -> Div:
-    rows = await _attendance_rows(request, ctx)
-    present = sum(int(row.get("worker_count") or 1) for row in rows if str(row.get("status") or "").lower() == "present")
-    late = sum(int(row.get("worker_count") or 1) for row in rows if str(row.get("status") or "").lower() == "late")
-    expected = sum(int(row.get("worker_count") or 1) for row in rows)
-    summary = {"expected": expected, "present": present, "late": late, "rate": round(present * 100 / expected, 1) if expected else 0}
-    desktop_rows = [
-        [row["date"], row["worker_name"], row["unit"], row["event_title"], row["location"], status_badge(row["status"])]
-        for row in rows
-    ]
-    mobile_cards = [
-        Div(
-            H4(row["worker_name"], cls="h6 fw-semibold mb-1"),
-            P(f"{row['unit']} - {row['event_title']}", cls="text-muted mb-2"),
-            Div(status_badge(row["status"]), cls="mb-2"),
-            P(f"{row['location']} - {row['date']}", cls="small text-muted mb-0"),
-            cls="mobile-worker-card",
-        )
-        for row in rows
-    ]
     return Div(
-        Div(
-            stat_card("Attendance records", str(summary["expected"]), "Worker attendance records in this date window", "people", tone="primary"),
-            stat_card("Present", str(summary["present"]), "Attendance marked present", "check2-circle", tone="success"),
-            stat_card("Late", str(summary["late"]), "Late attendance records", "clock-history", tone="warning"),
-            stat_card("Present share", f"{summary['rate']}%", "Present records as a share of attendance records", "graph-up", tone="info"),
-            cls="counts-stat-grid",
-        ),
-        section_card(
-            "Attendance summary",
-            "Worker attendance records within the selected date window.",
-            responsive_table(
-                ["Date", "Worker", "Unit", "Event", "Location", "Status"],
-                desktop_rows,
-                mobile_cards,
-                results_id="reports-attendance-table",
-            ),
-        ),
+        P("Worker meeting attendance is shown separately for each meeting type; reports are not combined into a single attendee count.", cls="small text-muted"),
+        _dedicated_report_link(ctx, "Saturday Workers Meeting", "Worker attendance for Saturday meetings, using the meeting's roster snapshot.", "/church-data/meetings/workers-saturday", "Open Workers Meeting", "The meeting page is the source for its roster-based attendance figures."),
+        _dedicated_report_link(ctx, "Tuesday Leaders Meeting", "Leader attendance for Tuesday meetings, kept separate from Workers Meeting.", "/church-data/meetings/leaders-tuesday", "Open Leaders Meeting", "The meeting page lists the received meeting records and leader attendance."),
+        _dedicated_report_link(ctx, "Recurring program attendance", "Population counts for recurring church programs, with each program reported separately.", "/church-data/population-attendance", "Open Recurring Program Attendance", "Compare each program on its own history; no cross-program totals are created."),
+        cls="d-grid gap-3",
     )
 
 
 async def _timeseries_tab(request: Request, ctx) -> Div:
-    count_points, finance_points, attendance_points = await asyncio.gather(
-        _counts_series(request, ctx),
-        _finance_series(request, ctx),
-        _attendance_series(request, ctx),
-    )
     return Div(
-        section_card(
-            "Attendance count trend",
-            f"Trend: {_trend_label(count_points)}",
-            _sparkline(count_points, stroke="#1d4ed8", fill="#bfdbfe"),
-        ),
-        section_card(
-            "Finance trend",
-            f"Trend: {_trend_label(finance_points)}",
-            _sparkline(finance_points, stroke="#059669", fill="#a7f3d0"),
-        ),
-        section_card(
-            "Worker attendance trend",
-            f"Trend: {_trend_label(attendance_points)}",
-            _sparkline(attendance_points, stroke="#d97706", fill="#fde68a"),
-        ),
+        _dedicated_report_link(ctx, "Attendance timeseries", "Weekly population history for the selected program is shown on the Dashboard and recurring program pages.", "/dashboard", "Open Dashboard", "The Dashboard uses the shared approved-only count policy and keeps separate services distinct."),
+        _dedicated_report_link(ctx, "Finance timeseries", "Offering trends are shown with approved financial records on Finance Analytics.", "/church-data/finance", "Open Finance Analytics", "Pending and rejected offerings do not contribute to approved totals."),
+        _dedicated_report_link(ctx, "Worker attendance timeseries", "Workers and Leaders Meeting attendance are separate and use their meeting-specific roster calculations.", "/church-data/meetings/workers-saturday", "Open Workers Meeting", "Use the separate Leaders Meeting page for Tuesday meetings."),
         cls="d-grid gap-4",
     )
 
 
 
 async def _breakdown_tab(request: Request, ctx) -> Div:
-    rows = await _breakdown_rows(request, ctx)
-    if not rows:
-        return empty_state("diagram-3", "No breakdown rows", "No comparison rows are available.")
-    desktop_rows = [
-        [row["label"], row["counts_total"], format_naira(row["finance_total"]), row["attendance_total"]]
-        for row in rows
-    ]
-    mobile_cards = [
-        Div(
-            H4(row["label"], cls="h6 fw-semibold mb-1"),
-            P(f"Counts: {row['counts_total']}", cls="small text-body-emphasis mb-1"),
-            P(f"Finance: {format_naira(row['finance_total'])}", cls="small text-body-emphasis mb-1"),
-            P(f"Attendance records: {row['attendance_total']}", cls="small text-muted mb-0"),
-            cls="mobile-count-card",
-        )
-        for row in rows
-    ]
-    return section_card(
-        "Breakdown by level",
-        f"Breakdown by {_next_level_key(ctx.current_scope_kind).replace('_', ' ')}.",
-        responsive_table(
-            ["Unit", "Counts", "Finance", "Attendance Records"],
-            desktop_rows,
-            mobile_cards,
-            results_id="reports-breakdown-table",
-        ),
-    )
+    return _dedicated_report_link(ctx, "Breakdown by level", "Hierarchy drill-down is presented on the Dashboard, where each level opens its own scoped view.", "/dashboard", "Open Dashboard", "Child totals and coverage are shown together in the scoped dashboard view.")
 
 
 async def _growth_tab(request: Request, ctx) -> Div:
-    rows = await _growth_rows(request, ctx)
-    if not rows:
-        return empty_state("graph-up", "Not enough history yet", "Growth becomes more useful once multiple weeks of records are available.")
-    points = [(row["period"], row["value"]) for row in rows]
-    desktop_rows = [[row["period"], row["value"], f"{row['growth']}%"] for row in rows]
-    mobile_cards = [
-        Div(
-            H4(row["period"], cls="h6 fw-semibold mb-1"),
-            P(f"Value: {row['value']}", cls="small text-body-emphasis mb-1"),
-            P(f"Growth: {row['growth']}%", cls="small text-muted mb-0"),
-            cls="mobile-count-card",
-        )
-        for row in rows
-    ]
-    return Div(
-        section_card(
-            "Weekly growth",
-            "Weekly count totals by period.",
-            _sparkline(points, stroke="#7c3aed", fill="#ddd6fe"),
-        ),
-        section_card(
-            "Growth table",
-            "Weekly count totals and week-on-week growth percentage.",
-            responsive_table(
-                ["Period", "Value", "Growth"],
-                desktop_rows,
-                mobile_cards,
-                results_id="reports-growth-table",
-            ),
-        ),
-        cls="d-grid gap-4",
-    )
+    return _dedicated_report_link(ctx, "Growth", "The Dashboard trend shows average attendance per reporting location and its reporting coverage, without adding sessions or days together.", "/dashboard", "Open Dashboard", "Compare each program with its own history from the recurring program pages.")
 
 
 async def _anomalies_tab(request: Request, ctx) -> Div:
-    rows = await _anomaly_rows(request, ctx)
-    if not rows:
-        return empty_state("exclamation-diamond", "No anomalies detected", "No unusual records were found.")
-    return Div(
-        *[
-            section_card(
-                row["title"],
-                row["detail"],
-                Div(status_badge(row["status"])),
-            )
-            for row in rows
-        ],
-        cls="d-grid gap-3",
-    )
+    return _dedicated_report_link(ctx, "Anomalies and follow-up", "Needs attention lists missing reports, overdue reviews, returned reports, and qualifying declines using the dashboard's shared reporting rules.", "/dashboard", "Open Dashboard", "Only items in your active scope are shown; use the child links to open a lower-level view.")
 
 
 async def _exports_tab(request: Request, ctx) -> Div:
     start_date, end_date = _report_window(request)
+    include_pending = str(request.query_params.get("include_pending") or "").lower() in {"1", "true", "yes", "on"}
     export_cards = []
     for report_type, title in [
-        ("counts", "Attendance counts"),
-        ("financial", "Financial summary"),
-        ("attendance", "Worker attendance"),
+        ("counts", "Population count occurrences"),
+        ("financial", "Approved financial summary"),
+        ("attendance", "Worker attendance trend"),
     ]:
+        description = {
+            "counts": "One row per count group or legacy report; split parts are summed within their group only. Pending is optional; rejected and returned rows are excluded.",
+            "financial": "Approved offerings and tithes only; pending and rejected entries are excluded.",
+            "attendance": "Worker attendance trend records; this is not a unique-attendee count or a population count.",
+        }[report_type]
         if await ReportService.live_enabled(request):
             actions = Div(
-                Button("CSV", variant="outline-primary", size="md", href=ctx.url_for("/reports/export/live", report_type=report_type, export_format="csv", start_date=start_date, end_date=end_date)),
-                Button("Excel", variant="outline-primary", size="md", href=ctx.url_for("/reports/export/live", report_type=report_type, export_format="excel", start_date=start_date, end_date=end_date)),
-                Button("PDF", variant="outline-primary", size="md", href=ctx.url_for("/reports/export/live", report_type=report_type, export_format="pdf", start_date=start_date, end_date=end_date)),
+                Button("CSV", variant="outline-primary", size="md", href=ctx.url_for("/reports/export/live", report_type=report_type, export_format="csv", start_date=start_date, end_date=end_date, include_pending=str(include_pending).lower())),
+                Button("Excel", variant="outline-primary", size="md", href=ctx.url_for("/reports/export/live", report_type=report_type, export_format="excel", start_date=start_date, end_date=end_date, include_pending=str(include_pending).lower())),
+                Button("PDF", variant="outline-primary", size="md", href=ctx.url_for("/reports/export/live", report_type=report_type, export_format="pdf", start_date=start_date, end_date=end_date, include_pending=str(include_pending).lower())),
                 cls="d-grid d-md-flex gap-2",
-            )
-            description = (
-                "Downloads are proxied through the admin so backend authentication stays server-side and use the selected date range."
             )
         else:
             actions = Div(
@@ -523,9 +422,6 @@ async def _exports_tab(request: Request, ctx) -> Div:
                 ),
                 cls="d-grid d-md-flex gap-2",
             )
-            description = (
-                "Mock export actions represent the selected report family and date range."
-            )
         export_cards.append(
             section_card(
                 title,
@@ -541,7 +437,7 @@ def _active_report_tab(tab: str) -> str:
     return tab if tab in valid else "summary"
 
 
-async def _report_tab_nav(ctx, active_tab: str, start_date: str, end_date: str) -> Div:
+async def _report_tab_nav(ctx, active_tab: str, start_date: str, end_date: str, include_pending: bool = False) -> Div:
     return Div(
         *[
             Button(
@@ -549,7 +445,7 @@ async def _report_tab_nav(ctx, active_tab: str, start_date: str, end_date: str) 
                 variant="primary" if key == active_tab else "outline-primary",
                 size="md",
                 type="button",
-                hx_get=ctx.url_for("/reports/content", tab=key, start_date=start_date, end_date=end_date),
+                hx_get=ctx.url_for("/reports/content", tab=key, start_date=start_date, end_date=end_date, include_pending=str(include_pending).lower()),
                 hx_target="#reports-content",
                 hx_swap="outerHTML",
                 cls="admin-inline-btn",
@@ -575,7 +471,7 @@ async def _report_tab_content(request: Request, ctx, active_tab: str) -> Div:
     return await tab_views[_active_report_tab(active_tab)](request, ctx)
 
 
-async def _reports_loading_content(ctx, active_tab: str, start_date: str, end_date: str) -> Div:
+async def _reports_loading_content(ctx, active_tab: str, start_date: str, end_date: str, include_pending: bool = False) -> Div:
     return Div(
         Div(
             P("Loading reports.", cls="text-muted mb-0"),
@@ -584,7 +480,7 @@ async def _reports_loading_content(ctx, active_tab: str, start_date: str, end_da
         PlaceholderCard(animation="wave", show_image=False, cls="border-0 shadow-sm"),
         PlaceholderCard(animation="wave", show_image=False, cls="border-0 shadow-sm"),
         id="reports-content",
-        hx_get=ctx.url_for("/reports/content", tab=active_tab, start_date=start_date, end_date=end_date),
+        hx_get=ctx.url_for("/reports/content", tab=active_tab, start_date=start_date, end_date=end_date, include_pending=str(include_pending).lower()),
         hx_trigger="load",
         hx_swap="outerHTML",
         cls="d-grid gap-3",
@@ -594,7 +490,8 @@ async def _reports_loading_content(ctx, active_tab: str, start_date: str, end_da
 async def _reports_content(request: Request, ctx, active_tab: str) -> Div:
     active_tab = _active_report_tab(active_tab)
     start_date, end_date = _report_window(request)
-    tab_nav = await _report_tab_nav(ctx, active_tab, start_date, end_date)
+    include_pending = str(request.query_params.get("include_pending") or "").lower() in {"1", "true", "yes", "on"}
+    tab_nav = await _report_tab_nav(ctx, active_tab, start_date, end_date, include_pending)
     tab_content = await _report_tab_content(request, ctx, active_tab)
     return Div(
         section_card(
@@ -607,15 +504,15 @@ async def _reports_content(request: Request, ctx, active_tab: str) -> Div:
                     Div(Button("Apply dates", variant="primary", size="md", type="submit"), cls="col-12 col-md-4 d-flex align-items-end"),
                     Input(type="hidden", name="profile", value=ctx.profile.key),
                     Input(type="hidden", name="tab", value=active_tab),
-                    Input(type="hidden", name="tab", value=active_tab),
+                    Input(type="hidden", name="include_pending", value=str(include_pending).lower()),
                     *[
                         Input(type="hidden", name=name, value=value)
                         for name, value in ctx.query_extras.items()
-                        if name not in {"start_date", "end_date", "profile"} and value
+                        if name not in {"start_date", "end_date", "profile", "include_pending"} and value
                     ],
                     action="/reports",
                     method="get",
-                    hx_get=ctx.url_for("/reports/content", tab="summary", start_date=start_date, end_date=end_date),
+                    hx_get=ctx.url_for("/reports/content", tab=active_tab, start_date=start_date, end_date=end_date, include_pending=str(include_pending).lower()),
                     hx_target="#reports-content",
                     hx_swap="outerHTML",
                     hx_push_url="true",
@@ -657,7 +554,7 @@ def register_report_routes(app) -> None:
                 scope_label=ctx.current_scope_label,
                 scope_kind=ctx.current_scope_kind,
             ),
-            _reports_loading_content(ctx, _active_report_tab(tab), *_report_window(request)),
+            _reports_loading_content(ctx, _active_report_tab(tab), *_report_window(request), str(request.query_params.get("include_pending") or "").lower() in {"1", "true", "yes", "on"}),
         )
         refresh_button = Button(
             "Refresh Reports",

@@ -18,6 +18,7 @@ from .request_cache import request_cached
 from .ttl_cache import invalidate_ttl_prefix
 from app.utils.count_sections import legacy_section_label
 from app.services.analytics.program_config import reporting_today
+from app.services.analytics.reporting_policy import is_counted_status, is_pending_status
 
 
 PAYMENT_METHOD_LABELS = {
@@ -651,8 +652,8 @@ async def _finance_summary_public(request, ctx) -> dict[str, Any]:
     today = reporting_today()
     month_prefix = today.strftime("%Y-%m")
     year_prefix = str(today.year)
-    approved = [row for row in rows if row.get("status") == "approved"]
-    pending = [row for row in rows if row.get("status") in {"pending", "corrected"}]
+    approved = [row for row in rows if is_counted_status(row.get("status"))]
+    pending = [row for row in rows if is_pending_status(row.get("status"))]
     month_approved = [row for row in approved if row.get("entry_date", row.get("date", "")).startswith(month_prefix)]
     year_approved = [row for row in approved if row.get("entry_date", row.get("date", "")).startswith(year_prefix)]
     month_pending = [row for row in pending if row.get("entry_date", row.get("date", "")).startswith(month_prefix)]

@@ -79,6 +79,61 @@ def _independent_counts(connection, scope_path: str, start: date, end: date) -> 
     }
 
 
+def _independent_report_summary(connection, scope_path: str, start: date, end: date) -> list[dict]:
+    """Independent Reports Summary SQL: parts group only by count_group_id."""
+    query = text("""
+        WITH source_rows AS (
+          SELECT c.id, c.count_group_id, c.date::date AS day, c.event_id,
+                 c.location_id, l.location_name, c.path::text AS path,
+                 c.status, c.total, c.adult_male, c.adult_female,
+                 c.youth_male, c.youth_female, c.boys, c.girls,
+                 coalesce(cg.state, '') AS group_state,
+                 coalesce(cg.service_id, 'main') AS service_id,
+                 coalesce(pe.title, pt.name, c.program_type, c.program_domain, 'Unassigned program') AS program
+          FROM counts c
+          JOIN locations l ON l.location_id = c.location_id
+          LEFT JOIN count_groups cg ON cg.id = c.count_group_id
+          LEFT JOIN program_events pe ON pe.id = c.event_id
+          LEFT JOIN program_types pt ON pt.id = coalesce(c.program_type_id, pe.program_type_id)
+          WHERE c.date >= :start_date
+            AND c.date < (CAST(:end_date AS date) + INTERVAL '1 day')
+            AND c.is_deleted IS NOT TRUE
+            AND (c.path <@ CAST(:scope_path AS ltree) OR c.path = CAST(:scope_path AS ltree))
+        ), logical_groups AS (
+          SELECT coalesce('group:' || count_group_id::text, 'legacy:' || id::text) AS occurrence_id,
+                 day, event_id, location_id, location_name, path, service_id, program,
+                 bool_and(lower(status) = 'approved') AS entirely_approved,
+                 bool_or(group_state = 'conflict') AS is_conflicted,
+                 count(*) AS record_count, sum(total) AS total,
+                 sum(adult_male) AS adult_male, sum(adult_female) AS adult_female,
+                 sum(youth_male) AS youth_male, sum(youth_female) AS youth_female,
+                 sum(boys) AS boys, sum(girls) AS girls
+          FROM source_rows
+          GROUP BY 1,2,3,4,5,6,7,8
+        )
+        SELECT * FROM logical_groups
+        WHERE entirely_approved AND NOT is_conflicted
+        ORDER BY day DESC, path, service_id
+    """)
+    return [dict(row) for row in connection.execute(query, {
+        "scope_path": scope_path, "start_date": start, "end_date": end,
+    }).mappings()]
+
+
+def _reports_summary_from_html(html: str) -> list[dict[str, str]]:
+    soup = BeautifulSoup(html, "html.parser")
+    wrapper = soup.select_one("#reports-summary-table")
+    table = wrapper if wrapper and wrapper.name == "table" else (wrapper.find("table") if wrapper else None)
+    assert table is not None, "Reports Summary table was not rendered"
+    headers = [cell.get_text(" ", strip=True).lower() for cell in table.select("thead th")]
+    output = []
+    for tr in table.select("tbody tr"):
+        cells = [cell.get_text(" ", strip=True) for cell in tr.select("td")]
+        if len(cells) == len(headers):
+            output.append(dict(zip(headers, cells)))
+    return output
+
+
 def test_pastor_report_html_and_xlsx_match_independent_sql_for_four_scopes():
     db_url = os.environ["F3_DATABASE_URL"]
     if db_url.startswith("postgresql://"):
@@ -185,5 +240,39 @@ def test_pastor_report_html_and_xlsx_match_independent_sql_for_four_scopes():
                         value = int(row[key] or 0)
                         assert int(xlsx[xlsx_map[label]] or 0) == value
                         assert int(csv_row[csv_header.index(label)] or 0) == value
+
+                # Reports Summary and its counted-count export are rendered
+                # and fetched through the running frontend/API, then compared
+                # with independent source-row SQL. The scope loop is ordered
+                # State, Region, Group, Location by the documented fixture.
+                summary_expected = _independent_report_summary(connection, scope_path, start_sunday, latest_sunday)
+                reports_params = {
+                    "tab": "summary", "scope_path": scope_path, "profile": "state_overseer",
+                    "start_date": start_sunday.isoformat(), "end_date": latest_sunday.isoformat(),
+                }
+                summary_response = client.get("/reports/content", params=reports_params)
+                assert summary_response.status_code == 200
+                rendered_summary = _reports_summary_from_html(summary_response.text)
+                expected_summary = sorted(
+                    (row["day"].isoformat(), row["location_name"], row["program"] if row["service_id"] == "main" else f"{row['program']} · {row['service_id']}", row["service_id"], int(row["total"]), "Approved")
+                    for row in summary_expected
+                )
+                actual_summary = sorted(
+                    (row["date"], row["location"], row["program"], row["service/session"], int(row["total"].replace(",", "")), row["status"])
+                    for row in rendered_summary
+                )
+                assert actual_summary == expected_summary, (scope_path, actual_summary, expected_summary)
+
+                count_export = client.get("/reports/export/live", params={
+                    "report_type": "counts", "export_format": "csv", "scope_path": scope_path,
+                    "start_date": start_sunday.isoformat(), "end_date": latest_sunday.isoformat(),
+                })
+                assert count_export.status_code == 200
+                exported_counts = list(csv.DictReader(io.StringIO(count_export.text)))
+                csv_occurrences = sorted(
+                    (row["day"], row["location_name"], row["event_title"], row.get("service_id") or "main", int(row["total_attendance"]), row["status"].title())
+                    for row in exported_counts
+                )
+                assert csv_occurrences == expected_summary, (scope_path, csv_occurrences, expected_summary)
     finally:
         engine.dispose()

@@ -1117,7 +1117,7 @@ class BackendClient:
             params["location_id"] = location_id
         return await self._request("GET", "/dashboard/newcomer-analytics", access_token=access_token, params=params)
 
-    async def get_report_summary(self, access_token: str, *, scope_path: str | None = None, start_date: str | None = None, end_date: str | None = None) -> list[dict[str, Any]]:
+    async def get_report_summary(self, access_token: str, *, scope_path: str | None = None, start_date: str | None = None, end_date: str | None = None, include_pending: bool = False) -> list[dict[str, Any]]:
         params: dict[str, Any] = {}
         if scope_path:
             params["scope_path"] = scope_path
@@ -1125,6 +1125,8 @@ class BackendClient:
             params["start_date"] = start_date
         if end_date:
             params["end_date"] = end_date
+        if include_pending:
+            params["include_pending"] = "true"
         return await self._request("GET", "/reports/summary", access_token=access_token, params=params or None)
 
     async def get_report_financial(self, access_token: str, *, scope_path: str | None = None, start_date: str | None = None, end_date: str | None = None) -> list[dict[str, Any]]:
@@ -1211,7 +1213,7 @@ class BackendClient:
     async def refresh_reports(self, access_token: str) -> dict[str, Any]:
         return await self._request("POST", "/reports/refresh", access_token=access_token)
 
-    async def export_report_csv(self, access_token: str, *, report_type: str, scope_path: str | None = None, start_date: str | None = None, end_date: str | None = None) -> tuple[bytes, dict[str, str]]:
+    async def export_report_csv(self, access_token: str, *, report_type: str, scope_path: str | None = None, start_date: str | None = None, end_date: str | None = None, include_pending: bool = False) -> tuple[bytes, dict[str, str]]:
         params: dict[str, Any] = {"report_type": report_type}
         if scope_path:
             params["scope_path"] = scope_path
@@ -1219,22 +1221,32 @@ class BackendClient:
             params["start_date"] = start_date
         if end_date:
             params["end_date"] = end_date
+        if include_pending:
+            params["include_pending"] = "true"
         return await self._request_binary("GET", "/reports/export/csv", access_token=access_token, params=params)
 
-    async def export_report_excel(self, access_token: str, *, report_type: str, start_date: str | None = None, end_date: str | None = None) -> tuple[bytes, dict[str, str]]:
+    async def export_report_excel(self, access_token: str, *, report_type: str, scope_path: str | None = None, start_date: str | None = None, end_date: str | None = None, include_pending: bool = False) -> tuple[bytes, dict[str, str]]:
         params: dict[str, Any] = {"report_type": report_type}
+        if scope_path:
+            params["scope_path"] = scope_path
         if start_date:
             params["start_date"] = start_date
         if end_date:
             params["end_date"] = end_date
+        if include_pending:
+            params["include_pending"] = "true"
         return await self._request_binary("POST", "/reports/export/excel", access_token=access_token, params=params)
 
-    async def export_report_pdf(self, access_token: str, *, report_type: str, start_date: str | None = None, end_date: str | None = None) -> tuple[bytes, dict[str, str]]:
+    async def export_report_pdf(self, access_token: str, *, report_type: str, scope_path: str | None = None, start_date: str | None = None, end_date: str | None = None, include_pending: bool = False) -> tuple[bytes, dict[str, str]]:
         params: dict[str, Any] = {"report_type": report_type}
+        if scope_path:
+            params["scope_path"] = scope_path
         if start_date:
             params["start_date"] = start_date
         if end_date:
             params["end_date"] = end_date
+        if include_pending:
+            params["include_pending"] = "true"
         return await self._request_binary("POST", "/reports/export/pdf", access_token=access_token, params=params)
 
     async def get_worker(self, access_token: str, worker_id: str) -> dict[str, Any]:

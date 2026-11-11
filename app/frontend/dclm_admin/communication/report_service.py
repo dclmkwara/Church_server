@@ -72,11 +72,13 @@ def _date_cache_key(request) -> tuple[str, str]:
 
 
 def _normalize_summary_row(row: dict[str, Any]) -> dict[str, Any]:
+    service_id = str(row.get("service_id") or "main")
+    event_title = str(row.get("event_title") or "Unassigned event")
     return {
         "date": _parse_date(row.get("day")),
         "event_id": str(row.get("event_id") or ""),
         "location": str(row.get("location_name") or row.get("location_id") or "Unknown location"),
-        "event_title": str(row.get("event_title") or "Unassigned event"),
+        "event_title": event_title if service_id == "main" else f"{event_title} · {service_id}",
         "total": int(row.get("total_attendance") or 0),
         "submitted_by": f"{int(row.get('record_count') or 0)} usher section(s)",
         "men": int(row.get("total_men") or 0),
@@ -86,6 +88,9 @@ def _normalize_summary_row(row: dict[str, Any]) -> dict[str, Any]:
         "boys": int(row.get("total_boys") or 0),
         "girls": int(row.get("total_girls") or 0),
         "record_count": int(row.get("record_count") or 0),
+        "service_id": str(row.get("service_id") or "main"),
+        "status": str(row.get("status") or "approved"),
+        "program_type": str(row.get("program_type") or ""),
     }
 
 
@@ -318,18 +323,32 @@ class ReportService:
 
     @staticmethod
     async def summary_rows(request, ctx) -> list[dict[str, Any]]:
+        include_pending = str(getattr(request, "query_params", {}).get("include_pending") or "").lower() in {"1", "true", "yes", "on"}
         if await ReportService.use_mock(request):
-            return STORE.list_counts(_scope_path(request, ctx))[:8]
+            from .count_aggregation import report_count_occurrences
+            raw = STORE.list_counts(_scope_path(request, ctx))
+            rows = report_count_occurrences(raw, include_pending=include_pending)
+            start_date, end_date = _report_date_window(request)
+            return [{
+                "day": _parse_date(row.get("date")), "event_id": str(row.get("event_id") or ""),
+                "event_title": str(row.get("event_title") or "Unassigned event"),
+                "location_id": str(row.get("location_id") or ""), "location_name": str(row.get("location") or "Unknown location"),
+                "total_attendance": row.get("total"), "total_men": int(row.get("adult_male") or 0),
+                "total_women": int(row.get("adult_female") or 0), "total_youth_male": int(row.get("youth_male") or 0),
+                "total_youth_female": int(row.get("youth_female") or 0), "total_boys": int(row.get("boys") or 0),
+                "total_girls": int(row.get("girls") or 0), "record_count": row.get("submissions") or 0,
+                "service_id": row.get("service_id") or "main", "status": row.get("status") or "approved",
+            } for row in rows if start_date <= _parse_date(row.get("date")) <= end_date]
         client = async_client(get_api_client())
         access_token = AuthService.get_access_token(request)
         try:
             payload = await ReportService._cached_payload(
                 request,
-                ("reports", "summary", _scope_path(request, ctx), *_date_cache_key(request)),
+                ("reports", "summary", _scope_path(request, ctx), include_pending, *_date_cache_key(request)),
                 lambda: ttl_cached(
-                    ("reports", "summary", _scope_path(request, ctx), *_date_cache_key(request)),
+                    ("reports", "summary", _scope_path(request, ctx), include_pending, *_date_cache_key(request)),
                     45.0,
-                    lambda: client.get_report_summary(access_token, scope_path=_scope_path(request, ctx), start_date=_report_date_window(request)[0], end_date=_report_date_window(request)[1]),
+                    lambda: client.get_report_summary(access_token, scope_path=_scope_path(request, ctx), start_date=_report_date_window(request)[0], end_date=_report_date_window(request)[1], include_pending=include_pending),
                 ),
             )
         except BackendClientError as exc:
@@ -598,11 +617,14 @@ class ReportService:
         access_token = AuthService.get_access_token(request)
         scope_path = _scope_path(request, ctx)
         if export_format == "csv":
-            return await client.export_report_csv(access_token, report_type=report_type, scope_path=scope_path, start_date=_report_date_window(request)[0], end_date=_report_date_window(request)[1])
+            include_pending = str(getattr(request, "query_params", {}).get("include_pending") or "").lower() in {"1", "true", "yes", "on"}
+            return await client.export_report_csv(access_token, report_type=report_type, scope_path=scope_path, start_date=_report_date_window(request)[0], end_date=_report_date_window(request)[1], include_pending=include_pending)
         if export_format == "excel":
-            return await client.export_report_excel(access_token, report_type=report_type, start_date=_report_date_window(request)[0], end_date=_report_date_window(request)[1])
+            include_pending = str(getattr(request, "query_params", {}).get("include_pending") or "").lower() in {"1", "true", "yes", "on"}
+            return await client.export_report_excel(access_token, report_type=report_type, scope_path=scope_path, start_date=_report_date_window(request)[0], end_date=_report_date_window(request)[1], include_pending=include_pending)
         if export_format == "pdf":
-            return await client.export_report_pdf(access_token, report_type=report_type, start_date=_report_date_window(request)[0], end_date=_report_date_window(request)[1])
+            include_pending = str(getattr(request, "query_params", {}).get("include_pending") or "").lower() in {"1", "true", "yes", "on"}
+            return await client.export_report_pdf(access_token, report_type=report_type, scope_path=scope_path, start_date=_report_date_window(request)[0], end_date=_report_date_window(request)[1], include_pending=include_pending)
         raise ValueError("Unsupported export format")
 
 async def _report_use_mock(request) -> bool:

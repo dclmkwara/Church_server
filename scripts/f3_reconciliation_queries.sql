@@ -132,3 +132,64 @@ JOIN program_types pt ON pt.id = e.program_type_id
 LEFT JOIN counts c ON c.event_id = e.id AND c.is_deleted IS NOT TRUE
 WHERE e.is_deleted IS NOT TRUE AND e.approval_status = 'approved'
 GROUP BY 1,2,3,4,5,6,7 ORDER BY 1,3,4,6,7;
+
+-- Q7: Reports Summary occurrences, independent of the application service.
+-- Split parts are summed only inside an explicit count_group_id. Legacy rows
+-- remain individual occurrences. Every row in a split group must be approved;
+-- pending, corrected, returned, rejected, and conflicted groups are excluded.
+-- :scope_path, :start_date, :end_date are supplied by the read-only checker.
+WITH source_rows AS (
+  SELECT c.id, c.count_group_id, c.date::date AS occurrence_date,
+         c.event_id, c.location_id, c.path::text AS path,
+         c.status, c.total, c.adult_male, c.adult_female,
+         c.youth_male, c.youth_female, c.boys, c.girls,
+         coalesce(cg.state, '') AS group_state,
+         coalesce(cg.service_id, 'main') AS service_id,
+         coalesce(pe.title, pt.name, c.program_type, c.program_domain, 'Unassigned program') AS program
+  FROM counts c
+  LEFT JOIN count_groups cg ON cg.id = c.count_group_id
+  LEFT JOIN program_events pe ON pe.id = c.event_id
+  LEFT JOIN program_types pt ON pt.id = coalesce(c.program_type_id, pe.program_type_id)
+  WHERE c.date >= :start_date
+    AND c.date < (CAST(:end_date AS date) + INTERVAL '1 day')
+    AND c.is_deleted IS NOT TRUE
+    AND (c.path <@ CAST(:scope_path AS ltree) OR c.path = CAST(:scope_path AS ltree))
+), logical_groups AS (
+  SELECT coalesce('group:' || count_group_id::text, 'legacy:' || id::text) AS occurrence_id,
+         occurrence_date, event_id, location_id, path, service_id, program,
+         bool_and(lower(status) = 'approved') AS entirely_approved,
+         bool_or(group_state = 'conflict') AS is_conflicted,
+         count(*) AS record_count,
+         sum(total) AS total_attendance,
+         sum(adult_male) AS total_men, sum(adult_female) AS total_women,
+         sum(youth_male) AS total_youth_male, sum(youth_female) AS total_youth_female,
+         sum(boys) AS total_boys, sum(girls) AS total_girls
+  FROM source_rows
+  GROUP BY 1,2,3,4,5,6,7
+)
+SELECT * FROM logical_groups
+WHERE entirely_approved AND NOT is_conflicted
+ORDER BY occurrence_date DESC, path, service_id;
+
+-- Q8: approved Finance Analytics and Reports financial-export source rows.
+SELECT date_trunc('month', o.date) AS month, o.location_id,
+       l.location_name, o.path::text AS path,
+       sum(o.amount) AS total_amount, count(*) AS transaction_count
+FROM offerings o JOIN locations l ON l.location_id = o.location_id
+WHERE o.date >= :start_date
+  AND o.date < (CAST(:end_date AS date) + INTERVAL '1 day')
+  AND o.is_deleted IS NOT TRUE AND o.status = 'approved'
+  AND (o.path <@ CAST(:scope_path AS ltree) OR o.path = CAST(:scope_path AS ltree))
+GROUP BY 1,2,3,4 ORDER BY 1 DESC,4;
+
+-- Q9: worker attendance export. This is a record-status trend, not a unique
+-- attendee or roster-adjusted meeting attendance rate.
+SELECT date_trunc('week', wa.date) AS week, wa.location_id,
+       l.location_name, wa.path::text AS path, wa.status,
+       count(*) AS worker_count
+FROM worker_attendance wa JOIN locations l ON l.location_id = wa.location_id
+WHERE wa.date >= :start_date
+  AND wa.date < (CAST(:end_date AS date) + INTERVAL '1 day')
+  AND wa.is_deleted IS NOT TRUE
+  AND (wa.path <@ CAST(:scope_path AS ltree) OR wa.path = CAST(:scope_path AS ltree))
+GROUP BY 1,2,3,4,5 ORDER BY 1 DESC,4,5;
