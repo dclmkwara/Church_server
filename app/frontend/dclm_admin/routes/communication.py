@@ -951,7 +951,7 @@ def register_communication_routes(app) -> None:
     async def create_communication_broadcast(request: Request):
         form_data = await request.form()
         data = {key: str(value) for key, value in form_data.items()}
-        ctx = build_context(data)
+        ctx = build_context(request)
         if ctx.level < 3:
             return RedirectResponse(ctx.url_for("/communication"), status_code=303)
         try:
@@ -1059,7 +1059,7 @@ def register_communication_routes(app) -> None:
     async def create_communication(request: Request):
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
+        ctx = build_context(request)
         if not ctx.has_permission("announcements:manage"):
             return RedirectResponse(ctx.url_for("/communication"), status_code=303)
         try:
@@ -1078,7 +1078,7 @@ def register_communication_routes(app) -> None:
     async def update_communication(request: Request, announcement_id: str):
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
+        ctx = build_context(request)
         row = await _announcement_row(request, ctx, announcement_id)
         if not ctx.has_permission("announcements:manage") or row is None:
             return RedirectResponse(ctx.url_for("/communication"), status_code=303)
@@ -1133,7 +1133,7 @@ def register_communication_routes(app) -> None:
     async def communication_status_update(request: Request, announcement_id: str):
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
+        ctx = build_context(request)
         if not ctx.has_permission("announcements:manage"):
             return P("Only the pastor at this level can publish or change announcement status.", cls="text-muted")
         row = await _announcement_row(request, ctx, announcement_id)
@@ -1313,7 +1313,7 @@ def register_communication_routes(app) -> None:
     async def communication_media_create_gallery(request: Request):
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
+        ctx = build_context(request)
         try:
             gallery = await CommunicationService.create_gallery(request, ctx, data) if await _communication_live(request) else STORE.add_media_gallery(
                 data,
@@ -1422,7 +1422,7 @@ def register_communication_routes(app) -> None:
     async def communication_media_create_item(request: Request, gallery_id: str):
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
+        ctx = build_context(request)
         gallery = await _gallery_row(request, ctx, gallery_id)
         if gallery is None:
             return P("Gallery not found.", cls="text-muted")
@@ -1467,7 +1467,7 @@ def register_communication_routes(app) -> None:
     async def communication_media_delete_gallery(request: Request, gallery_id: str):
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
+        ctx = build_context(request)
         gallery = await _gallery_row(request, ctx, gallery_id)
         if gallery is None:
             return P("Gallery not found.", cls="text-muted")
@@ -1512,7 +1512,7 @@ def register_communication_routes(app) -> None:
     async def communication_media_delete_item(request: Request, item_id: str):
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
+        ctx = build_context(request)
         item = await _media_item_row(request, ctx, item_id)
         if item is None:
             return P("Media item not found.", cls="text-muted")

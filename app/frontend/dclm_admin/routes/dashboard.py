@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from fasthtml.common import Div, Form, H2, H4, Input, Label, Link, P, Script, Span, Title
-from faststrap import Badge, Button, PlaceholderCard, Select as FsSelect, Spinner, ToggleGroup
+from fasthtml.common import A, Div, Form, H2, H4, Input, Label, Link, P, Script, Span, Title
+from faststrap import Badge, Button, Card, Icon, PlaceholderCard, Select as FsSelect, Spinner, ToggleGroup
 from starlette.requests import Request
 
 from ..auth_context import build_context
@@ -1123,20 +1123,88 @@ async def _dashboard_content(request: Request, ctx) -> Any:
     )
 
 
+
+def is_field_role(ctx: Any) -> bool:
+    """Check if the context is a field worker or user without statistics access."""
+    level = getattr(ctx, "level", 0)
+    profile_key = getattr(getattr(ctx, "profile", None), "key", "")
+    has_stat_read = hasattr(ctx, "has_permission") and ctx.has_permission("statistics:read")
+    return level < 2 or profile_key in {"location_worker", "house_fellowship_leader", "fellowship_leader"} or not has_stat_read
+
+
+def render_field_role_dashboard(ctx: Any) -> Any:
+    """Friendly landing card for field workers and ushers instead of a raw analytics 403."""
+    role_label = getattr(getattr(ctx, "profile", None), "role_label", "Field Worker")
+    user_name = getattr(getattr(ctx, "profile", None), "user_name", "Worker")
+    scope_label = getattr(ctx, "current_scope_label", "Your Location")
+
+    can_attendance = hasattr(ctx, "has_permission") and ctx.has_permission("attendance:read")
+    can_fellowship = hasattr(ctx, "has_permission") and ctx.has_permission("fellowship:read")
+    can_workers = hasattr(ctx, "has_permission") and ctx.has_permission("workers:read")
+
+    actions = []
+    visible = getattr(ctx, "visible_modules", [])
+    if can_attendance or "church-data" in visible:
+        actions.append(
+            A(Icon("clipboard-check", cls="me-2"), "Worker Attendance", href="/church-data/attendance", cls="btn btn-primary")
+        )
+    if can_fellowship or "fellowship" in visible:
+        actions.append(
+            A(Icon("house-heart", cls="me-2"), "House Fellowship", href="/fellowship", cls="btn btn-outline-primary")
+        )
+    if can_workers or "people" in visible:
+        actions.append(
+            A(Icon("people", cls="me-2"), "Workers Directory", href="/people/workers", cls="btn btn-outline-secondary")
+        )
+    if not actions:
+        actions.append(
+            A(Icon("clipboard-check", cls="me-2"), "Worker Attendance", href="/church-data/attendance", cls="btn btn-primary")
+        )
+
+    return Div(
+        Card(
+            Div(
+                Div(
+                    Icon("person-check-fill", size="2.5rem", cls="text-primary mb-3"),
+                    H2(f"Welcome, {user_name}", cls="h4 fw-bold mb-1"),
+                    Badge(role_label, variant="primary", cls="mb-3 px-3 py-2"),
+                    P(
+                        f"You are signed in as {role_label} for {scope_label}. "
+                        "The church analytics dashboard is reserved for pastoral leadership and overseers. "
+                        "You can access your operational tasks below.",
+                        cls="text-secondary mb-4 text-center",
+                        style="max-width: 520px;",
+                    ),
+                    Div(*actions, cls="d-flex flex-wrap gap-2 justify-content-center") if actions else P("No operational tasks are assigned to this role at this time.", cls="text-muted"),
+                    cls="d-flex flex-column align-items-center py-4 px-3 text-center",
+                ),
+            ),
+            cls="border-0 shadow-sm mt-3",
+        ),
+        cls="container-fluid py-3",
+    )
+
+
 def register_dashboard_routes(app) -> None:
     register_analytics_dashboard_panel_routes(app)
     @app.get("/dashboard")
     async def dashboard(request: Request):
         ctx = build_context(request)
+        if is_field_role(ctx):
+            dashboard_content_node = render_field_role_dashboard(ctx)
+            title = f"{getattr(getattr(ctx, 'profile', None), 'role_label', 'Worker')} Portal"
+        else:
+            dashboard_content_node = await render_analytics_dashboard(request, ctx)
+            title = "Analytics Dashboard"
         return (
             *shell_layout(
                 ctx,
                 request_path=request.url.path,
                 active_key="dashboard",
-                title="Analytics Dashboard",
+                title=title,
                 subtitle="",
                 primary_action=None,
-                content=await render_analytics_dashboard(request, ctx),
+                content=dashboard_content_node,
                 show_shell_intro=False,
                 show_scope_breadcrumb=False,
             ),
@@ -1147,6 +1215,8 @@ def register_dashboard_routes(app) -> None:
     @app.get("/dashboard/content")
     async def dashboard_content(request: Request):
         ctx = build_context(request)
+        if is_field_role(ctx):
+            return render_field_role_dashboard(ctx)
         return await render_analytics_dashboard(request, ctx)
 
     @app.post("/dashboard/remind")

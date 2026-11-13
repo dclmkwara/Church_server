@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 
 from fasthtml.common import A, Div, Form as HtmlForm, H1, H2, H3, Img, Input as HtmlInput, Label, Link, NotStr, Option as HtmlOption, P, Select as HtmlSelect, Span, Strong, Script
 from fastapi.responses import Response, RedirectResponse
-from faststrap import Button
+from faststrap import Button, Icon
 from starlette.requests import Request
 
 from app.services.analytics.program_config import STANDING_PROGRAMS, reporting_today
@@ -694,6 +694,20 @@ def register_pastor_report_routes(app) -> None:
             )
             generated = data["generated_at"].strftime("%d %b %Y %H:%M %Z")
             actions = Div(
+                Button(
+                    Icon("share-fill", cls="me-1"),
+                    "Share scoped report link",
+                    variant="success",
+                    size="md",
+                    onclick="""(function(){
+                        const reportUrl = window.location.href;
+                        if (navigator.share) {
+                            navigator.share({title: 'Pastor Report', url: reportUrl}).catch(()=>{});
+                        } else {
+                            window.open('https://api.whatsapp.com/send?text=' + encodeURIComponent(reportUrl), '_blank');
+                        }
+                    })()""",
+                ),
                 Button("Print / Save PDF", variant="primary", size="md", onclick="fetch('/dashboard/pastor-report/record-print?" + urlencode({"scope_path": data["scope_path"], "period": data["period"], "include_pending": str(data["include_pending"]).lower(), "campaign_id": selected_campaign_id, "event_mode": selected_event_mode}) + "',{credentials:'same-origin'}).then(r=>{if(!r.ok)throw new Error('Could not record report access');window.print()}).catch(e=>alert(e.message))"),
                 A("Download PDF", href=scope_link(ctx, "/dashboard/pastor-report/export.pdf", scope_path=data["scope_path"], period=data["period"], include_pending=str(data["include_pending"]).lower(), campaign_id=selected_campaign_id, event_mode=selected_event_mode), cls="btn btn-outline-primary"),
                 A("Export Excel", href=scope_link(ctx, "/dashboard/pastor-report/export.xlsx", scope_path=data["scope_path"], period=data["period"], include_pending=str(data["include_pending"]).lower(), campaign_id=selected_campaign_id, event_mode=selected_event_mode), cls="btn btn-outline-primary"),
@@ -725,7 +739,7 @@ def register_pastor_report_routes(app) -> None:
             await audit(request, data, "xlsx")
         except (BackendClientError, ValueError) as exc:
             return Response(str(exc), status_code=502, media_type="text/plain")
-        return Response(content, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f"attachment; filename=pastor-report-{data['start_date']}-{data['end_date']}.xlsx"})
+        return Response(content, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Cache-Control": "private, no-cache, no-store, must-revalidate", "Content-Disposition": f"attachment; filename=pastor-report-{data['start_date']}-{data['end_date']}.xlsx"})
 
     @app.get("/dashboard/pastor-report/record-print")
     async def pastor_report_record_print(request: Request, period: str = "4w", include_pending: bool = False, campaign_id: str = "", event_mode: str = ""):
@@ -748,7 +762,7 @@ def register_pastor_report_routes(app) -> None:
             await audit(request, data, "csv_zip")
         except (BackendClientError, ValueError) as exc:
             return Response(str(exc), status_code=502, media_type="text/plain")
-        return Response(content, media_type="application/zip", headers={"Content-Disposition": f"attachment; filename=pastor-report-{data['start_date']}-{data['end_date']}-csv.zip"})
+        return Response(content, media_type="application/zip", headers={"Cache-Control": "private, no-cache, no-store, must-revalidate", "Content-Disposition": f"attachment; filename=pastor-report-{data['start_date']}-{data['end_date']}-csv.zip"})
 
     @app.get("/dashboard/pastor-report/export.pdf")
     async def pastor_report_pdf(request: Request, period: str = "4w", include_pending: bool = False, campaign_id: str = "", event_mode: str = ""):
@@ -760,4 +774,4 @@ def register_pastor_report_routes(app) -> None:
             await audit(request, data, "pdf")
         except (BackendClientError, ImportError, ValueError) as exc:
             return Response(f"PDF export failed: {exc}", status_code=502, media_type="text/plain")
-        return Response(content, media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename=pastor-report-{data['start_date']}-{data['end_date']}.pdf"})
+        return Response(content, media_type="application/pdf", headers={"Cache-Control": "private, no-cache, no-store, must-revalidate", "Content-Disposition": f"attachment; filename=pastor-report-{data['start_date']}-{data['end_date']}.pdf"})

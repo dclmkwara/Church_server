@@ -1476,7 +1476,7 @@ def register_system_routes(app) -> None:
     async def system_notification_status_update(request: Request, notification_id: str):
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
+        ctx = build_context(request)
         if not _system_allowed(ctx, 5):
             return P("This action is not available for the current level.", cls="text-muted")
         status_filter = data.get("status_filter", "all")
@@ -1617,7 +1617,7 @@ def register_system_routes(app) -> None:
     async def system_public_contact_review_submit(request: Request, submission_id: str):
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
+        ctx = build_context(request)
         if not _system_allowed(ctx, 5):
             return P("This action is not available for the current level.", cls="text-muted")
         row = await SystemService.review_public_contact(request, submission_id, status=data.get("status", "reviewed"), review_note=data.get("review_note", ""))
@@ -1672,7 +1672,7 @@ def register_system_routes(app) -> None:
     async def system_public_prayer_review_submit(request: Request, submission_id: str):
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
+        ctx = build_context(request)
         if not _system_allowed(ctx, 5):
             return P("This action is not available for the current level.", cls="text-muted")
         row = await SystemService.review_public_prayer(request, submission_id, status=data.get("status", "reviewed"), review_note=data.get("review_note", ""))
@@ -1770,7 +1770,7 @@ def register_system_routes(app) -> None:
     async def system_sync_conflict_resolve_submit(request: Request, conflict_id: str):
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
+        ctx = build_context(request)
         if not _system_allowed(ctx, 5):
             return P("This action is not available for the current level.", cls="text-muted")
         resolution = data.get("resolution", "keep_server")
@@ -1919,7 +1919,7 @@ def register_system_routes(app) -> None:
     async def create_app_version(request: Request):
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
+        ctx = build_context(request)
         if not _system_allowed(ctx, 7):
             return P("This action is not available for the current level.", cls="text-muted")
         row = await SystemService.create_app_version(request, data) if await SystemService.live_enabled(request) else STORE.add_app_version(data, actor_name=ctx.profile.user_name)
@@ -1979,7 +1979,7 @@ def register_system_routes(app) -> None:
     async def system_activate_app_version(request: Request, version_id: str):
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
+        ctx = build_context(request)
         if not _system_allowed(ctx, 5):
             return P("This action is not available for the current level.", cls="text-muted")
         row = (

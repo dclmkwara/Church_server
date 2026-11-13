@@ -320,6 +320,9 @@ class AdminContext:
             return f"{self.current_scope_label} Continental Dashboard"
         return f"{self.current_scope_label} Dashboard"
 
+    # Keys that must never appear in navigation URLs (PII / unnecessary exposure)
+    _URL_EXCLUDED_KEYS = frozenset({"user_name", "role_label"})
+
     def query_dict(self) -> dict[str, str]:
         data = {"profile": self.profile.key}
         data.update(self.query_extras)
@@ -331,6 +334,9 @@ class AdminContext:
             value = self.selected.get(field)
             if value:
                 data[field] = value
+        # Strip any PII fields that may have arrived via legacy query_extras paths
+        for excluded in self._URL_EXCLUDED_KEYS:
+            data.pop(excluded, None)
         return data
 
     def url_for(self, path: str, **overrides: str | None) -> str:
@@ -398,10 +404,11 @@ def _backend_context(source: Request | Mapping[str, Any]) -> AdminContext | None
         current_scope_path=active_path,
         permissions=getattr(identity, "permissions", frozenset()) if identity else frozenset(),
         query_extras={
+            # NOTE: user_name and role_label intentionally omitted — they would leak PII
+            # into browser history, copied links, and proxy/CDN access logs.
+            # Authorization relies on the session cookie, not URL params.
             "scope_kind": active_kind,
             "scope_label": active_label,
-            "user_name": user_name,
-            "role_label": role_label,
             "role_score": str(profile.level),
             "home_path": maximum_scope_path,
             "scope_path": active_path,

@@ -157,7 +157,15 @@ class BackendAuthMiddleware(BaseHTTPMiddleware):
                     await AuthService.clear_identity(resp)
                     return resp
 
-        if request.method == "GET" and "profile" not in request.query_params:
+        # Skip the profile-redirect for file exports: they carry auth via session cookie
+        # and must never receive a 303 that a CDN edge (Cloudflare, etc.) can cache.
+        _EXPORT_SUFFIXES = (".xlsx", ".csv", ".pdf", ".zip")
+        _is_export = (
+            any(path.endswith(s) for s in _EXPORT_SUFFIXES)
+            or "/export" in path
+            or "/record-print" in path
+        )
+        if request.method == "GET" and "profile" not in request.query_params and not _is_export:
             profile_key = AuthService.get_profile_key(request)
             if profile_key:
                 params = dict(request.query_params)
@@ -261,20 +269,7 @@ elif hasattr(getattr(app, "router", None), "on_shutdown"):
 
 
 
-@app.get("/sw.js")
-def service_worker():
-    script = """
-self.addEventListener('install', (event) => {
-  self.skipWaiting();
-});
-
-self.addEventListener('activate', (event) => {
-  event.waitUntil(self.clients.claim());
-});
-
-self.addEventListener('fetch', () => {});
-""".strip()
-    return Response(content=script, media_type="application/javascript")
+# /sw.js is provided by FastStrap's add_pwa(service_worker=True) above — no manual duplicate needed.
 
 
 @app.get("/partials/notifications")

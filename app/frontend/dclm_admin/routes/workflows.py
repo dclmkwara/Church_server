@@ -484,7 +484,7 @@ def register_workflow_routes(app) -> None:
     async def create_request(request: Request):
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
+        ctx = build_context(request)
         request_type = data.get("request_type", "").strip()
         worker_id = data.get("worker_id", "").strip()
         reason = data.get("reason", "").strip()
@@ -634,7 +634,7 @@ def register_workflow_routes(app) -> None:
     async def act_request(request: Request, request_id: str):
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
+        ctx = build_context(request)
         action = data.get("action", "approve")
         try:
             row = await WorkflowService.act_request(request, ctx, request_id, action, data.get("notes", ""))

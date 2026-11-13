@@ -11,7 +11,7 @@ from starlette.requests import Request
 from starlette.exceptions import HTTPException
 from starlette.responses import Response
 
-from faststrap import Button, PlaceholderCard, Spinner
+from faststrap import Button, Icon, PlaceholderCard, Spinner
 
 from ..backend import BackendClientError
 from ..auth_context import build_context
@@ -27,6 +27,7 @@ from app.services.analytics.program_config import reporting_today
 
 
 REPORT_TABS = [
+    ("overview", "Overview"),
     ("summary", "Summary"),
     ("financial", "Financial"),
     ("attendance", "Attendance"),
@@ -310,7 +311,6 @@ async def _summary_tab(request: Request, ctx) -> Div:
                 results_id="reports-summary-table",
             ),
         ),
-        Div(id="reports-refresh-feedback"),
     )
 
 
@@ -325,6 +325,108 @@ def _dedicated_report_link(ctx, title: str, definition: str, path: str, action: 
             cls="d-flex flex-column align-items-start",
         ),
     )
+
+
+def _overview_card(title: str, definition: str, links: list[tuple[str, str]], note: str = "") -> Div:
+    actions = [
+        Button(label, variant="outline-primary", size="md", href=path)
+        for label, path in links
+    ]
+    compact_actions = Div(
+        *actions,
+        cls="reports-overview-actions d-flex flex-wrap gap-2",
+        role="group",
+        aria_label=f"{title} options",
+        tabindex="0",
+    )
+    return section_card(
+        title,
+        definition,
+        Div(
+            P(note, cls="small text-muted mb-3") if note else None,
+            compact_actions,
+        ),
+    )
+
+
+async def _overview_tab(request: Request, ctx) -> Div:
+    start_date, end_date = _report_window(request)
+    weeks = "8" if request.query_params.get("weeks") == "8" else "4"
+    cards: list[Div] = []
+
+    if ctx.has_permission("counts:read"):
+        weekly_links = [
+            (label, scope_link(
+                ctx,
+                "/church-data/population-attendance",
+                scope_path=ctx.current_scope_path,
+                program_key=program_key,
+                weeks=weeks,
+                include_pending=str(request.query_params.get("include_pending") or "false").lower(),
+            ))
+            for label, program_key in (
+                ("Sunday Worship", "sunday_worship_service"),
+                ("Monday Bible Study", "monday_bible_study"),
+                ("Thursday Revival", "thursday_revival_hour"),
+            )
+        ]
+        cards.append(_overview_card(
+            "Weekly attendance",
+            "Separate reports for each weekly service.",
+            weekly_links,
+        ))
+
+    if ctx.has_permission("programs:read"):
+        cards.append(_overview_card(
+            "Special events",
+            "Retreat and Crusade reports.",
+            [
+                ("Retreat", scope_link(ctx, "/church-data/programs/analytics/retreat", scope_path=ctx.current_scope_path)),
+                ("Crusade", scope_link(ctx, "/church-data/programs/analytics/crusade", scope_path=ctx.current_scope_path)),
+            ],
+        ))
+
+    if ctx.has_permission("offerings:read"):
+        cards.append(_overview_card(
+            "Money",
+            "Offerings and tithes.",
+            [("Money records", scope_link(ctx, "/church-data/finance", scope_path=ctx.current_scope_path, date_from=start_date, date_to=end_date))],
+        ))
+
+    if ctx.has_permission("records:read"):
+        cards.append(_overview_card(
+            "New people",
+            "Newcomer and convert follow-up.",
+            [("Newcomers", scope_link(ctx, "/church-data/newcomers", scope_path=ctx.current_scope_path))],
+        ))
+
+    if ctx.has_permission("attendance:read"):
+        cards.append(_overview_card(
+            "Worker and leader meetings",
+            "Separate meeting attendance reports.",
+            [
+                ("Saturday Workers", scope_link(ctx, "/church-data/meetings", scope_path=ctx.current_scope_path, tab="saturday")),
+                ("Tuesday Leaders", scope_link(ctx, "/church-data/meetings", scope_path=ctx.current_scope_path, tab="tuesday")),
+            ],
+        ))
+
+    if ctx.has_permission("reports:read"):
+        cards.append(_overview_card(
+            "Print a report",
+            "Print or download a scoped summary.",
+            [
+                ("4 weeks", scope_link(ctx, "/dashboard/pastor-report", scope_path=ctx.current_scope_path, period="4w")),
+                ("8 weeks", scope_link(ctx, "/dashboard/pastor-report", scope_path=ctx.current_scope_path, period="8w")),
+            ],
+        ))
+
+    if not cards:
+        return Div(
+            empty_state("clipboard-data", "No reports available", "Your assigned role has no report sections available in this scope."),
+            id="reports-overview",
+        )
+
+    return Div(*cards, cls="d-grid gap-3", id="reports-overview")
 
 
 async def _financial_tab(request: Request, ctx) -> Div:
@@ -434,7 +536,7 @@ async def _exports_tab(request: Request, ctx) -> Div:
 
 def _active_report_tab(tab: str) -> str:
     valid = {key for key, _label in REPORT_TABS}
-    return tab if tab in valid else "summary"
+    return tab if tab in valid else "overview"
 
 
 async def _report_tab_nav(ctx, active_tab: str, start_date: str, end_date: str, include_pending: bool = False) -> Div:
@@ -459,6 +561,7 @@ async def _report_tab_nav(ctx, active_tab: str, start_date: str, end_date: str, 
 
 async def _report_tab_content(request: Request, ctx, active_tab: str) -> Div:
     tab_views = {
+        "overview": _overview_tab,
         "summary": _summary_tab,
         "financial": _financial_tab,
         "attendance": _attendance_tab,
@@ -493,34 +596,43 @@ async def _reports_content(request: Request, ctx, active_tab: str) -> Div:
     include_pending = str(request.query_params.get("include_pending") or "").lower() in {"1", "true", "yes", "on"}
     tab_nav = await _report_tab_nav(ctx, active_tab, start_date, end_date, include_pending)
     tab_content = await _report_tab_content(request, ctx, active_tab)
+    date_and_tab_controls = Form(
+        Div(Label("From", fr="report-start-date", cls="form-label"), Input(type="date", id="report-start-date", name="start_date", value=start_date, cls="form-control"), cls="col-12 col-md-4"),
+        Div(Label("To", fr="report-end-date", cls="form-label"), Input(type="date", id="report-end-date", name="end_date", value=end_date, cls="form-control"), cls="col-12 col-md-4"),
+        Div(Button("Apply dates", variant="primary", size="md", type="submit"), cls="col-12 col-md-4 d-flex align-items-end"),
+        Input(type="hidden", name="profile", value=ctx.profile.key),
+        Input(type="hidden", name="tab", value=active_tab),
+        Input(type="hidden", name="include_pending", value=str(include_pending).lower()),
+        *[
+            Input(type="hidden", name=name, value=value)
+            for name, value in ctx.query_extras.items()
+            if name not in {"start_date", "end_date", "profile", "include_pending"} and value
+        ],
+        tab_nav,
+        action="/reports",
+        method="get",
+        hx_get=ctx.url_for("/reports/content", tab=active_tab, start_date=start_date, end_date=end_date, include_pending=str(include_pending).lower()),
+        hx_target="#reports-content",
+        hx_swap="outerHTML",
+        hx_push_url="true",
+        cls="row g-3 align-items-end mb-3",
+    )
+    if active_tab == "overview":
+        return Div(
+            tab_content,
+            section_card(
+                "More reports",
+                None,
+                date_and_tab_controls,
+            ),
+            id="reports-content",
+            cls="d-grid gap-3",
+        )
     return Div(
         section_card(
             "Report categories",
             "Switch between summary, financial, attendance, trends, and exports.",
-            Div(
-                Form(
-                    Div(Label("From", fr="report-start-date", cls="form-label"), Input(type="date", id="report-start-date", name="start_date", value=start_date, cls="form-control"), cls="col-12 col-md-4"),
-                    Div(Label("To", fr="report-end-date", cls="form-label"), Input(type="date", id="report-end-date", name="end_date", value=end_date, cls="form-control"), cls="col-12 col-md-4"),
-                    Div(Button("Apply dates", variant="primary", size="md", type="submit"), cls="col-12 col-md-4 d-flex align-items-end"),
-                    Input(type="hidden", name="profile", value=ctx.profile.key),
-                    Input(type="hidden", name="tab", value=active_tab),
-                    Input(type="hidden", name="include_pending", value=str(include_pending).lower()),
-                    *[
-                        Input(type="hidden", name=name, value=value)
-                        for name, value in ctx.query_extras.items()
-                        if name not in {"start_date", "end_date", "profile", "include_pending"} and value
-                    ],
-                    action="/reports",
-                    method="get",
-                    hx_get=ctx.url_for("/reports/content", tab=active_tab, start_date=start_date, end_date=end_date, include_pending=str(include_pending).lower()),
-                    hx_target="#reports-content",
-                    hx_swap="outerHTML",
-                    hx_push_url="true",
-                    cls="row g-3 align-items-end mb-3",
-                ),
-                tab_nav,
-                tab_content,
-            ),
+            Div(date_and_tab_controls, tab_content),
         ),
         id="reports-content",
     )
@@ -528,7 +640,7 @@ async def _reports_content(request: Request, ctx, active_tab: str) -> Div:
 
 def register_report_routes(app) -> None:
     @app.get("/reports")
-    async def reports_page(request: Request, tab: str = "summary", start_date: str = "", end_date: str = ""):
+    async def reports_page(request: Request, tab: str = "overview", start_date: str = "", end_date: str = ""):
         ctx = active_scope_context(request, build_context(request))
         if ctx.level < 2 or not ctx.has_permission("reports:read"):
             body = page_stack(section_card(
@@ -550,20 +662,22 @@ def register_report_routes(app) -> None:
         body = page_stack(
             page_intro(
                 "Reports",
-                "Keep reporting readable and scoped, with summary first and exports available without leaving the hub.",
-                scope_label=ctx.current_scope_label,
-                scope_kind=ctx.current_scope_kind,
+                "Choose a report.",
             ),
             _reports_loading_content(ctx, _active_report_tab(tab), *_report_window(request), str(request.query_params.get("include_pending") or "").lower() in {"1", "true", "yes", "on"}),
+            Div(id="reports-refresh-feedback"),
         )
         refresh_button = Button(
-            "Refresh Reports",
+            Icon("arrow-clockwise"),
             variant="primary",
             size="md",
             type="button",
+            aria_label="Refresh reports",
+            title="Refresh reports",
             hx_post=ctx.url_for("/reports/refresh"),
             hx_target="#reports-refresh-feedback",
             hx_swap="innerHTML",
+            cls="reports-refresh-button",
         )
         if not ctx.has_permission("reports:refresh"):
             refresh_button = None
@@ -572,7 +686,7 @@ def register_report_routes(app) -> None:
             request_path=request.url.path,
             active_key="reports",
             title="Reports",
-            subtitle="Summary, trends, anomalies, and exports.",
+            subtitle="",
             primary_action=Div(
                 A("Pastor’s report / export", href=scope_link(ctx, "/dashboard/pastor-report", scope_path=ctx.current_scope_path, period="4w"), cls="btn btn-outline-primary"),
                 refresh_button,

@@ -9,7 +9,7 @@ from fasthtml.common import A, Div, Footer, Form, H1, Img, Input, Link, P, Scrip
 from starlette.requests import Request
 from starlette.responses import RedirectResponse
 
-from faststrap import Alert, Badge, Button, Card, Icon
+from faststrap import Alert, Badge, Button, Card, Icon, Input as FsInput
 
 from ..backend import BackendClientError, get_backend_config
 from ..communication import AuthService
@@ -75,16 +75,8 @@ def _login_form(*, next_path: str, error: str | None = None):
             P(error, cls="small text-danger fw-semibold mb-3") if error else "",
             Form(
                 Input(type="hidden", name="next", value=next_path),
-                Div(
-                    P("Email address", cls="small text-muted mb-1"),
-                    Input(type="email", name="email", placeholder="name@example.com", required=True, cls="form-control form-control-lg"),
-                    cls="mb-3",
-                ),
-                Div(
-                    P("Password", cls="small text-muted mb-1"),
-                    Input(type="password", name="password", placeholder="Enter your password", required=True, cls="form-control form-control-lg"),
-                    cls="mb-3",
-                ),
+                FsInput("email", input_type="email", label="Email address", placeholder="name@example.com", required=True, cls="mb-3"),
+                FsInput("password", input_type="password", label="Password", placeholder="Enter your password", required=True, cls="mb-3"),
                 Button(
                     "Sign in",
                     Icon("box-arrow-in-right", cls="ms-2"),

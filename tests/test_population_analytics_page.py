@@ -52,6 +52,7 @@ def test_population_page_drilldown_keeps_program_period_pending_and_scope(monkey
     assert "weeks=8" in html
     assert "include_pending=true" in html
     assert "No counted report" not in html
+    assert "% of documented population" not in html
 
 
 def test_house_fellowship_page_discloses_unit_and_no_review_status(monkeypatch):

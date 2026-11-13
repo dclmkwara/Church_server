@@ -1,4 +1,4 @@
-"""State-only maintenance screen for versioned Sunday attendance estimates."""
+"""State-only maintenance screen for versioned location population estimates."""
 from __future__ import annotations
 
 import csv
@@ -6,8 +6,8 @@ import io
 from datetime import date
 from html import escape
 
-from fasthtml.common import A, Div, Form, H1, H2, Input, P, Table, Tbody, Td, Textarea, Th, Thead, Tr
-from faststrap import Alert, Button, Input as FsInput
+from fasthtml.common import A, Div, Form, H1, H2, H3, Input, Label, P, Span, Table, Tbody, Td, Textarea, Th, Thead, Tr
+from faststrap import Alert, Badge, Button, Card, Input as FsInput
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse, RedirectResponse
 
@@ -42,6 +42,64 @@ def _expected_population_template_csv(payload: dict) -> str:
     return output.getvalue()
 
 
+def _estimate_mobile_cards(locations: list[dict]) -> list:
+    cards = []
+    for location in locations:
+        current = location.get("expected_value")
+        location_id = str(location.get("location_id") or "")
+        location_name = str(location.get("location_name") or "Location")
+        location_code = str(location.get("location_code") or "")
+
+        estimate_badge = Badge(
+            f"{int(current):,} on paper" if current is not None else "No estimate yet",
+            variant="primary" if current is not None else "secondary",
+            cls="small",
+        )
+
+        cards.append(
+            Card(
+                Div(
+                    Div(
+                        H3(location_name, cls="h6 fw-bold mb-0"),
+                        Span(location_code, cls="badge bg-light text-secondary border small"),
+                        cls="d-flex align-items-center justify-content-between mb-2",
+                    ),
+                    Div(
+                        Span("Current:", cls="small text-muted me-2"),
+                        estimate_badge,
+                        Span(f"Effective: {location.get('effective_from') or '—'}", cls="small text-muted ms-auto"),
+                        cls="d-flex align-items-center mb-3",
+                    ),
+                    Form(
+                        Input(type="hidden", name="location_id", value=location_id),
+                        Div(
+                            Label("Documented population", cls="form-label small text-muted mb-1"),
+                            Input(type="number", name="expected_value", min="0", max="10000000", required=True, value="" if current is None else str(current), cls="form-control form-control-sm", aria_label=f"Documented population for {location_name}"),
+                            cls="mb-2",
+                        ),
+                        Div(
+                            Label("Effective From Date", cls="form-label small text-muted mb-1"),
+                            Input(type="date", name="effective_from", required=True, value=date.today().isoformat(), cls="form-control form-control-sm", aria_label="Effective from date"),
+                            cls="mb-2",
+                        ),
+                        Div(
+                            Label("Note / Reason (Optional)", cls="form-label small text-muted mb-1"),
+                            Input(type="text", name="note", maxlength="2000", placeholder="Reason or source", cls="form-control form-control-sm", aria_label="Note"),
+                            cls="mb-2",
+                        ),
+                        Button("Save new version", type="submit", variant="primary", size="sm", cls="w-100 mt-2"),
+                        method="post",
+                        action="/analytics/expected-population",
+                        cls="expected-population-edit-form",
+                    ),
+                    cls="p-3",
+                ),
+                cls="border shadow-sm mb-3",
+            )
+        )
+    return cards
+
+
 def _estimate_rows(locations: list[dict]) -> list:
     rows = []
     for location in locations:
@@ -57,7 +115,7 @@ def _estimate_rows(locations: list[dict]) -> list:
         ]
         history_table = (
             Table(
-                Thead(Tr(Th("Effective from"), Th("Expected attendance", cls="text-end"), Th("Set by"), Th("Note"))),
+                Thead(Tr(Th("Effective from"), Th("Documented population", cls="text-end"), Th("Set by"), Th("Note"))),
                 Tbody(*history_rows),
                 cls="table table-sm align-middle",
             )
@@ -75,7 +133,7 @@ def _estimate_rows(locations: list[dict]) -> list:
             Td(
                 Form(
                     Input(type="hidden", name="location_id", value=location_id),
-                    Input(type="number", name="expected_value", min="0", max="10000000", required=True, value="" if current is None else str(current), cls="form-control form-control-sm", aria_label=f"Expected Sunday attendance for {location.get('location_name')}"),
+                    Input(type="number", name="expected_value", min="0", max="10000000", required=True, value="" if current is None else str(current), cls="form-control form-control-sm", aria_label=f"Documented population for {location.get('location_name')}"),
                     Input(type="date", name="effective_from", required=True, value=date.today().isoformat(), cls="form-control form-control-sm mt-2", aria_label="Effective from date"),
                     Input(type="text", name="note", maxlength="2000", placeholder="Reason or source (optional)", cls="form-control form-control-sm mt-2", aria_label="Note"),
                     Button("Save new version", type="submit", variant="primary", size="sm", cls="mt-2"),
@@ -141,7 +199,7 @@ def register_expected_population_routes(app) -> None:
     async def expected_population_page(request: Request):
         ctx = active_scope_context(request, build_context(request))
         if not _can_manage_expected_population(ctx):
-            content = empty_state("shield-lock", "State leadership access required", "Your account cannot maintain expected Sunday attendance estimates.")
+            content = empty_state("shield-lock", "State leadership access required", "Your account cannot maintain documented population estimates.")
         else:
             client = async_client(get_api_client())
             try:
@@ -150,29 +208,32 @@ def register_expected_population_routes(app) -> None:
                 )
                 locations = payload.get("locations") or []
                 estimate_count = sum(1 for item in locations if item.get("expected_value") is not None)
+                desktop_table = Div(
+                    Table(
+                        Thead(Tr(Th("Location"), Th("Current estimate", cls="text-end"), Th("Effective from"), Th("Add a version"), Th("Version history"))),
+                        Tbody(*_estimate_rows(locations)),
+                        cls="table table-hover align-middle",
+                    ),
+                    P("Swipe to see all estimate columns", cls="analytics-scroll-hint small text-muted"),
+                    cls="table-responsive expected-population-table d-none d-lg-block",
+                )
+                mobile_cards = Div(*_estimate_mobile_cards(locations), cls="d-lg-none")
                 body = (
-                    Div(
-                        Table(
-                            Thead(Tr(Th("Location"), Th("Current estimate", cls="text-end"), Th("Effective from"), Th("Add a version"), Th("Version history"))),
-                            Tbody(*_estimate_rows(locations)),
-                            cls="table table-hover align-middle",
-                        ),
-                        P("Swipe to see all estimate columns", cls="analytics-scroll-hint small text-muted"),
-                        cls="table-responsive expected-population-table",
-                    )
+                    Div(desktop_table, mobile_cards)
                     if locations else empty_state("geo-alt", "No locations in this State", "Add locations to the hierarchy before setting attendance estimates.")
                 )
                 content = page_stack(
-                    page_intro("Expected Sunday attendance", "Set a dated estimate for each location. Saving always adds a version and preserves the earlier history.", scope_label=ctx.current_scope_label, scope_kind=ctx.current_scope_kind),
-                    P("Estimates are used only for Sunday Worship. The percentage is pooled from counted location reports that have an estimate; missing reports are not treated as zero.", cls="text-muted"),
-                    Alert("No estimates yet. Enter each location's expected Sunday attendance below.", variant="info", role="status") if estimate_count == 0 and locations else None,
+                    page_intro("Documented population", "The location’s on-paper population estimate; attendance can exceed it (visitors, guests). Set a dated estimate for each location. Saving adds a version and preserves earlier history.", scope_label=ctx.current_scope_label, scope_kind=ctx.current_scope_kind),
+                    P("This estimate is currently used for Sunday Worship summaries. Its percentage is pooled from counted location reports that have an estimate; missing reports are not treated as zero.", cls="text-muted"),
+                    Alert("No estimates yet. Enter each location’s documented population below.", variant="info", role="status") if estimate_count == 0 and locations else None,
                     section_card(
-                        "Bulk upload expected attendance",
+                        "Bulk upload documented population",
                         "Paste CSV or upload a CSV file. Use a full hierarchy path when a local location code is repeated. Preview checks every code and value before saving.",
                         Div(
                             A("Download CSV template", href="/analytics/expected-population/template.csv", cls="btn btn-outline-secondary btn-sm mb-3"),
                             Form(
-                                Textarea(name="csv_text", placeholder="location_code,expected_attendance,effective_from,note", rows="5", cls="form-control mb-3", aria_label="Paste expected attendance CSV"),
+                                Textarea(name="csv_text", placeholder="location_code,expected_attendance,effective_from,note", rows="5", cls="form-control mb-3", aria_label="Paste documented population CSV"),
+                                P("In the CSV, expected_attendance is the documented population value.", cls="small text-muted mb-3"),
                                 FsInput("file", input_type="file", label="Or upload a CSV file", accept=".csv,text/csv"),
                                 Button("Preview CSV", type="submit", variant="outline-primary", size="sm", cls="mt-3"),
                                 method="post", action="/analytics/expected-population/bulk-preview",
@@ -187,10 +248,10 @@ def register_expected_population_routes(app) -> None:
                     A("Back to dashboard", href="/dashboard", cls="btn btn-outline-primary admin-inline-btn"),
                 )
             except BackendClientError as exc:
-                content = section_card("Expected Sunday attendance", "Estimates could not be loaded.", P(str(exc), role="alert", cls="text-danger mb-0"))
+                content = section_card("Documented population", "Estimates could not be loaded.", P(str(exc), role="alert", cls="text-danger mb-0"))
         return shell_layout(
             ctx, request_path=request.url.path, active_key="expected-population",
-            title="Expected Sunday attendance", subtitle="Versioned location estimates.",
+            title="Documented population", subtitle="Versioned location estimates.",
             primary_action=None, content=content, show_shell_intro=False,
         )
 
@@ -198,7 +259,7 @@ def register_expected_population_routes(app) -> None:
     async def expected_population_save(request: Request):
         ctx = active_scope_context(request, build_context(request))
         if not _can_manage_expected_population(ctx):
-            return Div(P("Your account cannot change expected Sunday attendance.", role="alert", cls="text-danger"))
+            return Div(P("Your account cannot change documented population estimates.", role="alert", cls="text-danger"))
         form = await request.form()
         try:
             location_id = str(form.get("location_id") or "")

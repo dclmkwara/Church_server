@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from html import escape
 from types import SimpleNamespace
 
 from fasthtml.common import to_xml
@@ -29,7 +30,7 @@ def test_menu_items_are_permission_and_level_filtered_for_all_eight_personas(mon
             if _nav_item_visible(ctx, {"module": group["module"], **item}, backend_mode=False)
         }
         for label in visible:
-            assert label in rendered, f"{key} is missing visible menu item {label}"
+            assert escape(label) in rendered, f"{key} is missing visible menu item {label}"
         assert "Officials" not in rendered  # live support remains intentionally disabled
         if "counts:review" not in ctx.permissions:
             assert "Count Review" not in visible
@@ -75,7 +76,7 @@ def test_current_page_urls_remain_registered_without_breaking_existing_bookmarks
     registered = {getattr(route, "path", "") for route in app.routes}
     legacy_page_urls = {
         "/dashboard", "/dashboard/pastor-report", "/reports", "/inbox",
-        "/people/workers", "/people/members", "/people/users", "/fellowship",
+        "/people", "/people/workers", "/people/members", "/people/users", "/fellowship",
         "/organization", "/church-data/programs", "/church-data/counts",
         "/church-data/count-review", "/church-data/meetings/workers-saturday",
         "/church-data/meetings/leaders-tuesday", "/church-data/finance",
@@ -121,9 +122,10 @@ def test_mobile_shortcuts_follow_the_same_read_permissions(monkeypatch):
         ctx = build_context({"profile": persona})
         rendered = to_xml(_mobile_bottom_nav(ctx, "dashboard"))
         assert "Home" in rendered and "Menu" in rendered
-        assert ("People" in rendered) == ctx.has_permission("workers:read")
-        assert ("Church" in rendered) == ctx.has_permission("programs:read")
-        assert ("Finance" in rendered) == ctx.has_permission("offerings:read")
+        assert "People" in rendered
+        is_pastor = persona.endswith("pastor") or persona == "state_overseer"
+        assert ("Church" in rendered) == (ctx.has_permission("programs:read") and not is_pastor)
+        assert ("Finance" in rendered) == (ctx.has_permission("offerings:read") and not is_pastor)
 
 
 def test_sidebar_has_no_dead_docs_link_or_nonfunctional_global_search(monkeypatch):

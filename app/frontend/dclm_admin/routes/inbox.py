@@ -268,7 +268,7 @@ def register_inbox_routes(app) -> None:
     async def inbox_act(request: Request, item_id: str):
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
+        ctx = build_context(request)
         action = data.get("action", "approve")
         kind = data.get("kind", "all")
         notes = data.get("notes", "")

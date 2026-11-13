@@ -108,10 +108,10 @@ async def _build_expected_population_bulk_preview(
     lock_locations: bool = False,
 ) -> dict[str, Any]:
     if not _can_manage_expected_population(current_user):
-        raise HTTPException(status_code=403, detail="Only the State Overseer can maintain expected Sunday attendance")
+        raise HTTPException(status_code=403, detail="Only the State Overseer can maintain documented population estimates")
     scope_path = deps.effective_scope_path(current_user)
     if len([part for part in scope_path.split(".") if part]) != 3:
-        raise HTTPException(status_code=403, detail="Expected Sunday attendance can only be maintained at State scope")
+        raise HTTPException(status_code=403, detail="Documented population estimates can only be maintained at State scope")
 
     parsed, parse_errors = parse_expected_population_csv(csv_text)
     response_rows: list[dict[str, Any]] = []
@@ -178,7 +178,7 @@ async def _build_expected_population_bulk_preview(
                 raise ValueError
         except (TypeError, ValueError):
             attendance = None
-            row_errors.append("Expected attendance must be a whole number from 0 to 10,000,000.")
+            row_errors.append("Documented population must be a whole number from 0 to 10,000,000.")
             invalid_values = True
         try:
             effective = date.fromisoformat(row["effective_from_raw"])
@@ -817,10 +817,10 @@ async def create_expected_population_version(
 ) -> dict[str, Any]:
     """Append a version; never overwrite a historical expectation."""
     if not _can_manage_expected_population(current_user):
-        raise HTTPException(status_code=403, detail="Expected Sunday attendance management is not permitted for this account")
+        raise HTTPException(status_code=403, detail="Documented population management is not permitted for this account")
     scope_path = deps.effective_scope_path(current_user)
     if len([part for part in scope_path.split(".") if part]) != 3:
-        raise HTTPException(status_code=403, detail="Expected Sunday attendance can only be maintained at State scope")
+        raise HTTPException(status_code=403, detail="Documented population estimates can only be maintained at State scope")
     location_result = await db.execute(
         select(Location).where(
             Location.location_id == str(payload.location_id),
@@ -889,7 +889,7 @@ async def apply_expected_population_bulk(
 ) -> dict[str, Any]:
     """Apply exactly the signed preview after rechecking scope and current versions."""
     if not _can_manage_expected_population(current_user):
-        raise HTTPException(status_code=403, detail="Only the State Overseer can maintain expected Sunday attendance")
+        raise HTTPException(status_code=403, detail="Only the State Overseer can maintain documented population estimates")
     try:
         signed = _expected_population_preview_signer.loads(
             payload.preview_token,

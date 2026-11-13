@@ -43,6 +43,36 @@ def _lagos_sunday(today: date | None = None, *, now: datetime | None = None) -> 
     return today - timedelta(days=(today.weekday() + 1) % 7)
 
 
+_DASHBOARD_PROGRAM_WEEKDAYS = {
+    "sunday_worship_service": 6,
+    "monday_bible_study": 0,
+    "thursday_revival_hour": 3,
+}
+_DASHBOARD_PROGRAM_LABELS = {
+    "sunday_worship_service": "Sunday Worship",
+    "monday_bible_study": "Monday Bible Study",
+    "thursday_revival_hour": "Thursday Revival",
+}
+
+
+def _latest_standing_program_date(program: str, today: date) -> date:
+    weekday = _DASHBOARD_PROGRAM_WEEKDAYS[program]
+    return today - timedelta(days=(today.weekday() - weekday) % 7)
+
+
+def _most_recent_standing_program(today: date) -> tuple[str, date]:
+    """Choose the most recent scheduled program date on or before today.
+
+    The schedule has no service-time field, so programs are considered held on
+    their reporting date. Explicit program links take precedence.
+    """
+    candidates = [
+        (program, _latest_standing_program_date(program, today))
+        for program in _DASHBOARD_PROGRAM_WEEKDAYS
+    ]
+    return max(candidates, key=lambda item: item[1])
+
+
 def _scope_level(path: str, fallback: str) -> str:
     depth = max(0, len([part for part in path.split(".") if part]) - 1)
     return {2: "State", 3: "Region", 4: "Group", 5: "Location"}.get(depth, fallback)
@@ -99,7 +129,7 @@ def _coverage_values(payload: dict[str, Any]) -> dict[str, int]:
     }
 
 
-def _line_chart(points: list[dict[str, Any]], selected_weeks: int) -> Any:
+def _line_chart(points: list[dict[str, Any]], selected_weeks: int, program_label: str = "Sunday Worship") -> Any:
     shown = points[-selected_weeks:]
     width, height, left, right = 900, 350, 58, 60
     chart_w = width - left - right
@@ -130,7 +160,7 @@ def _line_chart(points: list[dict[str, Any]], selected_weeks: int) -> Any:
         line_segments.append(current_segment)
     polylines = [" ".join(f"{x:.1f},{y:.1f}" for x, y in segment) for segment in line_segments if len(segment) > 1]
     chart_paths = " | ".join(polylines)
-    svg = f'<svg class="analytics-svg" viewBox="0 0 {width} {height}" role="img" aria-label="Average reported population and reporting coverage by Sunday">'
+    svg = f'<svg class="analytics-svg" viewBox="0 0 {width} {height}" role="img" aria-label="Average reported population and reporting coverage for {escape(program_label)}">'
     for fraction in (0, 0.5, 1):
         y = line_top + (line_bottom - line_top) * fraction
         svg += f'<line x1="{left}" y1="{y:.1f}" x2="{width-right}" y2="{y:.1f}" class="analytics-svg-grid" />'
@@ -151,7 +181,7 @@ def _line_chart(points: list[dict[str, Any]], selected_weeks: int) -> Any:
     svg += '</svg>'
     return Div(
         Div(NotStr(svg), cls="analytics-chart-plot"),
-        P("Blue line: average population per counted location. Green bars: share of expected locations with a counted report (0–100%). A missing week leaves a gap in the line; an approved zero is plotted at zero.", cls="analytics-legend small"),
+        P(f"Blue line: average population per counted location. Green bars: share of expected locations with a counted {program_label} report (0–100%). A missing week leaves a gap in the line; an approved zero is plotted at zero.", cls="analytics-legend small"),
         cls="analytics-chart",
         data_points=chart_paths,
         data_height=height,
@@ -186,7 +216,7 @@ def _metric(label: str, value: str, note: str, classification: str) -> Any:
     )
 
 
-def _coverage_panel(payload: dict[str, Any], occurrence: date, include_pending: bool) -> Any:
+def _coverage_panel(payload: dict[str, Any], occurrence: date, include_pending: bool, program_label: str = "Sunday Worship") -> Any:
     n_expected = _integer(payload.get("n_expected"))
     received = _integer(payload.get("n_received"))
     parts = _coverage_values(payload)
@@ -198,7 +228,7 @@ def _coverage_panel(payload: dict[str, Any], occurrence: date, include_pending: 
     legend = [Span(Span(cls=f"analytics-dot {css}"), f"{label} {parts[key]}", cls="analytics-legend-item") for key, label, css in (("approved", "Approved", "approved"), ("pending", "Pending review", "pending"), ("returned", "Returned", "returned"), ("conflict", "Conflict", "conflict"), ("missing", "Not reported", "missing"))]
     return Div(
         Div(
-                Div(Span(f"Reporting coverage · Sunday Worship · {_short_date(occurrence)}", cls="analytics-kicker"), H2(f"{received} of {n_expected} locations have submitted", cls="analytics-coverage-title")),
+                Div(Span(f"Reporting coverage · {program_label} · {_short_date(occurrence)}", cls="analytics-kicker"), H2(f"{received} of {n_expected} locations have submitted", cls="analytics-coverage-title")),
             P("Totals include pending reports." if include_pending else "Population totals use approved reports only.", cls="analytics-note analytics-align-right"),
             cls="analytics-coverage-head",
         ),
@@ -208,7 +238,8 @@ def _coverage_panel(payload: dict[str, Any], occurrence: date, include_pending: 
     )
 
 
-def _children_table(children: list[dict[str, Any]], rows: list[dict[str, Any]], level: str, ctx: Any) -> Any:
+def _children_table(children: list[dict[str, Any]], rows: list[dict[str, Any]], level: str, ctx: Any, program_label: str = "Sunday Worship") -> Any:
+    include_documented_population = program_label == "Sunday Worship"
     child_label = {"State": "Region", "Region": "Group", "Group": "Location"}.get(level, "Location")
     cells = []
     for child, report in zip(children, rows):
@@ -220,8 +251,8 @@ def _children_table(children: list[dict[str, Any]], rows: list[dict[str, Any]], 
         total = overview.get("total")
         counted = _integer(overview.get("n_counted"))
         average = round(_integer(total) / counted) if total is not None and counted else None
-        expected_population = overview.get("expected_population_total")
-        expected_pct = overview.get("expected_population_percent")
+        expected_population = overview.get("expected_population_total") if include_documented_population else None
+        expected_pct = overview.get("expected_population_percent") if include_documented_population else None
         expected_note = f"{_integer(overview.get('expected_population_counted_locations'))} counted" if expected_population is not None else "No estimate for counted reports"
         no_estimate = _integer(overview.get("expected_population_no_estimate_locations"))
         label = str(child.get("name") or child.get("label") or format_scope_display_id(path) or "Location")
@@ -229,38 +260,43 @@ def _children_table(children: list[dict[str, Any]], rows: list[dict[str, Any]], 
         hx_link = _scope_dashboard_link(ctx, path, fragment=True)
         report_state = f"{received}/{expected} reported"
         latest = "No counted report" if total is None else ("Reported 0" if _integer(total) == 0 else _number(total))
-        cells.append(Tr(
+        row_cells = [
             Td(A(label, href=link, hx_get=hx_link, hx_push_url=link, hx_target="#analytics-dashboard-body", hx_swap="outerHTML", cls="analytics-child-link"), Span(format_scope_display_id(path), cls="analytics-muted analytics-code")),
             Td(Div(Div(cls="analytics-mini-track", style=f"--coverage:{100 * received / max(expected, 1):.2f}%"), Span(report_state, cls="analytics-muted"), cls="analytics-mini-coverage")),
             Td(latest, cls="text-end analytics-numeric"),
             Td("—" if average is None else _number(average), cls="text-end analytics-numeric"),
-            Td("—" if expected_population is None else f"{_number(expected_population)} expected", cls="text-end analytics-numeric", title=expected_note),
-            Td("—" if expected_pct is None else f"{float(expected_pct):.1f}%", cls="text-end analytics-numeric", title=f"{expected_note}; {no_estimate} locations without an estimate"),
+        ]
+        if include_documented_population:
+            row_cells.extend([
+                Td("—" if expected_population is None else f"{_number(expected_population)} expected", cls="text-end analytics-numeric", title=expected_note),
+                Td("—" if expected_pct is None else f"{float(expected_pct):.1f}%", cls="text-end analytics-numeric", title=f"{expected_note}; {no_estimate} locations without an estimate"),
+            ])
+        row_cells.append(
             Td(
                 Span(f"{coverage['pending']} pending" if coverage["pending"] else "", cls="analytics-desktop-review"),
                 Div(
                     Div(Span("Latest report", cls="analytics-mobile-key"), latest),
                     Div(Span("Average per location", cls="analytics-mobile-key"), "—" if average is None else _number(average)),
-                    Div(Span("Documented population", cls="analytics-mobile-key"), "—" if expected_population is None else _number(expected_population)),
-                    Div(Span("% of documented population", cls="analytics-mobile-key"), "—" if expected_pct is None else f"{float(expected_pct):.1f}%"),
+                    *([Div(Span("Documented population", cls="analytics-mobile-key"), "—" if expected_population is None else _number(expected_population)), Div(Span("% of documented population", cls="analytics-mobile-key"), "—" if expected_pct is None else f"{float(expected_pct):.1f}%")] if include_documented_population else []),
                     *([Div(Span("Pending review", cls="analytics-mobile-key"), f"{coverage['pending']} reports")] if coverage["pending"] else []),
                     cls="analytics-mobile-numbers",
                 ),
                 cls="text-end analytics-muted analytics-review-cell",
-            ),
-            cls="analytics-row",
-            data_dashboard_href=link,
-        ))
+            )
+        )
+        cells.append(Tr(*row_cells, cls="analytics-row", data_dashboard_href=link))
     if not cells:
-        cells = [Tr(Td("No lower locations are available in this scope.", colspan="7", cls="analytics-muted"))]
+        cells = [Tr(Td("No lower locations are available in this scope.", colspan="7" if include_documented_population else "5", cls="analytics-muted"))]
+    documented_headers = [Th("Documented population", cls="text-end"), Th("% of documented population", cls="text-end")] if include_documented_population else []
     return Div(
-        Div(H2(f"{child_label}s in this scope", cls="analytics-panel-title"), P("Select a name to open its dashboard. Figures use approved Sunday reports.", cls="analytics-note"), cls="analytics-panel-head"),
-        Div(Table(Thead(Tr(Th(child_label), Th("Latest Sunday report"), Th("Counted population", cls="text-end"), Th("Average per location", cls="text-end"), Th("Expected Sunday attendance", cls="text-end"), Th("% of expected", cls="text-end"), Th("Review", cls="text-end"))), Tbody(*cells), cls="analytics-table"), P("Swipe to see more columns", cls="analytics-scroll-hint"), cls="analytics-table-wrap analytics-child-table-wrap"),
+        Div(H2(f"{child_label}s in this scope", cls="analytics-panel-title"), P(f"Select a name to open its dashboard. Figures use approved {program_label} reports.", cls="analytics-note"), cls="analytics-panel-head"),
+        Div(Table(Thead(Tr(Th(child_label), Th(f"Latest {program_label} report"), Th("Counted population", cls="text-end"), Th("Average per location", cls="text-end"), *documented_headers, Th("Review", cls="text-end"))), Tbody(*cells), cls="analytics-table"), P("Swipe to see more columns", cls="analytics-scroll-hint"), cls="analytics-table-wrap analytics-child-table-wrap"),
         cls="panel analytics-table-panel",
     )
 
 
-def _location_history_table(history: list[dict[str, Any]], dates: list[date], location_id: str = "") -> Any:
+def _location_history_table(history: list[dict[str, Any]], dates: list[date], location_id: str = "", program_label: str = "Sunday Worship") -> Any:
+    include_documented_population = program_label == "Sunday Worship"
     cells = []
     for when, report in zip(reversed(dates), reversed(history)):
         coverage = _coverage_values(report)
@@ -288,12 +324,16 @@ def _location_history_table(history: list[dict[str, Any]], dates: list[date], lo
             population = "Returned; no counted result"
         else:
             population = "Not reported"
-        expected = (report.get("location_expected_values") or {}).get(location_id)
+        expected = (report.get("location_expected_values") or {}).get(location_id) if include_documented_population else None
         expected_pct = (100 * _integer(total) / expected) if total is not None and expected else None
-        cells.append(Tr(Td(when.strftime("%d %b %Y").lstrip("0")), Td(state), Td(population, cls="text-end analytics-numeric"), Td("No estimate" if expected is None else _number(expected), cls="text-end analytics-numeric"), Td("—" if expected_pct is None else f"{expected_pct:.1f}%", cls="text-end analytics-numeric")))
+        row_cells = [Td(when.strftime("%d %b %Y").lstrip("0")), Td(state), Td(population, cls="text-end analytics-numeric")]
+        if include_documented_population:
+            row_cells.extend([Td("No estimate" if expected is None else _number(expected), cls="text-end analytics-numeric"), Td("—" if expected_pct is None else f"{expected_pct:.1f}%", cls="text-end analytics-numeric")])
+        cells.append(Tr(*row_cells))
+    estimate_headers = [Th("Documented population", cls="text-end"), Th("% of documented population", cls="text-end")] if include_documented_population else []
     return Div(
-        Div(H2("Last 8 Sunday Worship records", cls="analytics-panel-title"), P("Each Sunday is shown separately. Not reported and an explicit zero are different states.", cls="analytics-note"), cls="analytics-panel-head"),
-        Div(Table(Thead(Tr(Th("Sunday"), Th("Report state"), Th("Population", cls="text-end"), Th("Expected Sunday attendance", cls="text-end"), Th("% of expected", cls="text-end"))), Tbody(*cells), cls="analytics-table"), cls="analytics-table-wrap"),
+        Div(H2(f"Last 8 {program_label} records", cls="analytics-panel-title"), P(f"Each {program_label} is shown separately. Not reported and an explicit zero are different states.", cls="analytics-note"), cls="analytics-panel-head"),
+        Div(Table(Thead(Tr(Th(program_label), Th("Report state"), Th("Population", cls="text-end"), *estimate_headers)), Tbody(*cells), cls="analytics-table"), cls="analytics-table-wrap"),
         cls="panel analytics-table-panel",
     )
 
@@ -325,6 +365,7 @@ def _dashboard_panels_url(ctx: Any, path: str, *, fragment: bool = False) -> str
         "/dashboard/panels",
         weeks=str((ctx.query_extras or {}).get("weeks") or "4"),
         include_pending=str((ctx.query_extras or {}).get("include_pending") or "false"),
+        program=str((ctx.query_extras or {}).get("program") or ""),
     )
 
 
@@ -497,10 +538,16 @@ def _attention_panel(
             Div(*visible, cls="analytics-attention-list"),
             *([Details(Summary(f"Show all ({len(items)})"), Div(*remaining, cls="analytics-attention-list"), cls="analytics-show-all")] if hidden_count else []),
         )
-    return Div(H2("Needs attention", cls="analytics-panel-title"), P(f"Missing locations, pending reviews, returned reports, and declines of {ATTENTION_DECLINE_PCT}% or more.", cls="analytics-note"), rendered, id="analytics-attention", cls="panel analytics-attention-panel")
+    return Div(H2("Needs attention · Sunday Worship", cls="analytics-panel-title"), P(f"Sunday Worship missing locations, pending reviews, returned reports, and declines of {ATTENTION_DECLINE_PCT}% or more.", cls="analytics-note"), rendered, id="analytics-attention", cls="panel analytics-attention-panel")
 
 
 async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
+    level = getattr(ctx, "level", 0)
+    profile_key = getattr(getattr(ctx, "profile", None), "key", "")
+    has_stat_read = hasattr(ctx, "has_permission") and ctx.has_permission("statistics:read")
+    if level < 2 or profile_key in {"location_worker", "house_fellowship_leader", "fellowship_leader"} or not has_stat_read:
+        from .dashboard import render_field_role_dashboard
+        return render_field_role_dashboard(ctx)
     trace, trace_token = dashboard_perf.start_trace()
     render_started = time.perf_counter()
     try:
@@ -526,19 +573,41 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
     include_pending = str(request.query_params.get("include_pending") or "").lower() in {"true", "1"}
     ctx.query_extras["include_pending"] = "true" if include_pending else "false"
     ctx.query_extras["weeks"] = str(weeks)
-    latest = _lagos_sunday()
+    today = reporting_today()
+    latest_sunday = _lagos_sunday(today)
     data_weeks = 8 if level == "Location" else weeks
-    dates = [latest - timedelta(weeks=index) for index in reversed(range(data_weeks))]
 
     queue: list[dict[str, Any]] = []
 
+    program = str(request.query_params.get("program") or "")
+    if program not in {"sunday_worship_service", "monday_bible_study", "thursday_revival_hour"}:
+        program, latest = _most_recent_standing_program(today)
+    else:
+        latest = _latest_standing_program_date(program, today)
+    ctx.query_extras["program"] = program
+    program_label = _DASHBOARD_PROGRAM_LABELS[program]
+    dates = [latest - timedelta(weeks=index) for index in reversed(range(data_weeks))]
+
     phase_started = time.perf_counter()
-    dashboard_payload = await DashboardService.sunday_worship_dashboard(
-        request, ctx, weeks=data_weeks, scope_path=scope_path, latest_date=latest.isoformat(),
-    )
+    if program == "sunday_worship_service":
+        dashboard_payload = await DashboardService.sunday_worship_dashboard(
+            request, ctx, weeks=data_weeks, scope_path=scope_path, latest_date=latest_sunday.isoformat(),
+        )
+    else:
+        dashboard_payload = await DashboardService.standing_program_series(
+            request, ctx, program_key=program, weeks=data_weeks, scope_path=scope_path,
+            latest_date=latest.isoformat(), include_pending=include_pending,
+        )
     dashboard_perf.timed_phase(trace, "dashboard_overview_single_backend_call", phase_started)
-    series = dashboard_payload.get("series") if isinstance(dashboard_payload, dict) else None
-    payload = dashboard_payload.get("bootstrap") if isinstance(dashboard_payload, dict) else None
+    if isinstance(dashboard_payload, dict) and "series" in dashboard_payload:
+        series = dashboard_payload.get("series")
+        payload = dashboard_payload.get("bootstrap")
+    elif isinstance(dashboard_payload, dict):
+        series = dashboard_payload
+        payload = None
+    else:
+        series = None
+        payload = None
     if isinstance(dashboard_payload, dict) and dashboard_payload.get("error"):
         series = {"error": dashboard_payload["error"]}
     if isinstance(series, dict) and series.get("error"):
@@ -588,7 +657,7 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
     expected_percent = current.get("expected_population_percent")
     expected_total = current.get("expected_population_total")
     if not _integer(current.get("locations_with_estimate")):
-        expected_value, expected_note = "No estimates yet", "Expected Sunday attendance has not been entered for locations in this scope."
+        expected_value, expected_note = "No estimates yet", "Documented population estimates have not been entered for locations in this scope."
     elif expected_percent is None:
         expected_value, expected_note = "No eligible report", "No counted location report has both an estimate and an attendance count."
     else:
@@ -619,8 +688,16 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
         Input(type="hidden", name="scope_path", value=scope_path),
         Input(type="hidden", name="weeks", value=str(weeks)),
         Input(type="hidden", name="include_pending", value="true" if include_pending else "false"),
+        Input(type="hidden", name="program", value=program),
         Div(Span("Signed in as", cls="analytics-filter-label"), Span(f"{ctx.profile.role_label} (level {ctx.level})", cls="analytics-filter-persona"), cls="analytics-filter-persona-wrap"),
-        Div(Span("Reporting window", cls="analytics-filter-label"), A("4 weeks", href=scope_link(ctx, dashboard_url, weeks="4", include_pending="true" if include_pending else "false"), cls="analytics-period" + (" active" if weeks == 4 else "")), A("8 weeks", href=scope_link(ctx, dashboard_url, weeks="8", include_pending="true" if include_pending else "false"), cls="analytics-period" + (" active" if weeks == 8 else "")), cls="analytics-filter-period"),
+        Div(
+            Span("Service", cls="analytics-filter-label"),
+            A("Sunday Worship", href=scope_link(ctx, dashboard_url, program="sunday_worship_service", weeks=str(weeks), include_pending="true" if include_pending else "false"), cls="analytics-period" + (" active" if program == "sunday_worship_service" else "")),
+            A("Monday Bible Study", href=scope_link(ctx, dashboard_url, program="monday_bible_study", weeks=str(weeks), include_pending="true" if include_pending else "false"), cls="analytics-period" + (" active" if program == "monday_bible_study" else "")),
+            A("Thursday Revival", href=scope_link(ctx, dashboard_url, program="thursday_revival_hour", weeks=str(weeks), include_pending="true" if include_pending else "false"), cls="analytics-period" + (" active" if program == "thursday_revival_hour" else "")),
+            cls="analytics-filter-period",
+        ),
+        Div(Span("Reporting window", cls="analytics-filter-label"), A("4 weeks", href=scope_link(ctx, dashboard_url, program=program, weeks="4", include_pending="true" if include_pending else "false"), cls="analytics-period" + (" active" if weeks == 4 else "")), A("8 weeks", href=scope_link(ctx, dashboard_url, program=program, weeks="8", include_pending="true" if include_pending else "false"), cls="analytics-period" + (" active" if weeks == 8 else "")), cls="analytics-filter-period"),
         Label(Input(type="checkbox", checked=include_pending, cls="form-check-input", onchange="this.form.elements.include_pending.value=this.checked?'true':'false';this.form.requestSubmit()"), "Count reports pending review", cls="analytics-pending-switch"),
         action="/dashboard", method="get", cls="analytics-toolbar", id="analytics-dashboard-filters",
     )
@@ -646,12 +723,12 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
                     P(f"{level.upper()}", cls="analytics-eyebrow"),
                     H1(named_scope, cls="analytics-title"),
                     P(
-                        f"Sunday Worship · week of {latest.strftime('%d %b %Y').lstrip('0')} · ",
+                        f"{program_label} · week of {latest.strftime('%d %b %Y').lstrip('0')} · ",
                         "Including reports pending review" if include_pending else "Approved reports only",
                         Span("Demo data", cls="analytics-demo-label") if not get_backend_config().enabled else None,
                         cls="analytics-subtitle",
                     ),
-                    A("Expected attendance", href="/analytics/expected-population", cls="analytics-expected-link") if can_manage_expected else None,
+                    A("Documented population", href="/analytics/expected-population", cls="analytics-expected-link") if can_manage_expected else None,
                     Div(
                         A("Print report", href=scope_link(ctx, "/dashboard/pastor-report", scope_path=scope_path, period=f"{weeks}w", include_pending=str(include_pending).lower()), cls="btn btn-outline-primary btn-sm"),
                         A("Export data", href=scope_link(ctx, "/dashboard/pastor-report/export.xlsx", scope_path=scope_path, period=f"{weeks}w", include_pending=str(include_pending).lower()), cls="btn btn-outline-secondary btn-sm"),
@@ -659,7 +736,7 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
                     ),
                     cls="analytics-heading",
                 ),
-                _coverage_panel(current, latest, include_pending),
+                _coverage_panel(current, latest, include_pending, program_label),
                 Div(
                     H2("Sunday services reported separately", cls="h6"),
                     Table(
@@ -668,25 +745,27 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
                         cls="analytics-table",
                     ),
                     cls="analytics-panel analytics-service-breakdown",
-                ) if multiple_services else None,
+                ) if multiple_services and program == "sunday_worship_service" else None,
                 Div(
-                    _metric("Latest Sunday population", population_value, "Multiple services reported separately; no daily total is defined." if multiple_services else f"{_integer(current.get('n_counted'))} locations counted · {_short_date(latest)}", "Total"),
-                    _metric("% of expected Sunday attendance", expected_value, expected_note, "Pooled ratio"),
-                    _metric(f"Average per reporting location · {weeks} weeks", "—" if avg is None else _number(avg), "Mean of the weekly per-location averages in this period; weeks without a counted report are excluded.", "Average"),
-                    _metric("Active workers", _number(active_workers), worker_note, "Current register"),
-                    _metric("Workers’ meeting attendance rate", "Rate withheld" if expected_attendance else "No report", attendance_note, "Roster data"),
-                    _metric(f"Approved offerings · last {weeks} Sundays", offerings_value, offerings_note, "Approved"),
-                    _metric(f"Newcomers · last {weeks} Sundays", _number(newcomers_current), newcomers_note, "Reported totals"),
-                    _metric(f"Converts · last {weeks} Sundays", _number(converts_current), converts_note, "Reported totals"),
+                    Div(_dashboard_loading_panel("locations" if level == "Location" else "child scopes"), id="analytics-children-panel", hx_get=_dashboard_panels_url(ctx, "/dashboard/panels"), hx_trigger="load", hx_target="this", hx_swap="innerHTML", cls="analytics-lazy-panel", aria_busy="true"),
+                    Div(_dashboard_loading_panel("Needs attention"), id="analytics-attention-panel", cls="analytics-lazy-panel", aria_busy="true") if (ctx.has_permission("counts:review") or ctx.has_permission("counts:remind")) else _review_attention_note(level, panel_id="analytics-attention-panel"),
+                    _waiting_on_decision(summary, weeks),
+                    cls="analytics-content-split analytics-priority-panels",
+                ),
+                Div(
+                    _metric(f"Latest {program_label} population", population_value, "Multiple services reported separately; no daily total is defined." if multiple_services else f"{_integer(current.get('n_counted'))} locations counted · {_short_date(latest)}", "Total"),
+                    _metric("% of documented population", expected_value, expected_note, "Sunday Worship · pooled ratio") if program == "sunday_worship_service" else None,
+                    _metric(f"Average per reporting location · {weeks} weeks", "—" if avg is None else _number(avg), f"Mean of the weekly per-location averages for {program_label}; weeks without a counted report are excluded.", "Average"),
+                    *([
+                        _metric("Active workers", _number(active_workers), worker_note, "Current register"),
+                        _metric("Workers’ meeting attendance rate", "Rate withheld" if expected_attendance else "No report", attendance_note, "Roster data"),
+                        _metric(f"Approved offerings · last {weeks} Sundays", offerings_value, offerings_note, "Approved"),
+                        _metric(f"Newcomers · last {weeks} Sundays", _number(newcomers_current), newcomers_note, "Reported totals"),
+                        _metric(f"Converts · last {weeks} Sundays", _number(converts_current), converts_note, "Reported totals"),
+                    ] if program == "sunday_worship_service" else []),
                     cls="analytics-metrics",
                 ),
-                    Div(
-                        Div(_dashboard_loading_panel("locations" if level == "Location" else "child scopes"), id="analytics-children-panel", hx_get=_dashboard_panels_url(ctx, "/dashboard/panels"), hx_trigger="load", hx_target="this", hx_swap="innerHTML", cls="analytics-lazy-panel", aria_busy="true"),
-                        Div(_dashboard_loading_panel("Needs attention"), id="analytics-attention-panel", cls="analytics-lazy-panel", aria_busy="true") if (ctx.has_permission("counts:review") or ctx.has_permission("counts:remind")) else _review_attention_note(level, panel_id="analytics-attention-panel"),
-                        _waiting_on_decision(summary, weeks),
-                        cls="analytics-content-split",
-                    ),
-                Div(_dashboard_loading_panel("weekly trend"), id="analytics-trend-panel", cls="analytics-lazy-panel", aria_busy="true"),
+        Div(_dashboard_loading_panel(f"{program_label} weekly trend"), id="analytics-trend-panel", cls="analytics-lazy-panel", aria_busy="true"),
                 cls="analytics-dashboard-main",
             ),
             cls="prototype-dashboard",
@@ -703,12 +782,24 @@ async def render_analytics_dashboard_panel(request: Request, ctx: Any, panel: st
     scope_path = await DashboardService.scope_path(request, ctx)
     level = _scope_level(scope_path, ctx.current_scope_kind.title())
     weeks = int(request.query_params.get("weeks") or 4)
-    latest = _lagos_sunday()
+    today = reporting_today()
+    program = str(request.query_params.get("program") or "")
+    if program not in _DASHBOARD_PROGRAM_WEEKDAYS:
+        program, latest = _most_recent_standing_program(today)
+    else:
+        latest = _latest_standing_program_date(program, today)
+    program_label = _DASHBOARD_PROGRAM_LABELS[program]
     data_weeks = 8 if level == "Location" else weeks
     dates = [latest - timedelta(weeks=index) for index in reversed(range(data_weeks))]
-    panel_payload = await DashboardService.sunday_worship_dashboard_panels(
-        request, ctx, weeks=data_weeks, scope_path=scope_path, latest_date=latest.isoformat(),
-    )
+    if program == "sunday_worship_service":
+        panel_payload = await DashboardService.sunday_worship_dashboard_panels(
+            request, ctx, weeks=data_weeks, scope_path=scope_path, latest_date=latest.isoformat(),
+        )
+    else:
+        panel_payload = await DashboardService.standing_program_series(
+            request, ctx, program_key=program, weeks=data_weeks, scope_path=scope_path,
+            latest_date=latest.isoformat(), include_pending=str(request.query_params.get("include_pending") or "").lower() in {"true", "1"},
+        )
     if not isinstance(panel_payload, dict) or panel_payload.get("error"):
         message = str((panel_payload or {}).get("error") or "Dashboard panels could not load.")
         error = _dashboard_error_panel("Dashboard panels could not load", message)
@@ -724,7 +815,7 @@ async def render_analytics_dashboard_panel(request: Request, ctx: Any, panel: st
         error = _dashboard_error_panel("Dashboard panels could not load", message)
         return Div(error, Div(error, id="analytics-attention-panel", cls="analytics-lazy-panel", hx_swap_oob="outerHTML"), Div(error, id="analytics-trend-panel", cls="analytics-lazy-panel", hx_swap_oob="outerHTML"))
     if isinstance(series, dict) and series.get("error"):
-        error = _dashboard_error_panel("Sunday Worship data could not load", str(series["error"]))
+        error = _dashboard_error_panel(f"{program_label} data could not load", str(series["error"]))
         return Div(error, Div(error, id="analytics-attention-panel", cls="analytics-lazy-panel", hx_swap_oob="outerHTML"), Div(error, id="analytics-trend-panel", cls="analytics-lazy-panel", hx_swap_oob="outerHTML"))
     history = (series.get("scope") or [])[-data_weeks:]
     children = [row for row in (series.get("children") or []) if row.get("path")]
@@ -733,14 +824,14 @@ async def render_analytics_dashboard_panel(request: Request, ctx: Any, panel: st
     if level == "Location":
         location_nodes = series.get("location_nodes") or []
         location_id = str(location_nodes[0].get("location_id") or "") if location_nodes else ""
-        children_panel = _location_history_table(history, dates, location_id)
+        children_panel = _location_history_table(history, dates, location_id, program_label)
     else:
-        children_panel = _children_table(children, child_reports, level, ctx)
+        children_panel = _children_table(children, child_reports, level, ctx, program_label)
     points = []
     for when, report in zip(dates, history):
         total, counted = report.get("total"), _integer(report.get("n_counted"))
         points.append({"date": when.isoformat(), "average": round(_integer(total) / counted) if total is not None and counted else None, "counted": counted, "expected": _integer(report.get("n_expected"))})
-    trend_panel = Div(H2("Weekly trend", cls="analytics-panel-title"), P("Average population per reporting location and coverage of counted reports. Missing reports are not plotted as zero.", cls="analytics-note"), _line_chart(points, weeks), cls="panel analytics-trend-panel")
+    trend_panel = Div(H2(f"{program_label} weekly trend", cls="analytics-panel-title"), P(f"Average population per reporting location and coverage of counted {program_label} reports. Missing reports are not plotted as zero.", cls="analytics-note"), _line_chart(points, weeks, program_label), cls="panel analytics-trend-panel")
     if not can_review and not ctx.has_permission("counts:remind"):
         attention_panel = _review_attention_note(level, panel_id="analytics-attention-panel")
     else:

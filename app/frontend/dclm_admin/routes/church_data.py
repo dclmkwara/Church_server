@@ -326,7 +326,19 @@ async def _count_review_workspace(request: Request, ctx, occurrence_date: str) -
             Div(
                 Div(H4(f"{row.get('program_type')} — {row.get('date')}", cls="h6 fw-semibold mb-0"), *flags, cls="d-flex flex-wrap gap-2 align-items-center justify-content-between"),
                 P(f"{row.get('location')} • {row.get('program_level')} report • {row.get('event_title') or 'Standing program'} • Service: {row.get('service_id') or 'legacy'}", cls="small text-muted mt-2 mb-2"),
-                Div(P(f"Pending total: {row.get('total')}", cls="h4 fw-semibold mb-0"), P(f"{row.get('submission_count')} submissions • {section_note}", cls="small text-muted mb-0"), cls="d-flex justify-content-between align-items-start gap-3 flex-wrap"),
+                Div(
+                    P(
+                        # Safe total display: never show raw Python None to users.
+                        # Conflict groups have no resolved total; show a plain explanation instead.
+                        (
+                            f"{row.get('total'):,}" if isinstance(row.get('total'), (int, float))
+                            else "Total not yet determined"
+                        ),
+                        cls="h4 fw-semibold mb-0 " + ("text-warning" if row.get("group_state") == "conflict" else ""),
+                    ),
+                    P(f"{row.get('submission_count')} submissions \u2022 {section_note}", cls="small text-muted mb-0"),
+                    cls="d-flex justify-content-between align-items-start gap-3 flex-wrap",
+                ),
                 Div(*(P(f"{part.get('section_label') or part.get('count_mode') or 'Legacy part'}: {part.get('total')} • {part.get('status')}", cls="small mb-1") for part in row.get("parts", [])), cls="rounded bg-light p-2 mt-2") if row.get("split_count") else None,
                 P(categories, cls="small mt-3 mb-1"),
                 P(f"Submitted by {', '.join(row.get('submitters') or []) or 'Unknown'} • waiting {row.get('age_hours')} hours", cls="small text-muted mb-0"),
@@ -383,9 +395,7 @@ async def _count_review_workspace(request: Request, ctx, occurrence_date: str) -
     )
 
 
-async def _render_meeting_program_page(request: Request, ctx, *, title: str, subtitle: str, program_type_slug: str, active_key: str) -> Div:
-    if not ctx.has_permission("attendance:read"):
-        return shell_layout(ctx, request_path=request.url.path, active_key="attendance", title=title, subtitle=subtitle, primary_action=None, content=empty_state("shield-lock", "Attendance access required", "Your role does not include attendance reporting."), show_shell_intro=False)
+async def _meeting_program_content(request: Request, ctx, *, title: str, program_type_slug: str, active_key: str) -> Div:
     metrics = await DashboardService.meeting_program_metrics(request, ctx, program_type_slug=program_type_slug)
     rows = metrics.get("ranking") or []
     if rows:
@@ -441,7 +451,7 @@ async def _render_meeting_program_page(request: Request, ctx, *, title: str, sub
             P("Raw records, not unique attendees. Summary metrics above deduplicate workers within each meeting.", cls="small text-warning-emphasis mb-2"),
             meeting_table,
         )
-    body = page_stack(
+    return page_stack(
         cards,
         leaders_panel,
         section_card(
@@ -454,6 +464,12 @@ async def _render_meeting_program_page(request: Request, ctx, *, title: str, sub
             "People are deduplicated within each meeting using the captured roster IDs. A worker may be counted again at a later meeting. Legacy meetings without roster IDs use the largest saved roster count once and are marked as legacy in the data.",
         ),
     )
+
+
+async def _render_meeting_program_page(request: Request, ctx, *, title: str, subtitle: str, program_type_slug: str, active_key: str) -> Div:
+    if not ctx.has_permission("attendance:read"):
+        return shell_layout(ctx, request_path=request.url.path, active_key="attendance", title=title, subtitle=subtitle, primary_action=None, content=empty_state("shield-lock", "Attendance access required", "Your role does not include attendance reporting."), show_shell_intro=False)
+    body = await _meeting_program_content(request, ctx, title=title, program_type_slug=program_type_slug, active_key=active_key)
     return shell_layout(
         ctx, request_path=request.url.path, active_key=active_key, title=title,
         subtitle=subtitle, primary_action=None, content=body, show_shell_intro=False,
@@ -721,7 +737,7 @@ async def _sunday_population_expectation_panel(request: Request, ctx) -> Div:
         return section_card("Sunday Worship population attendance", "Congregation population is shown separately from the worker roster below.", P(str(explanation), role="alert", cls="text-danger mb-0"))
     percent = current.get("expected_population_percent")
     if not current.get("locations_with_estimate"):
-        expected_label, expected_note = "No estimates yet", "The State Overseer has not entered expected Sunday attendance estimates in this scope."
+        expected_label, expected_note = "No estimates yet", "The State Overseer has not entered documented population estimates in this scope."
     else:
         expected_label = "No eligible report" if percent is None else f"{float(percent):.1f}%"
         expected_note = (
@@ -734,9 +750,9 @@ async def _sunday_population_expectation_panel(request: Request, ctx) -> Div:
         "Sunday Worship population attendance",
         f"Congregation population for {latest.isoformat()}, separate from worker attendance.",
         Div(
-            stat_card("% of expected Sunday attendance", expected_label, expected_note, "graph-up", tone="primary"),
+            stat_card("% of documented population · Sunday Worship", expected_label, expected_note, "graph-up", tone="primary"),
             stat_card("Counted population", "No counted report" if current.get("total") is None else f"{int(current.get('total') or 0):,}", "Location-level reports counted for this Sunday", "people", tone="success"),
-            stat_card("Expected Sunday attendance", "No estimate" if current.get("expected_population_total") is None else f"{int(current.get('expected_population_total') or 0):,}", "Pooled estimate for locations with counted reports", "bullseye", tone="info"),
+            stat_card("Documented population", "No estimate" if current.get("expected_population_total") is None else f"{int(current.get('expected_population_total') or 0):,}", "Pooled on-paper estimate for locations with counted Sunday Worship reports", "bullseye", tone="info"),
             cls="counts-stat-grid",
         ),
     )
@@ -802,23 +818,57 @@ async def _attendance_table(
 
 
 def register_church_data_routes(app) -> None:
+    @app.get("/church-data/meetings")
+    async def meetings_page(request: Request, tab: str = "saturday"):
+        ctx = active_scope_context(request, build_context(request))
+        if not ctx.has_permission("attendance:read"):
+            return shell_layout(
+                ctx, request_path=request.url.path, active_key="meetings",
+                title="Worker & Leader Meetings", subtitle="Weekly attendance records for worker and leader meetings.",
+                primary_action=None,
+                content=empty_state("shield-lock", "Attendance access required", "Your role does not include attendance reporting."),
+                show_shell_intro=False,
+            )
+        active_tab = "tuesday" if tab.lower() in {"tuesday", "leaders"} else "saturday"
+
+        with program_page_trace("workers", str(getattr(ctx, "current_scope_path", "") or "")):
+            saturday_content = await _meeting_program_content(
+                request, ctx, title="Saturday Workers Meeting",
+                program_type_slug="saturday_workers_meeting", active_key="meetings-saturday",
+            )
+        with program_page_trace("leaders", str(getattr(ctx, "current_scope_path", "") or "")):
+            tuesday_content = await _meeting_program_content(
+                request, ctx, title="Tuesday Leaders Meeting",
+                program_type_slug="tuesday_leaders_meeting", active_key="meetings-tuesday",
+            )
+
+        content = page_stack(
+            Tabs(
+                ("tab-saturday", "Saturday Workers Meeting", active_tab == "saturday"),
+                ("tab-tuesday", "Tuesday Leaders Meeting", active_tab == "tuesday"),
+                variant="pills",
+                cls="mb-3",
+            ),
+            Div(
+                TabPane(saturday_content, tab_id="tab-saturday", active=(active_tab == "saturday")),
+                TabPane(tuesday_content, tab_id="tab-tuesday", active=(active_tab == "tuesday")),
+                cls="tab-content",
+            ),
+        )
+        return shell_layout(
+            ctx, request_path=request.url.path, active_key="meetings",
+            title="Worker & Leader Meetings",
+            subtitle="Weekly attendance and trend records for Saturday Workers and Tuesday Leaders meetings.",
+            primary_action=None, content=content, show_shell_intro=False,
+        )
+
     @app.get("/church-data/meetings/workers-saturday")
     async def saturday_workers_meeting_page(request: Request):
-        ctx = active_scope_context(request, build_context(request))
-        return await _meeting_program_page(
-            request, ctx, title="Saturday Workers Meeting",
-            subtitle="Weekly worker attendance records for Saturday Workers Meeting.",
-            program_type_slug="saturday_workers_meeting", active_key="workers-meeting",
-        )
+        return await meetings_page(request, tab="saturday")
 
     @app.get("/church-data/meetings/leaders-tuesday")
     async def tuesday_leaders_meeting_page(request: Request):
-        ctx = active_scope_context(request, build_context(request))
-        return await _meeting_program_page(
-            request, ctx, title="Tuesday Leaders Meeting",
-            subtitle="Weekly leader attendance records for Tuesday Leaders Meeting.",
-            program_type_slug="tuesday_leaders_meeting", active_key="leaders-meeting",
-        )
+        return await meetings_page(request, tab="tuesday")
 
     @app.get("/church-data/count-review")
     async def count_review_page(request: Request, occurrence_date: str = ""):

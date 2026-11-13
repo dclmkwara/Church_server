@@ -4,7 +4,7 @@ import asyncio
 from datetime import date
 from typing import Any
 
-from fasthtml.common import A, Button as HtmlButton, Div, Form, H3, H4, Input, Label, Li, Option, P, Select, Span, Textarea, Ul
+from fasthtml.common import A, Button as HtmlButton, Details, Div, Form, H3, H4, Input, Label, Li, Option, P, Select, Span, Summary, Textarea, Ul
 from starlette.requests import Request
 
 from faststrap import Button, Icon, Input as FsInput, Select as FsSelect, PlaceholderCard, Spinner, TabPane, Tabs, ToggleGroup
@@ -31,6 +31,31 @@ CAMPAIGN_MODES = ["crusade", "retreat", "special", "regular"]
 ASSIGNMENT_TYPES = ["both", "count", "convert", "attendance", "all"]
 ASSIGNMENT_SOURCE_ROLES = ["alpha", "satellite", "regular"]
 AUDIENCE_SEGMENTS = ["adult", "campus", "youth", "children"]
+
+
+def _program_setup_steps(active_step: int) -> Div:
+    labels = ((1, "Event"), (2, "Sessions"))
+    return Div(
+        *[
+            Div(
+                Span(str(number), cls="program-setup-step__number"),
+                Span(label, cls="program-setup-step__label"),
+                role="listitem",
+                aria_current="step" if number == active_step else None,
+                cls=f"program-setup-step {'is-active' if number == active_step else 'is-complete' if number < active_step else ''}".strip(),
+            )
+            for number, label in labels
+        ],
+        P(f"Step {active_step} of 2", cls="visually-hidden mb-0"),
+        role="list",
+        aria_label="Event setup steps",
+        cls="program-setup-steps mb-3",
+    )
+
+
+def _setup_field(label: str, control: Any, field_id: str, *, cls: str = "mb-3") -> Div:
+    control.attrs["id"] = field_id
+    return Div(Label(label, fr=field_id, cls="form-label mb-1"), control, cls=f"program-setup-field {cls}".strip())
 
 
 def _safe_int(value: object) -> int:
@@ -384,10 +409,9 @@ async def _render_event_matrix_page(request: Request, ctx, *, mode: str, campaig
         summary_cards = empty_state("info-circle", "Retreat is reported at region level", "Retreat reporting drills from State to Region and stops there.")
     content = page_stack(
         page_intro(
-            "Retreat reporting" if mode == "retreat" else "Global Crusade reporting",
+            "How this report works",
             "One cell represents one scheduled program type on one day. Attendance is never added across sessions."
             if mode == "retreat" else ("One cell represents one scheduled session. Alpha and satellite values stay labelled separately; attendance is never added across sessions." if can_view_alpha else "One cell represents one scheduled satellite session. Attendance is never added across sessions."),
-            scope_label=ctx.current_scope_label, scope_kind=ctx.current_scope_kind,
         ),
         Div(*crumbs, cls="d-flex flex-wrap align-items-center gap-1 mb-2", role="navigation", aria_label="Scope breadcrumb"),
         selector,
@@ -1446,36 +1470,32 @@ def register_program_routes(app) -> None:
             ProgramService.list_domains(request, ctx),
             PeopleService.list_locations(request, ctx),
         )
-        import random
-        default_code = f"EVT-{reporting_today().year}-{random.randint(101, 999)}"
         return Form(
             *hidden_context_inputs(ctx),
-            H3("Create Event", cls="h5 fw-semibold"),
-            P("Create the crusade, retreat, or special church event cycle first. Sessions and reporting will sit under it.", cls="text-muted"),
-            Input(type="text", name="title", placeholder="Event title", cls="form-control mb-3", required=True),
+            _program_setup_steps(1),
+            H3("Event details", cls="h5 fw-semibold"),
+            P("Create the event, then add its sessions.", cls="text-muted"),
+            _setup_field("Event name", Input(type="text", name="title", placeholder="Event name", cls="form-control", required=True), "campaign-title"),
+            _setup_field("Event code", Input(type="text", name="campaign_code", placeholder="For example, RETREAT-2026", cls="form-control", required=True), "campaign-code"),
             Div(
-                Label("Event Code (flexible and reusable)", cls="form-label small text-muted mb-1"),
-                Input(type="text", name="campaign_code", value=default_code, placeholder="Event code (e.g. EVT-2026-412)", cls="form-control mb-3", required=True),
-            ),
-            Div(
-                Select(
+                _setup_field("Program area", Select(
                     Option("Select domain", value=""),
                     *[Option(row["name"], value=row["domain_id"]) for row in domains],
                     name="domain_id",
                     cls="form-select",
                     required=True,
-                ),
-                Select(
+                ), "campaign-domain", cls="mb-0"),
+                _setup_field("Event type", Select(
                     Option("Select mode", value=""),
                     *[Option(name.title(), value=name) for name in CAMPAIGN_MODES],
                     name="event_mode",
                     cls="form-select",
                     required=True,
-                ),
+                ), "campaign-mode", cls="mb-0"),
                 cls="drawer-two-up mb-3",
             ),
             Div(
-                Select(
+                _setup_field("Reporting level", Select(
                     Option("Select reporting scope", value="global"),
                     Option("Global", value="global"),
                     Option("Nation", value="nation"),
@@ -1485,36 +1505,40 @@ def register_program_routes(app) -> None:
                     name="reporting_scope",
                     cls="form-select",
                     required=True,
-                ),
-                Select(
+                ), "campaign-scope", cls="mb-0"),
+                _setup_field("Status", Select(
                     Option("Select status", value="draft"),
                     *[Option(name.title(), value=name) for name in CAMPAIGN_STATUSES],
                     name="status",
                     cls="form-select",
                     required=True,
+                ), "campaign-status", cls="mb-0"),
+                cls="drawer-two-up mb-3",
+            ),
+            Div(
+                _setup_field("Starts", Input(type="date", name="start_date", value=reporting_today().isoformat(), cls="form-control", required=True), "campaign-start", cls="mb-0"),
+                _setup_field("Ends", Input(type="date", name="end_date", value=reporting_today().isoformat(), cls="form-control", required=True), "campaign-end", cls="mb-0"),
+                cls="drawer-two-up mb-3",
+            ),
+            Details(
+                Summary("Optional details", cls="fw-semibold mb-3"),
+                Div(
+                    _setup_field("Collection opens", Input(type="datetime-local", name="collection_window_start", cls="form-control"), "campaign-collection-start", cls="mb-0"),
+                    _setup_field("Collection closes", Input(type="datetime-local", name="collection_window_end", cls="form-control"), "campaign-collection-end", cls="mb-0"),
+                    cls="drawer-two-up mb-3",
                 ),
-                cls="drawer-two-up mb-3",
+                _setup_field("Alpha location", Select(
+                    Option("No alpha location", value=""),
+                    *[Option(row["location_name"], value=row["location_id"]) for row in locations if row.get("location_id")],
+                    name="alpha_location_id",
+                    cls="form-select",
+                ), "campaign-alpha-location"),
+                _setup_field("Publicity link", Input(type="url", name="flyer_url", cls="form-control"), "campaign-flyer"),
+                _setup_field("Description", Textarea(name="description", cls="form-control", rows="3"), "campaign-description"),
+                _setup_field("Publicity note", Textarea(name="publicity_note", cls="form-control", rows="2"), "campaign-publicity-note"),
+                cls="mb-3",
             ),
-            Div(
-                Input(type="date", name="start_date", value=reporting_today().isoformat(), cls="form-control", required=True),
-                Input(type="date", name="end_date", value=reporting_today().isoformat(), cls="form-control", required=True),
-                cls="drawer-two-up mb-3",
-            ),
-            Div(
-                Input(type="datetime-local", name="collection_window_start", cls="form-control"),
-                Input(type="datetime-local", name="collection_window_end", cls="form-control"),
-                cls="drawer-two-up mb-3",
-            ),
-            Select(
-                Option("No alpha location", value=""),
-                *[Option(row["location_name"], value=row["location_id"]) for row in locations if row.get("location_id")],
-                name="alpha_location_id",
-                cls="form-select mb-3",
-            ),
-            Input(type="url", name="flyer_url", placeholder="Flyer or publicity URL", cls="form-control mb-3"),
-            Textarea(name="description", placeholder="Short event description", cls="form-control mb-3", rows="3"),
-            Textarea(name="publicity_note", placeholder="Publicity note", cls="form-control mb-3", rows="2"),
-            Button("Save Event", variant="success", size="md", type="submit", cls="w-100"),
+            Button("Save and continue", variant="success", size="md", type="submit", cls="w-100"),
             hx_post=ctx.url_for("/church-data/programs/campaigns/create"),
             hx_target="#form-drawer-body",
             hx_swap="innerHTML",
@@ -1524,22 +1548,34 @@ def register_program_routes(app) -> None:
     async def create_campaign(request: Request):
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
+        ctx = build_context(request)
         payload = {**data, "path": ctx.current_scope_path}
         row = await ProgramService.create_campaign(request, payload) if await ProgramService.live_enabled(request) else None
         if row is None:
             return P("Could not save this event right now.", cls="text-muted")
+        created_campaign_id = str(row.get("campaign_id") or row.get("id") or "")
+        campaign_title = str(row.get("title") or "Event")
         return simple_toast_response(
             content=(
                 Div(
                     H3("Event saved", cls="h5 fw-semibold text-success"),
-                    P(f"'{row['title']}' is now ready for event planning and submissions.", cls="text-muted mb-3"),
-                    Button("Done", variant="primary", size="md", cls="w-100", data_bs_dismiss="offcanvas"),
+                    P(f"{campaign_title} is saved. Add sessions now or finish later.", cls="text-muted mb-3"),
+                    Div(
+                        Button(
+                            "Add sessions",
+                            variant="primary",
+                            size="md",
+                            hx_get=ctx.url_for("/church-data/programs/events/new", campaign_id=created_campaign_id),
+                            hx_target="#form-drawer-body",
+                            cls="w-100 mb-2",
+                        ),
+                        Button("Finish Later", variant="outline-secondary", size="md", cls="w-100", data_bs_dismiss="offcanvas"),
+                    ),
                 ),
                 await _campaigns_table(request, ctx, domains=await ProgramService.list_domains(request, ctx), oob=True),
                 await _program_summary(request, ctx, oob=True),
             ),
-            message="Event saved successfully.",
+            message="Event created successfully. Proceed to schedule sessions.",
             variant="success",
         )
 
@@ -1592,7 +1628,7 @@ def register_program_routes(app) -> None:
     async def create_domain(request: Request):
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
+        ctx = build_context(request)
         row = await ProgramService.create_domain(request, data) if await ProgramService.live_enabled(request) else None
         if row is None:
             return P("Could not save this program domain right now.", cls="text-muted")
@@ -1653,7 +1689,7 @@ def register_program_routes(app) -> None:
     async def create_type(request: Request):
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
+        ctx = build_context(request)
         row = await ProgramService.create_type(request, data) if await ProgramService.live_enabled(request) else None
         if row is None:
             return P("Could not save this program type right now.", cls="text-muted")
@@ -1688,7 +1724,7 @@ def register_program_routes(app) -> None:
         )
 
     @app.get("/church-data/programs/events/new")
-    async def new_event_form(request: Request):
+    async def new_event_form(request: Request, campaign_id: str = ""):
         ctx = build_context(request)
         if not ctx.has_permission("programs:create_event"):
             return P("Your role is not permitted to create program events.", cls="text-muted")
@@ -1703,39 +1739,47 @@ def register_program_routes(app) -> None:
             reporting_scope = {2: "location", 3: "group", 4: "region", 5: "state"}.get(ctx.level, "")
         if not reporting_scope:
             return P("Your account does not have a schedulable location, group, region, or state scope.", cls="text-muted")
+        if not campaign_id:
+            campaign_id = request.query_params.get("campaign_id", "")
+        campaign_options = [
+            (str(row["campaign_id"]), f"{row['title']} ({row['campaign_code']})", str(row["campaign_id"]) == str(campaign_id))
+            for row in campaigns
+        ]
+
         return Form(
             *hidden_context_inputs(ctx),
-            H3("Create event", cls="h5 fw-semibold"),
-            P("Schedule a program session for your jurisdiction. Admin-created schedules await this level's pastor; a pastor-created schedule is approved immediately.", cls="text-muted"),
+            _program_setup_steps(2),
+            H3("Add a session", cls="h5 fw-semibold"),
+            P("Admin schedules need pastor approval. Pastor-created schedules are approved immediately.", cls="text-muted"),
             Input(type="hidden", name="path", value=scope_path),
-            FsInput("title", input_type="text", label="Program session name", placeholder="For example: Combined Workers Meeting", required=True, cls="mb-3"),
+            FsInput("title", input_type="text", label="Session name", placeholder="For example: Day 1 Morning", required=True, cls="mb-3"),
             Div(
-                FsSelect("domain_id", ("", "Select domain"), *[(row["domain_id"], row["name"]) for row in domains], label="Program domain", required=True),
-                FsSelect("type_id", ("", "Select program type"), *[(row["type_id"], row["name"]) for row in await ProgramService.list_types(request, ctx)], label="Program type", required=True),
+                FsSelect("domain_id", ("", "Select area"), *[(row["domain_id"], row["name"]) for row in domains], label="Area", required=True),
+                FsSelect("type_id", ("", "Select type"), *[(row["type_id"], row["name"]) for row in await ProgramService.list_types(request, ctx)], label="Type", required=True),
                 cls="drawer-two-up mb-3",
             ),
             Div(
-            FsSelect("campaign_id", ("", "No campaign link"), *[(row["campaign_id"], f"{row['title']} ({row['campaign_code']})") for row in campaigns], label="Campaign / series"),
+                FsSelect("campaign_id", ("", "No event"), *campaign_options, label="Event"),
                 FsInput("date", input_type="date", label="Session date", value=reporting_today().isoformat(), required=True),
                 cls="drawer-two-up mb-3",
             ),
             Div(
-                FsSelect("event_mode", *[(name, name.title(), name == "regular") for name in CAMPAIGN_MODES], label="Program workflow", required=True),
-                FsSelect("reporting_scope", (reporting_scope, reporting_scope.title(), True), label="Reporting jurisdiction", required=True),
+                FsSelect("event_mode", *[(name, name.title(), name == "regular") for name in CAMPAIGN_MODES], label="Workflow", required=True),
+                FsSelect("reporting_scope", (reporting_scope, reporting_scope.title(), True), label="Reporting level", required=True),
                 cls="drawer-two-up mb-3",
             ),
             FsSelect("alpha_location_id", ("", "No Alpha Location"), *[
             (str(row.get("location_id") or ""), str(row.get("location_name") or row.get("location_code") or "Church location"))
                 for row in locations if row.get("location_id")
-            ], label="Alpha Location (crusades only)"),
-            P(f"Crusade and Retreat sessions require a campaign with its own collection window. All other sessions use this session's window. Scheduled scope: {reporting_scope} ({scope_path}).", cls="small text-muted mb-3"),
+            ], label="Alpha location (Crusades only)"),
+            P("Retreat and Crusade sessions use the campaign's collection window.", cls="small text-muted mb-3"),
             Div(
                 FsInput("collection_window_start", input_type="datetime-local", label="Collection opens", required=True),
-                FsInput("collection_window_end", input_type="datetime-local", label="Collection expires", required=True),
+                FsInput("collection_window_end", input_type="datetime-local", label="Collection closes", required=True),
                 cls="drawer-two-up mb-3",
             ),
             FsSelect("audience_segment", ("", "General audience"), *[(name, _segment_label(name)) for name in AUDIENCE_SEGMENTS], label="Audience segment"),
-            Button("Schedule program", variant="success", size="md", type="submit", cls="w-100"),
+            Button("Save session", variant="success", size="md", type="submit", cls="w-100"),
             hx_post=ctx.url_for("/church-data/programs/events/create"),
             hx_target="#form-drawer-body",
             hx_swap="innerHTML",
@@ -1745,7 +1789,7 @@ def register_program_routes(app) -> None:
     async def create_event(request: Request):
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
+        ctx = build_context(request)
         if not ctx.has_permission("programs:create_event"):
             return P("Your role is not permitted to create program events.", cls="text-muted")
         payload = {**data, "path": ctx.current_scope_path}
@@ -1892,6 +1936,7 @@ def register_program_routes(app) -> None:
                 f"{campaign['domain_name']} campaign reporting.",
                 scope_label=campaign["scope_id"] or ctx.current_scope_label,
                 scope_kind=f"{campaign['event_mode'].title()} Campaign",
+                show_scope_label=str(campaign["scope_id"] or "") != str(ctx.current_scope_label or ""),
             ),
             section_card(
                 "Campaign report",
@@ -1968,7 +2013,7 @@ def register_program_routes(app) -> None:
     async def create_assignment(request: Request, event_id: str):
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
+        ctx = build_context(request)
         try:
             row = await ProgramService.create_assignment(request, ctx, event_id, data) if await ProgramService.live_enabled(request) else None
         except BackendClientError as exc:

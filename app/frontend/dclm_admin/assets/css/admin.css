@@ -294,6 +294,17 @@ h6,
   opacity: 0.9;
 }
 
+.reports-refresh-button {
+  align-items: center;
+  display: inline-flex;
+  height: 44px !important;
+  justify-content: center;
+  min-height: 44px !important;
+  min-width: 44px !important;
+  padding: 0;
+  width: 44px !important;
+}
+
 .topbar-icon-btn,
 .topbar-avatar-btn {
   align-items: center !important;
@@ -1066,7 +1077,7 @@ nav.navbar.admin-bottom-nav {
   transform: translateY(-2px) !important;
 }
 
-/* Active state — strongly branded DCLM Navy / Royal Blue */
+/* Active state â€” strongly branded DCLM Navy / Royal Blue */
 .admin-bottom-nav .nav-link.active,
 .admin-bottom-nav a.nav-link.active,
 .admin-bottom-nav .nav-link[aria-current="page"],
@@ -1116,7 +1127,7 @@ nav.navbar.admin-bottom-nav {
   box-shadow: none !important;
 }
 
-/* Horizontally scrollable branded tabs — strictly bounded to 100% width, styled like skuphase */
+/* Horizontally scrollable branded tabs â€” strictly bounded to 100% width, styled like skuphase */
 .admin-tabs-scroll-container,
 ul.admin-tabs-scroll-container,
 .nav.admin-tabs-scroll-container {
@@ -1194,7 +1205,7 @@ ul.admin-tabs-scroll-container,
   font-weight: 600 !important;
 }
 
-/* ── admin-nav-pills: pill tab strip (Bootstrap overflow-x-auto, skuphase pattern) ── */
+/* â”€â”€ admin-nav-pills: pill tab strip (Bootstrap overflow-x-auto, skuphase pattern) â”€â”€ */
 ul.admin-nav-pills {
   scrollbar-width: none !important;
   -ms-overflow-style: none !important;
@@ -1453,7 +1464,7 @@ ul.admin-nav-pills::-webkit-scrollbar {
   overflow-y: auto;
 }
 
-/* ── Mobile Bottom Sheet Arrangement ────────────────────────────────── */
+/* â”€â”€ Mobile Bottom Sheet Arrangement â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 @media (max-width: 767.98px) {
   #detail-drawer,
   #form-drawer,
@@ -1914,7 +1925,7 @@ ul.admin-nav-pills::-webkit-scrollbar {
   padding: 0.95rem 1rem;
 }
 
-/* ── Faststrap Dark Mode Overrides ─────────────────────────────────────── */
+/* â”€â”€ Faststrap Dark Mode Overrides â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 [data-bs-theme="dark"] {
   --admin-bg: #0b1120;
   --admin-surface-strong: #1e293b;
@@ -2034,7 +2045,7 @@ ul.admin-nav-pills::-webkit-scrollbar {
   background: linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(30, 41, 59, 0.98));
 }
 
-/* ── Top Page Process Loader (Curved edges, faint brand gradient & glow) ── */
+/* â”€â”€ Top Page Process Loader (Curved edges, faint brand gradient & glow) â”€â”€ */
 .admin-loading-bar {
   position: fixed;
   top: 0;
@@ -2070,7 +2081,7 @@ ul.admin-nav-pills::-webkit-scrollbar {
   transition: width 0.2s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.35s ease 0.1s;
 }
 
-/* ── Nested Card Horizontal Padding Normalization ────────────────────── */
+/* â”€â”€ Nested Card Horizontal Padding Normalization â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .card .card,
 .section-card .card,
 .section-card .section-card,
@@ -2111,7 +2122,7 @@ ul.admin-nav-pills::-webkit-scrollbar {
   }
 }
 
-/* ── Sidebar Link Tap / Loading Feedback ─────────────────────────────── */
+/* â”€â”€ Sidebar Link Tap / Loading Feedback â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .sidebar-link {
   position: relative;
   transition: background-color 0.18s ease, transform 0.15s ease, opacity 0.15s ease;
@@ -2157,7 +2168,7 @@ ul.admin-nav-pills::-webkit-scrollbar {
 
 
 
-/* ── Faint, Branded Skeleton Placeholders ───────────────────────────── */
+/* â”€â”€ Faint, Branded Skeleton Placeholders â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .placeholder {
   display: inline-block;
   min-height: 1em;
@@ -2246,4 +2257,139 @@ html, body {
   width: 100% !important;
   max-width: 100% !important;
   box-sizing: border-box !important;
+}
+.program-setup-steps {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.program-setup-step {
+  align-items: center;
+  color: var(--bs-secondary-color);
+  display: flex;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.program-setup-step__number {
+  align-items: center;
+  border: 1px solid var(--bs-border-color);
+  border-radius: 50%;
+  display: inline-flex;
+  flex: 0 0 2rem;
+  height: 2rem;
+  justify-content: center;
+  width: 2rem;
+}
+
+.program-setup-step.is-active {
+  color: var(--bs-primary-text-emphasis);
+  font-weight: 600;
+}
+
+.program-setup-step.is-active .program-setup-step__number,
+.program-setup-step.is-complete .program-setup-step__number {
+  background: var(--bs-primary);
+  border-color: var(--bs-primary);
+  color: var(--bs-white);
+}
+
+.program-setup-step__label {
+  overflow-wrap: anywhere;
+}
+.reports-overview-actions {
+  flex-wrap: nowrap !important;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+}
+
+.reports-overview-actions > a {
+  flex: 0 0 auto;
+  min-width: 8.5rem;
+}
+
+.section-card__body .reports-overview-actions {
+  flex-wrap: nowrap !important;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.reports-overview-actions:focus-visible {
+  border-radius: 0.5rem;
+  outline: 3px solid var(--bs-primary);
+  outline-offset: 2px;
+}
+
+.people-hub-grid {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
+}
+
+.active-scope-control {
+  background-color: var(--bs-primary) !important;
+  border-color: var(--bs-primary) !important;
+  color: var(--bs-white) !important;
+  min-height: 44px;
+  max-width: 100%;
+  white-space: normal;
+}
+
+.active-scope-control .text-secondary {
+  color: rgba(255, 255, 255, 0.8) !important;
+}
+
+.chartjs-data-details {
+  color: var(--bs-secondary-color);
+  font-size: 0.875rem;
+}
+
+.chartjs-data-details summary {
+  cursor: pointer;
+  min-height: 44px;
+  padding-block: 0.65rem;
+}
+
+.chartjs-data-details table {
+  margin-bottom: 0;
+  max-width: 100%;
+}
+
+.people-hub-card .section-card__body > .btn {
+  max-width: none;
+  width: auto;
+}
+
+.page-intro,
+.page-intro__title,
+.page-intro__subtitle,
+.section-card__header,
+.section-card__heading,
+.section-card__body,
+.filter-field,
+.admin-filter-grid > * {
+  min-width: 0;
+}
+
+.page-intro__subtitle,
+.section-card__subtitle {
+  overflow-wrap: break-word;
+}
+
+.section-card__body .form-control,
+.section-card__body .form-select,
+.admin-filter-grid .form-control,
+.admin-filter-grid .form-select {
+  max-width: 100%;
+  min-width: 0;
+}
+
+@media (min-width: 576px) {
+  .section-card__body .reports-overview-actions {
+    flex-wrap: wrap !important;
+    overflow-x: visible;
+  }
 }

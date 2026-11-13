@@ -177,7 +177,7 @@ async def _render_content(request: Request, *, program_key: str, weeks: int, inc
         ),
     ]
     if program_key == "sunday_worship_service":
-        metric_cards.append(stat_card("% of expected Sunday attendance", estimate_label, f"Pooled counted population divided by pooled estimates. {no_estimate or 0} locations have no estimate.", "percent", tone="warning"))
+        metric_cards.append(stat_card("% of documented population · Sunday Worship", estimate_label, f"Pooled counted population divided by pooled on-paper population estimates. {no_estimate or 0} locations have no estimate.", "percent", tone="warning"))
 
     form = Form(
         *hidden_context_inputs(ctx),

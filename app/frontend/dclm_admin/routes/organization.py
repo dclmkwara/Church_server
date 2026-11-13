@@ -718,7 +718,7 @@ def register_organization_routes(app) -> None:
     async def update_location_profile(request: Request, location_key: str):
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
+        ctx = build_context(request)
         object.__setattr__(ctx, "_request", request)
         if await OrganizationService.live_enabled(request):
             try:
@@ -751,7 +751,7 @@ def register_organization_routes(app) -> None:
     @app.post("/organization/hierarchy/import/preview")
     async def hierarchy_import_preview_route(request: Request):
         form = await request.form()
-        ctx = build_context(dict(form))
+        ctx = build_context(request)
         object.__setattr__(ctx, "_request", request)
         upload = form.get("file")
         state_id = str(form.get("state_id") or "")
@@ -778,7 +778,7 @@ def register_organization_routes(app) -> None:
     @app.post("/organization/hierarchy/import/commit")
     async def hierarchy_import_commit_route(request: Request):
         form = await request.form()
-        ctx = build_context(dict(form))
+        ctx = build_context(request)
         object.__setattr__(ctx, "_request", request)
         file_b64 = str(form.get("file_b64") or "")
         filename = str(form.get("filename") or "hierarchy.xlsx")

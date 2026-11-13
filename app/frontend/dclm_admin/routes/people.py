@@ -7,7 +7,7 @@ from faststrap import Badge, Button, Icon, PlaceholderCard, Spinner
 from ..backend import BackendClientError
 from ..auth_context import build_context
 from ..communication import PeopleService, WorkflowService
-from ..communication.active_scope import active_scope_context
+from ..communication.active_scope import active_scope_context, scope_link
 from ..components.feedback import simple_toast_response
 from ..components.shell import hidden_context_inputs, primary_button, shell_layout
 from ..components.ui import empty_state, filter_field as _filter_field, page_intro, page_stack, responsive_table, section_card, stat_card, status_badge
@@ -35,6 +35,48 @@ OFFICIAL_ROLE_OPTIONS = [
     "Welfare Assistant",
     "Evangelism Secretary",
 ]
+
+_FIELD_ACCOUNT_ROLE_KEYS = {"location_worker", "house_fellowship_leader", "fellowship_leader"}
+_FIELD_ACCOUNT_ROLE_LABELS = {
+    "location worker",
+    "location worker / usher",
+    "location usher",
+    "group usher",
+    "region usher",
+    "state usher",
+    "house fellowship leader",
+    "fellowship leader",
+}
+
+
+def _has_user_account_permission(ctx, permission: str) -> bool:
+    """Require both the named permission and a non-field staff persona.
+
+    Some authenticated identities map to a broad location-level profile key;
+    the signed-in role label must therefore also exclude field users.
+    """
+    profile = getattr(ctx, "profile", None)
+    key = str(getattr(profile, "key", "") or "").strip().lower()
+    label = " ".join(str(getattr(profile, "role_label", "") or "").strip().lower().split())
+    is_field_role = (
+        getattr(ctx, "level", 0) < 2
+        or key in _FIELD_ACCOUNT_ROLE_KEYS
+        or label in _FIELD_ACCOUNT_ROLE_LABELS
+        or label.endswith(" usher")
+        or label.endswith(" worker")
+    )
+    return not is_field_role and bool(ctx.has_permission(permission))
+
+
+def _user_account_access_refusal() -> Div:
+    return Div(
+        empty_state(
+            "shield-lock",
+            "User management not available",
+            "User account management is restricted to administrative staff.",
+        ),
+        role="alert",
+    )
 
 
 async def _loading_results(target_id: str, *, hx_get: str, message: str) -> Div:
@@ -536,6 +578,65 @@ async def _members_table(
 
 
 def register_people_routes(app) -> None:
+    @app.get("/people")
+    async def people_home(request: Request):
+        ctx = active_scope_context(request, build_context(request))
+        items = []
+        destinations = [
+            ("Workers", "workers:read", "/people/workers", "Workers and their approval status."),
+            ("Members", "records:read", "/people/members", "Church member records."),
+            ("Newcomers", "records:read", "/church-data/newcomers", "Newcomer follow-up."),
+            ("Fellowships", "fellowship:read", "/fellowship", "Fellowship groups and activity."),
+            ("App users", "users:read", "/people/users", "Accounts and access status."),
+        ]
+        for label, permission, href, description in destinations:
+            allowed = (
+                _has_user_account_permission(ctx, "users:read")
+                if permission == "users:read"
+                else ctx.has_permission(permission)
+            )
+            if allowed:
+                items.append(
+                    section_card(
+                        label,
+                        description,
+                        Button("Open", variant="outline-primary", href=scope_link(ctx, href)),
+                        cls="people-hub-card",
+                    )
+                )
+        if ctx.level >= 3 and "organization" in ctx.visible_modules:
+            items.append(
+                section_card(
+                    "Organization",
+                    "Locations and hierarchy.",
+                    Button("Open", variant="outline-primary", href=scope_link(ctx, "/organization")),
+                    cls="people-hub-card",
+                )
+            )
+        if ctx.level >= 3:
+            items.append(
+                section_card(
+                    "Officials",
+                    "Appointments and assigned scopes.",
+                    Button("Open", variant="outline-primary", href=scope_link(ctx, "/people/officials")),
+                    cls="people-hub-card",
+                )
+            )
+        content = (
+            Div(*items, cls="people-hub-grid")
+            if items
+            else empty_state("people", "No People pages available", "Your role has no People tasks in this scope.")
+        )
+        return shell_layout(
+            ctx,
+            request_path=request.url.path,
+            active_key="people",
+            title="People",
+            subtitle="Choose a people task.",
+            primary_action=None,
+            content=content,
+        )
+
     @app.get("/people/workers")
     async def workers_page(request: Request, search: str = "", status: str = "", approval: str = ""):
         ctx = active_scope_context(request, build_context(request))
@@ -789,7 +890,7 @@ def register_people_routes(app) -> None:
     async def worker_review_action(request: Request, worker_id: str):
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
+        ctx = build_context(request)
         action = data.get("action", "approve")
         try:
             worker = (
@@ -927,7 +1028,7 @@ def register_people_routes(app) -> None:
     async def suspend_worker(request: Request, worker_id: str):
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
+        ctx = build_context(request)
         try:
             worker = (
                 await PeopleService.suspend_worker(request, worker_id, data.get("note", "").strip())
@@ -974,7 +1075,7 @@ def register_people_routes(app) -> None:
     async def create_worker_removal_request(request: Request, worker_id: str):
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
+        ctx = build_context(request)
         try:
             request_row = (
                 await WorkflowService.create_request(
@@ -1035,7 +1136,7 @@ def register_people_routes(app) -> None:
     async def create_worker_transfer_request(request: Request, worker_id: str):
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
+        ctx = build_context(request)
         try:
             request_row = (
                 await WorkflowService.create_request(
@@ -1090,7 +1191,7 @@ def register_people_routes(app) -> None:
     async def create_worker_status_change_request(request: Request, worker_id: str):
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
+        ctx = build_context(request)
         try:
             request_row = (
                 await WorkflowService.create_request(
@@ -1400,7 +1501,7 @@ def register_people_routes(app) -> None:
     async def create_official(request: Request):
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
+        ctx = build_context(request)
         if ctx.level < 3:
             return P("This action is not available at the current level.", cls="text-muted")
         appointment = (
@@ -1529,7 +1630,7 @@ def register_people_routes(app) -> None:
     async def update_official(request: Request, appointment_id: str):
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
+        ctx = build_context(request)
         appointment = (
             await PeopleService.update_official_appointment(
                 request,
@@ -1579,7 +1680,7 @@ def register_people_routes(app) -> None:
     async def revoke_official(request: Request, appointment_id: str):
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
+        ctx = build_context(request)
         appointment = (
             await PeopleService.revoke_official_appointment(request, appointment_id, note=data.get("note", ""))
             if await PeopleService.live_enabled(request)
@@ -1600,6 +1701,13 @@ def register_people_routes(app) -> None:
     @app.get("/people/users")
     async def users_page(request: Request, search: str = "", approval: str = "", status: str = ""):
         ctx = build_context(request)
+        # Security: user account directory is for permitted non-field staff only.
+        if not _has_user_account_permission(ctx, "users:read"):
+            return shell_layout(
+                ctx, request_path=request.url.path, active_key="users",
+                title="Access Restricted", subtitle="", primary_action=None,
+                content=_user_account_access_refusal(),
+            )
         users_results = await _loading_results(
             "users-results",
             hx_get=ctx.url_for("/people/users/list", search=search, approval=approval, status=status),
@@ -1673,6 +1781,8 @@ def register_people_routes(app) -> None:
     @app.get("/people/users/list")
     async def users_list(request: Request, search: str = "", approval: str = "", status: str = ""):
         ctx = active_scope_context(request, build_context(request))
+        if not _has_user_account_permission(ctx, "users:read"):
+            return Div(_user_account_access_refusal(), id="users-results")
         try:
             return await _users_table(request, ctx, search=search, approval=approval, status=status)
         except BackendClientError as exc:
@@ -1681,6 +1791,8 @@ def register_people_routes(app) -> None:
     @app.get("/people/users/new")
     async def new_user_drawer(request: Request):
         ctx = build_context(request)
+        if not _has_user_account_permission(ctx, "users:create"):
+            return _user_account_access_refusal()
         if await PeopleService.live_enabled(request):
             try:
                 live_roles = await PeopleService.list_assignable_roles(request)
@@ -1739,9 +1851,11 @@ def register_people_routes(app) -> None:
 
     @app.post("/people/users/create")
     async def create_user(request: Request):
+        ctx = build_context(request)
+        if not _has_user_account_permission(ctx, "users:create"):
+            return _user_account_access_refusal()
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
         worker_id = data.get("worker_id", "").strip()
         try:
             if await PeopleService.live_enabled(request):
@@ -1809,6 +1923,8 @@ def register_people_routes(app) -> None:
     @app.get("/people/users/{account_id}/drawer")
     async def user_drawer(request: Request, account_id: str):
         ctx = build_context(request)
+        if not _has_user_account_permission(ctx, "users:read"):
+            return _user_account_access_refusal()
         try:
             user = await PeopleService.get_user(request, account_id)
         except BackendClientError as exc:
@@ -1953,6 +2069,8 @@ def register_people_routes(app) -> None:
     @app.get("/people/users/{account_id}/roles")
     async def assign_user_roles_drawer(request: Request, account_id: str):
         ctx = build_context(request)
+        if not _has_user_account_permission(ctx, "users:assign_roles"):
+            return _user_account_access_refusal()
         if await PeopleService.live_enabled(request):
             try:
                 user = await PeopleService.get_user(request, account_id)
@@ -2015,9 +2133,11 @@ def register_people_routes(app) -> None:
 
     @app.post("/people/users/{account_id}/roles")
     async def assign_user_roles(request: Request, account_id: str):
+        ctx = build_context(request)
+        if not _has_user_account_permission(ctx, "users:assign_roles"):
+            return _user_account_access_refusal()
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
         if await PeopleService.live_enabled(request):
             role_ids = []
             for raw_value in [data.get("role_primary", ""), data.get("role_secondary", "")]:
@@ -2049,6 +2169,8 @@ def register_people_routes(app) -> None:
     @app.get("/people/users/{account_id}/review")
     async def user_review_confirm(request: Request, account_id: str, action: str = "approve"):
         ctx = build_context(request)
+        if not _has_user_account_permission(ctx, "users:approve"):
+            return _user_account_access_refusal()
         if not await PeopleService.live_enabled(request):
             return P("Live user review is only available in backend mode.", cls="text-muted")
         try:
@@ -2078,9 +2200,11 @@ def register_people_routes(app) -> None:
 
     @app.post("/people/users/{account_id}/review")
     async def user_review_action(request: Request, account_id: str):
+        ctx = build_context(request)
+        if not _has_user_account_permission(ctx, "users:approve"):
+            return _user_account_access_refusal()
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
         action = data.get("action", "approve")
         try:
             user = (
@@ -2111,6 +2235,8 @@ def register_people_routes(app) -> None:
     @app.get("/people/users/{account_id}/deactivate")
     async def deactivate_user_confirm(request: Request, account_id: str):
         ctx = build_context(request)
+        if not _has_user_account_permission(ctx, "users:deactivate"):
+            return _user_account_access_refusal()
         try:
             user = await PeopleService.get_user(request, account_id) if await PeopleService.live_enabled(request) else STORE.get_user(account_id)
         except BackendClientError as exc:
@@ -2130,9 +2256,11 @@ def register_people_routes(app) -> None:
 
     @app.post("/people/users/{account_id}/deactivate")
     async def deactivate_user(request: Request, account_id: str):
+        ctx = build_context(request)
+        if not _has_user_account_permission(ctx, "users:deactivate"):
+            return _user_account_access_refusal()
         form = await request.form()
         data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
         try:
             user = (
                 await PeopleService.deactivate_user(request, account_id, data.get("note", "").strip())
@@ -2159,6 +2287,8 @@ def register_people_routes(app) -> None:
     @app.get("/people/users/{account_id}/reactivate")
     async def reactivate_user_confirm(request: Request, account_id: str):
         ctx = build_context(request)
+        if not _has_user_account_permission(ctx, "users:deactivate"):
+            return _user_account_access_refusal()
         try:
             user = await PeopleService.get_user(request, account_id) if await PeopleService.live_enabled(request) else None
         except BackendClientError as exc:
@@ -2177,9 +2307,9 @@ def register_people_routes(app) -> None:
 
     @app.post("/people/users/{account_id}/reactivate")
     async def reactivate_user(request: Request, account_id: str):
-        form = await request.form()
-        data = {key: str(value) for key, value in form.items()}
-        ctx = build_context(data)
+        ctx = build_context(request)
+        if not _has_user_account_permission(ctx, "users:deactivate"):
+            return _user_account_access_refusal()
         try:
             user = await PeopleService.reactivate_user(request, account_id)
         except BackendClientError as exc:

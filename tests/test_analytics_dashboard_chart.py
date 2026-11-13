@@ -21,6 +21,14 @@ def test_missing_weeks_break_the_population_line_instead_of_becoming_zero():
     assert rendered_svg.count("<circle") == 1
 
 
+def test_weekly_program_chart_uses_selected_program_in_accessible_label():
+    chart = _line_chart([{"date": "2026-11-12", "average": 25, "counted": 1, "expected": 2}], 4, "Thursday Revival")
+    rendered_svg = str(chart.children[0])
+
+    assert "reporting coverage for Thursday Revival" in rendered_svg
+    assert "by Sunday" not in rendered_svg
+
+
 def test_an_approved_zero_is_plotted_as_zero_and_adjacent_weeks_connect():
     chart = _line_chart(
         [
@@ -85,6 +93,40 @@ def test_dashboard_link_preserves_scope_period_pending_and_weeks():
     }
 
 
+def test_deferred_dashboard_panel_url_preserves_weekly_service_selection():
+    def url_for(path, **overrides):
+        from urllib.parse import urlencode
+
+        return f"{path}?{urlencode(overrides)}" if overrides else path
+
+    ctx = SimpleNamespace(
+        url_for=url_for,
+        current_scope_path="org.234.kw",
+        query_extras={
+            "scope_path": "org.234.kw",
+            "home_path": "org.234.kw",
+            "weeks": "8",
+            "include_pending": "false",
+            "program": "monday_bible_study",
+        },
+    )
+    from app.frontend.dclm_admin.routes.analytics_dashboard import _dashboard_panels_url
+
+    query = parse_qs(urlsplit(_dashboard_panels_url(ctx, "/dashboard/panels")).query)
+    assert query["program"] == ["monday_bible_study"]
+    assert query["weeks"] == ["8"]
+
+
+def test_deferred_panel_selector_accepts_only_weekly_services():
+    from app.frontend.dclm_admin.routes.analytics_dashboard import _DASHBOARD_PROGRAM_WEEKDAYS
+
+    assert set(_DASHBOARD_PROGRAM_WEEKDAYS) == {
+        "sunday_worship_service",
+        "monday_bible_study",
+        "thursday_revival_hour",
+    }
+
+
 def test_location_history_keeps_missing_zero_pending_and_combined_distinct():
     from datetime import date
 
@@ -102,6 +144,22 @@ def test_location_history_keeps_missing_zero_pending_and_combined_distinct():
     assert "Included in combined report" in rendered
     assert "No separate location total" in rendered
     assert "Awaiting approval" in rendered
+
+
+def test_non_sunday_history_uses_selected_service_and_hides_sunday_estimate_columns():
+    from datetime import date
+
+    table = _location_history_table(
+        [{"total": 25, "coverage": {"approved": 1}}],
+        [date(2026, 11, 12)],
+        program_label="Thursday Revival",
+    )
+    rendered = str(table)
+
+    assert "Last 8 Thursday Revival records" in rendered
+    assert "Thursday Revival" in rendered
+    assert "Documented population" not in rendered
+    assert "% of documented population" not in rendered
 
 
 def test_dashboard_period_delta_handles_zero_and_no_comparison_without_nan():

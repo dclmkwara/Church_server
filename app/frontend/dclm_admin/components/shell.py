@@ -27,10 +27,9 @@ NAV_GROUPS = [
         "items": [
             {"label": "Pastor Report", "icon": "file-earmark-text", "href": "/dashboard/pastor-report", "key": "pastor-report", "permission": "reports:read"},
             {"label": "Reports", "icon": "clipboard-data", "href": "/reports", "key": "reports", "permission": "reports:read"},
-            {"label": "Recurring Program Attendance", "icon": "graph-up", "href": "/church-data/population-attendance", "key": "church", "permission": "counts:read"},
+            {"label": "Program Attendance", "icon": "graph-up", "href": "/church-data/population-attendance", "key": "church", "permission": "counts:read"},
             {"label": "Attendance", "icon": "clipboard-check", "href": "/church-data/attendance", "key": "attendance", "permission": "attendance:read"},
-            {"label": "Saturday Workers Meeting", "icon": "people", "href": "/church-data/meetings/workers-saturday", "key": "workers-meeting", "permission": "attendance:read"},
-            {"label": "Tuesday Leaders Meeting", "icon": "person-badge", "href": "/church-data/meetings/leaders-tuesday", "key": "leaders-meeting", "permission": "attendance:read"},
+            {"label": "Worker & Leader Meetings", "icon": "calendar-check", "href": "/church-data/meetings", "key": "meetings", "permission": "attendance:read"},
             {"label": "Newcomers", "icon": "person-hearts", "href": "/church-data/newcomers", "key": "newcomers", "permission": "records:read"},
             {"label": "Count Review", "icon": "clipboard-check", "href": "/church-data/count-review", "key": "count-review", "permission": "counts:review"},
             {"label": "My Requests", "icon": "diagram-3", "href": "/workflows", "key": "workflows", "module": "workflows"},
@@ -43,13 +42,13 @@ NAV_GROUPS = [
             {"label": "Programs", "icon": "calendar-event", "href": "/church-data/programs", "key": "programs", "permission": "programs:read"},
             {"label": "Retreat", "icon": "calendar-heart", "href": "/church-data/programs/analytics/retreat", "key": "programs", "permission": "programs:read"},
             {"label": "Crusade", "icon": "broadcast", "href": "/church-data/programs/analytics/crusade", "key": "programs", "permission": "programs:read"},
-            {"label": "Program Counts", "icon": "bar-chart", "href": "/church-data/counts", "key": "counts", "permission": "counts:read"},
         ],
     },
     {
         "label": "People",
         "module": "people",
         "items": [
+            {"label": "People overview", "icon": "people", "href": "/people", "key": "people"},
             {"label": "Workers", "icon": "people", "href": "/people/workers", "key": "workers", "permission": "workers:read"},
             {"label": "Members", "icon": "person-vcard", "href": "/people/members", "key": "members", "permission": "records:read"},
             {"label": "App Users", "icon": "person-badge", "href": "/people/users", "key": "users", "permission": "users:read"},
@@ -239,7 +238,7 @@ def _user_menu(ctx: AdminContext) -> Any:
                 Span(initials, cls="avatar-pill"),
                 Div(
                     P(ctx.profile.user_name, cls="fw-semibold text-body-emphasis mb-1"),
-                    P(f"{ctx.profile.role_label} • Level {ctx.level}", cls="small text-muted mb-0"),
+                    P(f"{ctx.profile.role_label} â€¢ Level {ctx.level}", cls="small text-muted mb-0"),
                     cls="dropdown-user-copy",
                 ),
                 cls="dropdown-user-summary d-flex align-items-center gap-3 px-3 py-2",
@@ -247,7 +246,7 @@ def _user_menu(ctx: AdminContext) -> Any:
             Div(cls="dropdown-divider"),
             Button(
                 Span(Icon("sliders", cls="fs-6"), cls="d-inline-flex"),
-                Span("Change view / Theme", cls="fw-semibold"),
+                Span("Change scope / theme", cls="fw-semibold"),
                 cls="dropdown-item d-flex align-items-center gap-2",
                 data_bs_toggle="offcanvas",
                 data_bs_target="#scope-drawer",
@@ -323,7 +322,7 @@ def _sidebar(ctx: AdminContext, active_key: str) -> Any:
             Div(
                 Span(initials, cls="sidebar-profile__avatar"),
                 P(ctx.profile.user_name, cls="text-white fw-semibold mb-1"),
-                P(f"{ctx.profile.role_label} • Level {ctx.level}", cls="text-white-50 small mb-0"),
+                P(f"{ctx.profile.role_label} â€¢ Level {ctx.level}", cls="text-white-50 small mb-0"),
                 P(ctx.current_scope_label, cls="text-white-50 small mb-0"),
                 cls="sidebar-profile",
             ),
@@ -340,13 +339,22 @@ def _sidebar(ctx: AdminContext, active_key: str) -> Any:
 
 def _mobile_bottom_nav(ctx: AdminContext, active_key: str) -> Any:
     """Persistent bottom navigation bar shown on mobile (< lg breakpoint)."""
-    nav_items = [
-        ("Home", "house", "/dashboard", "dashboard", None, None),
-        ("People", "people", "/people/workers", "workers", "people", "workers:read"),
-        ("Church", "calendar-event", "/church-data/programs", "programs", "church-data", "programs:read"),
-        ("Finance", "cash-stack", "/church-data/finance", "finance", "church-data", "offerings:read"),
-        ("Inbox", "inbox", "/inbox", "inbox", "inbox", None),
-    ]
+    is_pastor = getattr(ctx.profile, "key", "").endswith("_pastor") or getattr(ctx.profile, "key", "") == "state_overseer"
+    if is_pastor:
+        nav_items = [
+            ("Home", "house", "/dashboard", "dashboard", None, None),
+            ("Approvals", "inbox", "/inbox", "inbox", "inbox", None),
+            ("Reports", "file-earmark-text", "/dashboard/pastor-report", "pastor-report", "reports", "reports:read"),
+            ("People", "people", "/people", "people", "people", None),
+        ]
+    else:
+        nav_items = [
+            ("Home", "house", "/dashboard", "dashboard", None, None),
+            ("People", "people", "/people", "people", "people", None),
+            ("Church", "calendar-event", "/church-data/programs", "programs", "church-data", "programs:read"),
+            ("Finance", "cash-stack", "/church-data/finance", "finance", "church-data", "offerings:read"),
+            ("Inbox", "inbox", "/inbox", "inbox", "inbox", None),
+        ]
     items = [
         BottomNavItem(
             label,
@@ -358,7 +366,7 @@ def _mobile_bottom_nav(ctx: AdminContext, active_key: str) -> Any:
         if (module is None or module in ctx.visible_modules)
         and (permission is None or ctx.has_permission(permission))
     ]
-    # Menu button — triggers the mobile side-nav offcanvas without anchor navigation or focus underline
+    # Menu button â€” triggers the mobile side-nav offcanvas without anchor navigation or focus underline
     items.append(
         Button(
             Icon("list", size="1.25em", cls="mb-1"),
@@ -393,7 +401,7 @@ def shell_layout(
         Link(rel="shortcut icon", type="image/x-icon", href="/favicon.ico"),
         Link(rel="apple-touch-icon", sizes="180x180", href="/assets/apple-touch-icon.png"),
         Link(rel="manifest", href="/manifest.json"),
-        Link(rel="stylesheet", href="/assets/css/admin.css?v=20261031_0930"),
+        Link(rel="stylesheet", href="/assets/css/admin.css?v=20261113_05"),
         Link(rel="stylesheet", href="/assets/css/analytics-dashboard.css?v=20261111_01"),
         Script("""
 (function(){
@@ -477,7 +485,7 @@ def shell_layout(
             Drawer(Div(P("Select any item from the list to view its details here.", cls="text-muted"), id="detail-drawer-body"), drawer_id="detail-drawer", title="Details", placement="end", body_cls="admin-drawer-body"),
             Drawer(Div(P("Use page actions to open forms in this panel.", cls="text-muted"), id="form-drawer-body"), drawer_id="form-drawer", title="Form", placement="end", body_cls="admin-drawer-body"),
             Drawer(Div(P("You have no new notifications right now.", cls="text-muted"), id="notification-drawer-body"), drawer_id="notification-drawer", title="Notifications", placement="end", body_cls="admin-drawer-body"),
-            Drawer(_scope_drawer_content(ctx, request_path), drawer_id="scope-drawer", title="View settings", placement="end", body_cls="admin-drawer-body scope-drawer-body"),
+            Drawer(_scope_drawer_content(ctx, request_path), drawer_id="scope-drawer", title="Scope and display", placement="end", body_cls="admin-drawer-body scope-drawer-body"),
             Modal(Div(P("Select an action above to continue.", cls="text-muted"), id="confirm-modal-body"), modal_id="confirm-modal", title="Confirm action"),
             toast_stack(),
             cls="admin-shell",

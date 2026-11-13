@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
-from fasthtml.common import A, Div, H2, H3, H4, Label, P, Span
+from fasthtml.common import A, Div, H1, H2, H3, H4, Label, P, Span
 
 from faststrap import Badge, BsTable, BsTBody, BsTCell, BsTHead, BsTRow, Button, Card, EmptyState, Fx, Icon
 
@@ -64,18 +64,20 @@ def status_badge(label: str) -> Any:
 
 
 def active_scope_breadcrumb(path: str) -> Any:
-    """Render the selected hierarchy path before the page's scope-specific content."""
+    """Show one scope ID and open the hierarchy selector from the same control."""
     parts = [part for part in str(path or "").split(".") if part]
-    crumbs = []
-    for index in range(1, len(parts) + 1):
-        current = ".".join(parts[:index])
-        label = format_scope_display_id(current) or current.rsplit(".", 1)[-1]
-        crumbs.append(Span(label, aria_current="location" if index == len(parts) else None))
-        if index < len(parts):
-            crumbs.append(Span("/", aria_hidden="true", cls="text-muted px-1"))
+    scope_id = format_scope_display_id(str(path or "")) or (parts[-1] if parts else "Current scope")
     return Div(
-        P("Viewing jurisdiction", cls="small text-muted mb-1"),
-        Div(*crumbs, cls="d-flex flex-wrap align-items-center small fw-semibold", aria_label="Active jurisdiction breadcrumb"),
+        Button(
+            Span("Scope:", cls="text-secondary"),
+            Span(scope_id, cls="fw-semibold"),
+            Icon("chevron-down", cls="small text-secondary"),
+            type="button",
+            data_bs_toggle="offcanvas",
+            data_bs_target="#scope-drawer",
+            aria_label=f"Change scope. Current scope: {scope_id}",
+            cls="btn btn-link active-scope-control px-0 py-1 text-decoration-none d-inline-flex align-items-center gap-2",
+        ),
         cls="active-scope-breadcrumb mb-3",
     )
 
@@ -154,12 +156,20 @@ def stat_card(title: str, value: str, note: str, icon: str, tone: str = "primary
     )
 
 
-def page_intro(title: str, subtitle: str, *, scope_label: str = "", scope_kind: str = "", scope_id: str = "") -> Any:
+def page_intro(
+    title: str,
+    subtitle: str,
+    *,
+    scope_label: str = "",
+    scope_kind: str = "",
+    scope_id: str = "",
+    show_scope_label: bool = False,
+) -> Any:
     meta = []
-    if scope_label:
+    if show_scope_label and scope_label:
         meta.append(Span(scope_label, cls="badge bg-primary-subtle text-primary-emphasis border border-primary-subtle px-2 py-1 small"))
     return Div(
-        H2(title, cls="h5 fw-bold text-body-emphasis mb-1 page-intro__title"),
+        H1(title, cls="h5 fw-bold text-body-emphasis mb-1 page-intro__title"),
         P(subtitle, cls="text-secondary small mb-0 page-intro__subtitle") if subtitle else "",
         Div(*meta, cls="d-flex align-items-center gap-2 mt-2") if meta else "",
         cls="page-intro mb-3",

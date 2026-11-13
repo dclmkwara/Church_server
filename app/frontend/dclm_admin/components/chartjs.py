@@ -4,7 +4,7 @@ import json
 from typing import Any
 from uuid import uuid4
 
-from fasthtml.common import Canvas, Div, P
+from fasthtml.common import Canvas, Details, Div, P, Summary, Table, Tbody, Td, Th, Thead, Tr
 
 from .ui import empty_state
 
@@ -22,6 +22,24 @@ def _chart_host(
     center_label: str = "",
 ) -> Any:
     chart_id = f"chartjs-{uuid4().hex[:10]}"
+    data = config.get("data", {})
+    labels = [str(label) for label in data.get("labels", [])]
+    datasets = data.get("datasets", [])
+    dataset = datasets[0] if datasets else {}
+    values = dataset.get("data", [])
+    data_label = str(dataset.get("label") or "Value")
+    data_table = Details(
+        Summary("View chart data"),
+        Table(
+            Thead(Tr(Th("Period or group", scope="col"), Th(data_label, scope="col"))),
+            Tbody(*[
+                Tr(Td(label), Td(str(value)))
+                for label, value in zip(labels, values)
+            ]),
+            cls="table table-sm mb-0",
+        ),
+        cls="chartjs-data-details mt-2",
+    )
     overlay = ""
     if center_value or center_label:
         overlay = Div(
@@ -30,8 +48,9 @@ def _chart_host(
             cls="chartjs-center-copy",
         )
     return Div(
-        Canvas(id=chart_id, cls="chartjs-canvas", aria_label=str(config.get("data", {}).get("datasets", [{}])[0].get("label") or "Chart")),
+        Canvas(id=chart_id, cls="chartjs-canvas", role="img", aria_label=data_label),
         overlay,
+        data_table,
         cls=f"chartjs-shell {cls}",
         style=f"--chart-height:{height}px;",
         **{"data-chartjs-config": json.dumps(config, separators=(",", ":"))},
