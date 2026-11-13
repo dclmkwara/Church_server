@@ -24,7 +24,7 @@ from app.services.analytics.pastor_report_config import (
 )
 from app.core.program_page_perf import program_page_trace
 from ..auth_context import build_context
-from ..backend import BackendClientError
+from ..backend import BackendClientError, format_scope_display_id
 from ..communication import AuthService, ProgramService
 from ..communication.dashboard_service import DashboardService
 from ..communication.active_scope import active_scope_context, scope_link
@@ -43,6 +43,39 @@ PERIODS = {
     "quarter": ("Last quarter", 13),
 }
 CATEGORY_KEYS = ("adult_male", "adult_female", "youth_male", "youth_female", "boys", "girls")
+
+
+def _report_scope_breadcrumb(ctx, data: dict[str, Any]) -> Any:
+    selected = str(data.get("scope_path") or "")
+    maximum = str((ctx.query_extras or {}).get("home_path") or ctx.profile.root_path or selected)
+    selected_parts = [part for part in selected.split(".") if part]
+    maximum_parts = [part for part in maximum.split(".") if part]
+    paths = [".".join(selected_parts[:depth]) for depth in range(len(maximum_parts), len(selected_parts) + 1)]
+    paths = [path for path in paths if path == maximum or path.startswith(maximum + ".")]
+    if not paths:
+        paths = [selected]
+    crumbs = []
+    for index, path in enumerate(paths):
+        label = format_scope_display_id(path) or path.rsplit(".", 1)[-1]
+        if path == selected:
+            crumbs.append(Span(label, aria_current="location", cls="pastor-report-scope-current"))
+        else:
+            crumbs.append(A(
+                label,
+                href=scope_link(
+                    ctx,
+                    "/dashboard/pastor-report",
+                    scope_path=path,
+                    period=data["period"],
+                    include_pending=str(data["include_pending"]).lower(),
+                    campaign_id=str((data.get("selected_campaign") or {}).get("campaign_id") or ""),
+                    event_mode=str(data.get("event_mode") or ""),
+                ),
+                cls="pastor-report-scope-link",
+            ))
+        if index < len(paths) - 1:
+            crumbs.append(Span("›", aria_hidden="true", cls="pastor-report-scope-separator"))
+    return Div(*crumbs, role="navigation", aria_label="Report scope breadcrumb", cls="pastor-report-scope-breadcrumb")
 CATEGORY_LABELS = {
     "adult_male": "Adult male", "adult_female": "Adult female", "youth_male": "Youth male",
     "youth_female": "Youth female", "boys": "Children male", "girls": "Children female",
@@ -685,35 +718,34 @@ def register_pastor_report_routes(app) -> None:
             selected_event_mode = str(data.get("event_mode") or event_mode)
             selector = HtmlForm(
                 *hidden_context_inputs(ctx),
-                Label("Period", HtmlSelect(*[HtmlOption(label, value=key, selected=data["period"] == key) for key, (label, _weeks) in PERIODS.items()], HtmlOption("Event period", value="event", selected=data["period"] == "event"), name="period", cls="form-select"), cls="form-label"),
-                Label("Event type", HtmlSelect(HtmlOption("Retreat", value="retreat", selected=selected_event_mode == "retreat"), HtmlOption("Crusade", value="crusade", selected=selected_event_mode == "crusade"), name="event_mode", cls="form-select"), cls="form-label") if data["period"] == "event" else HtmlInput(type="hidden", name="event_mode", value=selected_event_mode),
-                Label("Campaign", HtmlSelect(HtmlOption("Choose a campaign", value=""), *[HtmlOption(str(row.get("title") or "Campaign"), value=str(row.get("campaign_id")), selected=str(row.get("campaign_id")) == selected_campaign_id) for row in data["campaigns"]], name="campaign_id", cls="form-select"), cls="form-label") if data["period"] == "event" else HtmlInput(type="hidden", name="campaign_id", value=selected_campaign_id),
-                Label(HtmlInput(type="checkbox", name="include_pending", value="true", checked=data["include_pending"], onchange="this.form.submit()"), " Include pending reports", cls="form-check-label"),
-                Button("Update report", variant="primary", size="md", type="submit"),
-                method="get", action="/dashboard/pastor-report", cls="pastor-report-controls d-flex flex-wrap gap-2 align-items-end",
+                Div(
+                    Label("Period", HtmlSelect(*[HtmlOption("4 Sundays" if key == "4w" else "8 Sundays" if key == "8w" else label, value=key, selected=data["period"] == key) for key, (label, _weeks) in PERIODS.items()], HtmlOption("Events", value="event", selected=data["period"] == "event"), name="period", aria_label=f"Period, {data['period_label']}", cls="form-select pastor-report-select"), cls="pastor-report-control-label pastor-report-period-control"),
+                    Label("Event type", HtmlSelect(HtmlOption("Retreat", value="retreat", selected=selected_event_mode == "retreat"), HtmlOption("Crusade", value="crusade", selected=selected_event_mode == "crusade"), name="event_mode", cls="form-select pastor-report-select"), cls="pastor-report-control-label pastor-report-event-type") if data["period"] == "event" else HtmlInput(type="hidden", name="event_mode", value=selected_event_mode),
+                    Label("Campaign", HtmlSelect(HtmlOption("Choose a campaign", value=""), *[HtmlOption(str(row.get("title") or "Campaign"), value=str(row.get("campaign_id")), selected=str(row.get("campaign_id")) == selected_campaign_id) for row in data["campaigns"]], name="campaign_id", cls="form-select pastor-report-select"), cls="pastor-report-control-label pastor-report-campaign") if data["period"] == "event" else HtmlInput(type="hidden", name="campaign_id", value=selected_campaign_id),
+                    Div(
+                        Button(Icon("arrow-clockwise", cls="me-2"), "Update report", variant="primary", size="md", type="submit", cls="pastor-report-update"),
+                        Div(
+                            Button(Icon("three-dots-vertical"), type="button", variant="outline-primary", cls="pastor-report-more-toggle", aria_label="More report actions", title="More report actions", data_bs_toggle="dropdown", aria_expanded="false"),
+                            Div(
+                                Div("DCLM report actions", cls="dropdown-header"),
+                                A(Icon("share-fill", cls="me-2"), "Share scoped link", href="#share-scoped-report", role="button", cls="dropdown-item", onclick="(function(){const reportUrl=window.location.href;if(navigator.share){navigator.share({title:'Pastor Report',url:reportUrl}).catch(()=>{});}else{window.open('https://api.whatsapp.com/send?text='+encodeURIComponent(reportUrl),'_blank');}})();return false;"),
+                                Button(Icon("printer", cls="me-2"), "Print / Save PDF", type="button", cls="dropdown-item", onclick="fetch('/dashboard/pastor-report/record-print?" + urlencode({"scope_path": data["scope_path"], "period": data["period"], "include_pending": str(data["include_pending"]).lower(), "campaign_id": selected_campaign_id, "event_mode": selected_event_mode}) + "',{credentials:'same-origin'}).then(r=>{if(!r.ok)throw new Error('Could not record report access');window.print()}).catch(e=>alert(e.message))"),
+                                A(Icon("file-earmark-pdf", cls="me-2"), "Download PDF", href=scope_link(ctx, "/dashboard/pastor-report/export.pdf", scope_path=data["scope_path"], period=data["period"], include_pending=str(data["include_pending"]).lower(), campaign_id=selected_campaign_id, event_mode=selected_event_mode), cls="dropdown-item"),
+                                A(Icon("file-earmark-spreadsheet", cls="me-2"), "Export Excel", href=scope_link(ctx, "/dashboard/pastor-report/export.xlsx", scope_path=data["scope_path"], period=data["period"], include_pending=str(data["include_pending"]).lower(), campaign_id=selected_campaign_id, event_mode=selected_event_mode), cls="dropdown-item"),
+                                A(Icon("filetype-csv", cls="me-2"), "Export CSV files", href=scope_link(ctx, "/dashboard/pastor-report/export.csv", scope_path=data["scope_path"], period=data["period"], include_pending=str(data["include_pending"]).lower(), campaign_id=selected_campaign_id, event_mode=selected_event_mode), cls="dropdown-item"),
+                                cls="dropdown-menu dropdown-menu-end shadow-sm pastor-report-more-menu",
+                            ),
+                            cls="dropdown pastor-report-more",
+                        ),
+                        cls="pastor-report-primary-actions",
+                    ),
+                    cls="pastor-report-control-row",
+                ),
+                Div(Label(HtmlInput(type="checkbox", name="include_pending", value="true", checked=data["include_pending"], onchange="this.form.submit()"), Span("Include pending reports", cls="ms-2"), cls="form-check-label"), cls="pastor-report-pending-row"),
+                method="get", action="/dashboard/pastor-report", cls="pastor-report-controls",
             )
             generated = data["generated_at"].strftime("%d %b %Y %H:%M %Z")
-            actions = Div(
-                Button(
-                    Icon("share-fill", cls="me-1"),
-                    "Share scoped report link",
-                    variant="success",
-                    size="md",
-                    onclick="""(function(){
-                        const reportUrl = window.location.href;
-                        if (navigator.share) {
-                            navigator.share({title: 'Pastor Report', url: reportUrl}).catch(()=>{});
-                        } else {
-                            window.open('https://api.whatsapp.com/send?text=' + encodeURIComponent(reportUrl), '_blank');
-                        }
-                    })()""",
-                ),
-                Button("Print / Save PDF", variant="primary", size="md", onclick="fetch('/dashboard/pastor-report/record-print?" + urlencode({"scope_path": data["scope_path"], "period": data["period"], "include_pending": str(data["include_pending"]).lower(), "campaign_id": selected_campaign_id, "event_mode": selected_event_mode}) + "',{credentials:'same-origin'}).then(r=>{if(!r.ok)throw new Error('Could not record report access');window.print()}).catch(e=>alert(e.message))"),
-                A("Download PDF", href=scope_link(ctx, "/dashboard/pastor-report/export.pdf", scope_path=data["scope_path"], period=data["period"], include_pending=str(data["include_pending"]).lower(), campaign_id=selected_campaign_id, event_mode=selected_event_mode), cls="btn btn-outline-primary"),
-                A("Export Excel", href=scope_link(ctx, "/dashboard/pastor-report/export.xlsx", scope_path=data["scope_path"], period=data["period"], include_pending=str(data["include_pending"]).lower(), campaign_id=selected_campaign_id, event_mode=selected_event_mode), cls="btn btn-outline-primary"),
-                A("Export CSV files", href=scope_link(ctx, "/dashboard/pastor-report/export.csv", scope_path=data["scope_path"], period=data["period"], include_pending=str(data["include_pending"]).lower(), campaign_id=selected_campaign_id, event_mode=selected_event_mode), cls="btn btn-outline-primary"),
-                cls="pastor-report-actions d-flex flex-wrap gap-2",
-            )
+            scope_breadcrumb = _report_scope_breadcrumb(ctx, data)
             report_header = Div(
                 Img(src="/assets/img/dclm-logo.png", alt="DCLM", cls="pastor-report-logo"),
                 Div(P("DCLM · KWARA STATE", cls="pastor-report-overline"), H1("Pastor’s report", cls="pastor-report-title"), H2(data["scope_name"], cls="pastor-report-scope"), P(data["period_label"], cls="pastor-report-period"), P("Including pending reports" if data["include_pending"] else "Approved reports only", cls="pastor-report-status"), P(f"Generated {generated} by {data['generated_by']}", cls="pastor-report-generated"), cls="min-w-0"),
@@ -721,13 +753,13 @@ def register_pastor_report_routes(app) -> None:
             )
             report_sections = [section_card(title, "", body, cls="pastor-report-section") for title, body in sections]
             content = Div(
-                selector, actions,
+                scope_breadcrumb, selector,
                 Div(report_header, *report_sections, P("Powered by: Kwara State ICT Unit", cls="pastor-report-footer"), id="pastor-report-printable", cls="pastor-report-document"),
-                Link(rel="stylesheet", href="/assets/css/pastor-report.css?v=20261110_01"),
+                Link(rel="stylesheet", href="/assets/css/pastor-report.css?v=20261113_02"),
                 Script("if(new URLSearchParams(location.search).get('print')==='1'){fetch('/dashboard/pastor-report/record-print?'+new URLSearchParams(location.search),{credentials:'same-origin'}).then(r=>{if(!r.ok)throw new Error();window.print()}).catch(()=>document.querySelector('.pastor-report-page').insertAdjacentHTML('afterbegin','<div role=alert class=alert alert-danger>Could not record report access; printing was not started.</div>'))}"),
                 cls="pastor-report-page",
             )
-        return shell_layout(ctx, request_path=request.url.path, active_key="pastor-report", title="Pastor’s report", subtitle="A printable, scoped report with definitions and data-quality notes.", primary_action=None, content=page_stack(content))
+        return shell_layout(ctx, request_path=request.url.path, active_key="pastor-report", title="Pastor’s report", subtitle="A printable, scoped report with definitions and data-quality notes.", primary_action=None, content=page_stack(content), show_scope_breadcrumb=False)
 
     @app.get("/dashboard/pastor-report/export.xlsx")
     async def pastor_report_xlsx(request: Request, period: str = "4w", include_pending: bool = False, campaign_id: str = "", event_mode: str = ""):

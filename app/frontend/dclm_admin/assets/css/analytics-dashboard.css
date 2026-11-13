@@ -111,10 +111,28 @@
 .analytics-chart-dates { display:flex; justify-content:space-around; color:var(--ad-muted); font-size:10px; }
 .analytics-legend { margin:8px 0 0; }
 .analytics-footer { max-width:1180px; margin:12px auto; padding-bottom:12px; color:#75899a; text-align:center; font-size:11px; }
+.admin-page-frame:has(.prototype-dashboard) { padding-inline:clamp(22px,2.2vw,36px)!important; }
+.analytics-service-filter { margin-left:0; }
+.analytics-filter-period .analytics-period { display:inline-flex; min-height:40px; align-items:center; justify-content:center; padding:5px 10px; font-size:13px; line-height:1.1; }
+.analytics-filter-loading { display:flex; align-items:center; gap:8px; min-height:38px; margin:0 auto; padding:7px 10px; color:var(--ad-blue); font-size:12px; }
+.analytics-is-loading .analytics-dashboard-main { opacity:.48; pointer-events:none; transition:opacity .12s ease; }
+.analytics-is-loading .analytics-filter-loading { position:sticky; top:8px; z-index:5; width:max-content; max-width:100%; border:1px solid var(--ad-line); border-radius:7px; background:var(--ad-panel); box-shadow:0 4px 14px #18365b18; }
 @media(max-width:1500px) { .analytics-content-split { grid-template-columns:1fr; } }
 @media(max-width:1200px) { .analytics-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @media(max-width:900px) { .analytics-topbar,.analytics-breadcrumb,.analytics-toolbar { margin-right:18px; margin-left:18px; } .analytics-user-name { display:none; } }
 @media(max-width:620px) { .analytics-topbar { grid-template-columns:1fr auto; gap:8px; padding:9px 0; } .analytics-topbar>div:first-child { display:grid; gap:1px; } .analytics-tabs { grid-column:1/-1; grid-row:2; } .analytics-user { grid-column:2; grid-row:1; } .analytics-toolbar { flex-wrap:wrap; gap:9px; padding:10px 0; } .analytics-filter-period { margin-left:0; } .analytics-pending-switch { width:100%; } .analytics-dashboard-main { padding-top:12px; } .analytics-title { font-size:24px; } .analytics-coverage-head { display:block; } .analytics-align-right { margin-top:7px; text-align:left; } .analytics-metrics { grid-template-columns:1fr 1fr; gap:7px; } .analytics-metric { padding:10px; } .analytics-value { font-size:21px; } .analytics-kicker { font-size:9px; } }
+@media(max-width:620px) {
+  .admin-page-frame:has(.prototype-dashboard) { padding-inline:16px!important; }
+  .admin-page-body:has(.prototype-dashboard) { padding-inline:0!important; }
+  .prototype-dashboard .analytics-dashboard-main { padding-top:8px; }
+  .analytics-service-filter { width:100%; max-width:100%; flex-wrap:nowrap!important; overflow-x:auto; overscroll-behavior-inline:contain; padding:2px 1px 6px; scrollbar-width:thin; }
+  .analytics-service-filter .analytics-period { flex:0 0 auto; }
+  .analytics-window-filter { gap:6px; }
+  .analytics-window-filter .analytics-filter-label { margin-right:2px; }
+  .analytics-filter-persona-wrap { margin-right:auto; }
+  .analytics-toolbar { column-gap:10px; row-gap:8px; }
+  .analytics-filter-loading { margin:0; }
+}
 
 /* Keep the prototype's compact analytics layout in DCLM's existing light brand palette. */
 :root { --ad-bg:#f3f6fb; --ad-panel:#ffffff; --ad-panel-2:#edf3fa; --ad-line:#d8e1ec; --ad-ink:#182b42; --ad-muted:#62758a; --ad-blue:#1d4f91; --ad-green:#22a06b; --ad-amber:#d98c12; --ad-red:#c94d4d; }

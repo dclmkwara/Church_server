@@ -12,8 +12,28 @@
 .pastor-report-table th { background: #eef4fc; color: #173f7a; }
 .pastor-report-table td, .pastor-report-table th { vertical-align: top; overflow-wrap: anywhere; }
 .pastor-report-footer { border-top: 1px solid #ccd7e5; padding-top: 10px; text-align: center; color: #53657a; font-size: .85rem; margin-top: 22px; }
-.pastor-report-controls { align-items: end; }
-.pastor-report-controls > label { min-width: 150px; }
+.pastor-report-scope-breadcrumb { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:2px 0 12px; color:#64768c; font-size:.875rem; }
+.pastor-report-scope-link { color:#174ea6; text-decoration:none; }
+.pastor-report-scope-link:hover { text-decoration:underline; }
+.pastor-report-scope-current { color:#173f7a; font-weight:700; }
+.pastor-report-scope-separator { color:#8292a4; }
+.pastor-report-controls { display:grid; gap:8px; margin-bottom:14px; padding:14px 16px; border:1px solid #dbe3ee; border-radius:12px; background:linear-gradient(135deg,#f7faff,#fff 68%); }
+.pastor-report-control-row { display:flex; align-items:end; gap:12px; min-width:0; }
+.pastor-report-control-label { display:flex; flex:0 1 230px; min-width:155px; flex-direction:column; gap:5px; margin:0; color:#53657a; font-size:.82rem; font-weight:650; }
+.pastor-report-select { min-width:0; min-height:42px; color:#1b2b3c; border-color:#cdd9e7; background-color:#fff; }
+.pastor-report-primary-actions { display:flex; align-items:center; gap:8px; margin-left:auto; }
+.pastor-report-update { min-height:42px; padding-inline:16px; border-color:#123a72; background:#123a72; font-weight:650; box-shadow:0 3px 8px #123a7222; }
+.pastor-report-update:hover,.pastor-report-update:focus { border-color:#0c2c5a; background:#0c2c5a; }
+.pastor-report-more-toggle { display:grid; width:42px; height:42px; place-items:center; padding:0; color:#123a72; border-color:#b9cbe0; background:#fff; }
+.pastor-report-more-toggle:hover,.pastor-report-more-toggle:focus { color:#fff; border-color:#123a72; background:#123a72; }
+.pastor-report-more-menu { min-width:230px; padding:7px; border-color:#d5dfeb; border-radius:10px; }
+.pastor-report-more-menu .dropdown-header { color:#173f7a; font-size:.75rem; font-weight:750; letter-spacing:.06em; text-transform:uppercase; }
+.pastor-report-more-menu .dropdown-item { display:flex; min-height:42px; align-items:center; border-radius:6px; color:#193b68; }
+.pastor-report-more-menu .dropdown-item:hover,.pastor-report-more-menu .dropdown-item:focus { color:#102f5d; background:#edf4fc; }
+.pastor-report-pending-row { min-height:32px; padding-left:2px; color:#43566d; }
+.pastor-report-pending-row .form-check-label { display:inline-flex; min-height:32px; align-items:center; }
+.pastor-report-actions { display:flex; flex-wrap:wrap; gap:8px; }
+.pastor-report-cover { border-color:#174ea6; }
 @page { size: A4; margin: 14mm; @bottom-left { content: "Powered by: Kwara State ICT Unit"; color: #53657a; font-size: 8pt; } @bottom-right { content: "Page " counter(page); color: #53657a; font-size: 8pt; } }
 @media print {
   body * { visibility: hidden !important; }
@@ -31,5 +51,16 @@
   .pastor-report-logo { width: 54px; }
   .pastor-report-title { font-size: 1.5rem; }
   .pastor-table-scroll { overflow-x: auto; max-width: 100%; }
-  .pastor-report-controls > * { min-width: calc(50% - 8px); flex: 1; }
+  .pastor-report-controls { gap:7px; padding:10px; }
+  .pastor-report-control-row { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:end; gap:8px; }
+  .pastor-report-period-control { grid-column:1; grid-row:1; min-width:0; width:100%; }
+  .pastor-report-primary-actions { grid-column:2; grid-row:1; gap:6px; margin:0; }
+  .pastor-report-update { min-height:42px; padding-inline:8px; font-size:.86rem; white-space:nowrap; }
+  .pastor-report-primary-actions { gap:4px; }
+  .pastor-report-more-toggle { width:40px; height:42px; }
+  .pastor-report-period-control .pastor-report-select { padding-right:1.65rem; padding-left:.55rem; font-size:.86rem; }
+  .pastor-report-event-type,.pastor-report-campaign { grid-column:1/-1; min-width:0; width:100%; }
+  .pastor-report-pending-row { padding-left:2px; }
+  .pastor-report-more-menu { min-width:220px; }
+  .pastor-report-generated { overflow-wrap:anywhere; }
 }

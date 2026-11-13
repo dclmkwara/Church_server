@@ -689,15 +689,15 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
         Input(type="hidden", name="weeks", value=str(weeks)),
         Input(type="hidden", name="include_pending", value="true" if include_pending else "false"),
         Input(type="hidden", name="program", value=program),
-        Div(Span("Signed in as", cls="analytics-filter-label"), Span(f"{ctx.profile.role_label} (level {ctx.level})", cls="analytics-filter-persona"), cls="analytics-filter-persona-wrap"),
+        Div(Span("User:", cls="analytics-filter-label"), Span(ctx.profile.role_label, cls="analytics-filter-persona"), cls="analytics-filter-persona-wrap"),
         Div(
             Span("Service", cls="analytics-filter-label"),
-            A("Sunday Worship", href=scope_link(ctx, dashboard_url, program="sunday_worship_service", weeks=str(weeks), include_pending="true" if include_pending else "false"), cls="analytics-period" + (" active" if program == "sunday_worship_service" else "")),
-            A("Monday Bible Study", href=scope_link(ctx, dashboard_url, program="monday_bible_study", weeks=str(weeks), include_pending="true" if include_pending else "false"), cls="analytics-period" + (" active" if program == "monday_bible_study" else "")),
-            A("Thursday Revival", href=scope_link(ctx, dashboard_url, program="thursday_revival_hour", weeks=str(weeks), include_pending="true" if include_pending else "false"), cls="analytics-period" + (" active" if program == "thursday_revival_hour" else "")),
-            cls="analytics-filter-period",
+            A("SWS", title="Sunday Worship Service", aria_label="Sunday Worship Service", href=scope_link(ctx, dashboard_url, program="sunday_worship_service", weeks=str(weeks), include_pending="true" if include_pending else "false"), cls="analytics-period" + (" active" if program == "sunday_worship_service" else ""), data_dashboard_filter="true"),
+            A("MBS", title="Monday Bible Study", aria_label="Monday Bible Study", href=scope_link(ctx, dashboard_url, program="monday_bible_study", weeks=str(weeks), include_pending="true" if include_pending else "false"), cls="analytics-period" + (" active" if program == "monday_bible_study" else ""), data_dashboard_filter="true"),
+            A("TREH", title="Thursday Revival & Evangelical Hour", aria_label="Thursday Revival & Evangelical Hour", href=scope_link(ctx, dashboard_url, program="thursday_revival_hour", weeks=str(weeks), include_pending="true" if include_pending else "false"), cls="analytics-period" + (" active" if program == "thursday_revival_hour" else ""), data_dashboard_filter="true"),
+            cls="analytics-filter-period analytics-service-filter",
         ),
-        Div(Span("Reporting window", cls="analytics-filter-label"), A("4 weeks", href=scope_link(ctx, dashboard_url, program=program, weeks="4", include_pending="true" if include_pending else "false"), cls="analytics-period" + (" active" if weeks == 4 else "")), A("8 weeks", href=scope_link(ctx, dashboard_url, program=program, weeks="8", include_pending="true" if include_pending else "false"), cls="analytics-period" + (" active" if weeks == 8 else "")), cls="analytics-filter-period"),
+        Div(Span("Window", cls="analytics-filter-label"), A("4 weeks", href=scope_link(ctx, dashboard_url, program=program, weeks="4", include_pending="true" if include_pending else "false"), cls="analytics-period" + (" active" if weeks == 4 else ""), data_dashboard_filter="true"), A("8 weeks", href=scope_link(ctx, dashboard_url, program=program, weeks="8", include_pending="true" if include_pending else "false"), cls="analytics-period" + (" active" if weeks == 8 else ""), data_dashboard_filter="true"), cls="analytics-filter-period analytics-window-filter"),
         Label(Input(type="checkbox", checked=include_pending, cls="form-check-input", onchange="this.form.elements.include_pending.value=this.checked?'true':'false';this.form.requestSubmit()"), "Count reports pending review", cls="analytics-pending-switch"),
         action="/dashboard", method="get", cls="analytics-toolbar", id="analytics-dashboard-filters",
     )
@@ -705,6 +705,19 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
     result = Div(
         Script("""
         (function(){
+          if (!window.__dclmDashboardFilterLoading) {
+            window.__dclmDashboardFilterLoading = true;
+            document.addEventListener('click', function(event){
+              var link = event.target.closest('a[data-dashboard-filter]');
+              var dashboard = document.querySelector('#analytics-dashboard-body');
+              var status = document.querySelector('#analytics-filter-loading');
+              if (!link || !dashboard || !status) return;
+              dashboard.setAttribute('aria-busy', 'true');
+              dashboard.classList.add('analytics-is-loading');
+              status.hidden = false;
+              link.setAttribute('aria-disabled', 'true');
+            });
+          }
           if (window.__dclmAnalyticsRowNavigation) return;
           window.__dclmAnalyticsRowNavigation = true;
           document.addEventListener('click', function(event){
@@ -716,7 +729,6 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
         })();
         """),
         Div(
-            filters,
             Main(
                 _scope_breadcrumb(ctx, ancestors, scope_path),
                 Div(
@@ -736,6 +748,8 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
                     ),
                     cls="analytics-heading",
                 ),
+                filters,
+                Div(Span(cls="spinner-border spinner-border-sm", aria_hidden="true"), Span("Loading report…", cls="ms-2"), id="analytics-filter-loading", role="status", aria_live="polite", hidden=True, cls="analytics-filter-loading"),
                 _coverage_panel(current, latest, include_pending, program_label),
                 Div(
                     H2("Sunday services reported separately", cls="h6"),
