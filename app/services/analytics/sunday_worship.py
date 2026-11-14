@@ -312,6 +312,8 @@ def _build_overview(
         if eligible:
             version = max(eligible, key=lambda item: (item.effective_from, getattr(item, "created_at", None) or datetime.min.replace(tzinfo=timezone.utc)))
             expected_by_location[location_id] = int(version.expected_value)
+    scope_estimated_location_ids = set(expected_by_location) & set(locations_by_id)
+    scope_expected_total = sum(expected_by_location[location_id] for location_id in scope_estimated_location_ids)
     counted_location_ids = set(counted_units)
     estimated_counted_locations = set()
     expected_total = 0
@@ -389,6 +391,8 @@ def _build_overview(
         "multiple_service_locations": sorted(multiple_service_locations),
         "daily_total_defined": not bool(multiple_service_locations),
         "location_expected_values": expected_by_location,
+        "expected_population_scope_total": scope_expected_total if scope_estimated_location_ids else None,
+        "expected_population_scope_locations": len(scope_estimated_location_ids),
         "expected_population_total": expected_total if estimated_counted_locations else None,
         "expected_population_counted_total": expected_counted_population if estimated_counted_locations else None,
         "expected_population_counted_locations": len(estimated_counted_locations),

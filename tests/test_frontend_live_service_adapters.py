@@ -771,6 +771,10 @@ def test_admin_pages_keep_source_data_read_only_and_show_no_intake_actions(monke
             )
             response = asyncio.run(route.endpoint(request))
             body = response.body.decode()
+            if route_path == "/church-data/attendance":
+                assert response.status_code == 307
+                assert response.headers["location"].startswith("/church-data/meetings")
+                continue
             assert response.status_code == 200, route_path
             assert not any(action in body for action in forbidden_actions), route_path
         for route_path in notice_paths:
@@ -788,6 +792,10 @@ def test_admin_pages_keep_source_data_read_only_and_show_no_intake_actions(monke
                 receive,
             )
             response = asyncio.run(route.endpoint(request))
+            if route_path == "/church-data/attendance/content":
+                assert response.status_code == 307
+                assert response.headers["location"].startswith("/church-data/meetings")
+                continue
             assert "Level 1-2 Data Sourcing app" in response.body.decode(), route_path
 
         for route_path in form_paths:

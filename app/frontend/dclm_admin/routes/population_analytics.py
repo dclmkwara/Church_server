@@ -6,10 +6,11 @@ from datetime import date, timedelta
 from typing import Any
 
 from fasthtml.common import A, Div, Form, H1, H2, H3, Input, Label, NotStr, Option, P, Select, Span, Strong
-from faststrap import Button
+from faststrap import Button, Card
 from starlette.requests import Request
 
 from ..auth_context import build_context
+from ..backend import format_scope_display_id
 from ..communication.active_scope import active_scope_context, scope_link
 from ..communication.dashboard_service import DashboardService
 from ..components.shell import hidden_context_inputs, shell_layout
@@ -30,6 +31,58 @@ def _int(value: Any) -> int:
         return int(value or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _fmt_number(value: Any) -> str:
+    return f"{_int(value):,}"
+
+
+def _category_metrics(report: dict[str, Any]) -> list[tuple[str, int | None, float | None]]:
+    categories = report.get("categories") or {}
+    total = report.get("total")
+    if total is None or any(categories.get(key) is None for key in ("adult_male", "adult_female", "youth_male", "youth_female", "boys", "girls")):
+        return [("Male", None, None), ("Female", None, None), ("Adults", None, None), ("Youth", None, None), ("Children", None, None)]
+    values = {
+        "Male": _int(categories["adult_male"]) + _int(categories["youth_male"]) + _int(categories["boys"]),
+        "Female": _int(categories["adult_female"]) + _int(categories["youth_female"]) + _int(categories["girls"]),
+        "Adults": _int(categories["adult_male"]) + _int(categories["adult_female"]),
+        "Youth": _int(categories["youth_male"]) + _int(categories["youth_female"]),
+        "Children": _int(categories["boys"]) + _int(categories["girls"]),
+    }
+    denominator = _int(total)
+    return [(label, amount, round(amount * 100 / denominator, 1) if denominator else None) for label, amount in values.items()]
+
+
+def _demographic_list(report: dict[str, Any], *, compact: bool = False) -> Any:
+    metrics = _category_metrics(report)
+    return Div(*[
+        Div(
+            Span(label, cls="program-demographic-label"),
+            Strong("Not available" if amount is None else _fmt_number(amount), cls="program-demographic-value"),
+            Span("" if percentage is None else f"{percentage:g}%", cls="program-demographic-percent"),
+            cls="program-demographic-item",
+        )
+        for label, amount, percentage in metrics
+    ], cls="program-demographics" + (" program-demographics-compact" if compact else ""), aria_label="Demographic counts and share of counted attendance")
+
+
+def _scope_expected_percent(report: dict[str, Any]) -> tuple[str, str]:
+    expected = report.get("expected_population_scope_total")
+    counted = report.get("total")
+    estimated_locations = _int(report.get("expected_population_scope_locations"))
+    total_locations = _int(report.get("n_expected"))
+    missing_estimates = max(0, total_locations - estimated_locations)
+    if expected is None or _int(expected) <= 0 or counted is None:
+        if counted is None:
+            return "No counted attendance", "The attendance figure is unavailable until a report is counted."
+        return "No expected count", "Set location estimates to compare attendance with expected population."
+    percentage = round(_int(counted) * 100 / _int(expected), 1)
+    note = f"{_fmt_number(counted)} counted of {_fmt_number(expected)} expected"
+    if estimated_locations:
+        note += f" across {estimated_locations} of {total_locations} locations with estimates"
+    if missing_estimates:
+        note += f" · {missing_estimates} location{'s' if missing_estimates != 1 else ''} without estimate"
+    return f"{percentage:g}%", note
 
 
 def _scope_depth(path: str) -> int:
@@ -157,41 +210,53 @@ async def _render_content(request: Request, *, program_key: str, weeks: int, inc
         for report in history if report.get("total") is not None and _int(report.get("n_counted")) > 0
     ]
     average = round(sum(avg_values) / len(avg_values)) if avg_values else None
-    expected_percent = current.get("expected_population_percent") if program_key == "sunday_worship_service" else None
-    no_estimate = _int(current.get("expected_population_no_estimate_locations")) if program_key == "sunday_worship_service" else None
     coverage = current.get("coverage") or {}
     n_expected = _int(current.get("n_expected"))
     n_received = _int(current.get("n_received"))
     count_label = _report_label(current) if total is None else f"{_int(total):,}"
-    estimate_label = "Not applicable" if program_key != "sunday_worship_service" else (f"{expected_percent}%" if expected_percent is not None else "No estimates yet")
 
+    is_sunday = program_key == "sunday_worship_service"
+    if is_sunday:
+        expected_value, expected_note = _scope_expected_percent(current)
+        latest_card = Card(
+            Div(Span("Latest Sunday Worship", cls="small text-muted"), Strong(count_label, cls="program-latest-total"), P(f"{current.get('occurrence_date') or 'No occurrence'} · {n_counted} of {n_expected} locations counted", cls="small text-muted mb-2"), cls="d-grid gap-1"),
+            H3("People", cls="h6 fw-bold mb-2"), _demographic_list(current),
+            Div(Strong(expected_value, cls="program-expected-value"), Span("of expected population", cls="small text-muted"), P(expected_note, cls="small text-muted mb-0"), cls="program-expected"),
+            cls="card border-0 shadow-sm program-summary-card",
+        )
+    else:
+        latest_card = stat_card(f"Latest {program.label}", count_label, f"{n_counted} {unit_label_plural} {'reported' if program_key == 'house_caring_fellowship' else 'counted'} · {current.get('occurrence_date', '')}", "people", tone="primary")
+
+    coverage_card = stat_card(
+        "Reporting coverage", f"{n_received} of {n_expected}",
+        (f"{_int(coverage.get('reported'))} reported · {_int(coverage.get('missing')) + _int(coverage.get('late')) + _int(coverage.get('awaiting'))} not reported"
+         if program_key == "house_caring_fellowship" else
+         f"{_int(coverage.get('approved'))} approved · {_int(coverage.get('pending'))} pending · {_int(coverage.get('returned'))} returned · {_int(coverage.get('missing')) + _int(coverage.get('late')) + _int(coverage.get('awaiting'))} not reported"),
+        "clipboard-check", tone="info",
+    )
     metric_cards = [
-        stat_card(f"Latest {program.label}", count_label, f"{n_counted} {unit_label_plural} {'reported' if program_key == 'house_caring_fellowship' else 'counted'} · {current.get('occurrence_date', '')}", "people", tone="primary"),
-        stat_card(f"Average per reporting {unit_label}", f"{average:,}" if average is not None else "No counted report", f"Mean of the weekly {unit_label}-level averages in this window ({len(avg_values)} reported weeks).", "graph-up", tone="success"),
-        stat_card(
-            "Reporting coverage", f"{n_received} of {n_expected}",
-            (f"{_int(coverage.get('reported'))} reported · {_int(coverage.get('missing')) + _int(coverage.get('late')) + _int(coverage.get('awaiting'))} not reported"
-             if program_key == "house_caring_fellowship" else
-             f"{_int(coverage.get('approved'))} approved · {_int(coverage.get('pending'))} pending · {_int(coverage.get('returned'))} returned · {_int(coverage.get('missing')) + _int(coverage.get('late')) + _int(coverage.get('awaiting'))} not reported"),
-            "clipboard-check", tone="info",
-        ),
+        stat_card(f"{weeks}-occurrence average", f"{average:,}" if average is not None else "No counted report", f"Average per reporting {unit_label} across this window.", "graph-up", tone="success"),
+        coverage_card,
     ]
-    if program_key == "sunday_worship_service":
-        metric_cards.append(stat_card("% of documented population · Sunday Worship", estimate_label, f"Pooled counted population divided by pooled on-paper population estimates. {no_estimate or 0} locations have no estimate.", "percent", tone="warning"))
-
     form = Form(
         *hidden_context_inputs(ctx),
-        Label("Program", cls="form-label small fw-semibold mb-1"),
-        Select(*[
-            Option(STANDING_PROGRAMS[key].label, value=key, selected=key == program_key)
-            for key in PROGRAM_KEYS
-        ], name="program_key", cls="form-select"),
-        Label("Reporting window", cls="form-label small fw-semibold mb-1"),
-        Select(Option("4 weeks", value="4", selected=weeks == 4), Option("8 weeks", value="8", selected=weeks == 8), name="weeks", cls="form-select"),
-        Label(Input(type="checkbox", name="include_pending", value="true", checked=include_pending, disabled=program_key == "house_caring_fellowship"), " Include pending reports", cls="form-check-label d-flex align-items-center gap-2"),
+        Div(
+            Label("Program", cls="form-label small fw-semibold mb-1"),
+            Select(*[
+                Option(STANDING_PROGRAMS[key].label, value=key, selected=key == program_key)
+                for key in PROGRAM_KEYS
+            ], name="program_key", cls="form-select"),
+            cls="program-filter-pair program-filter-program",
+        ),
+        Div(
+            Label("Reporting window", cls="form-label small fw-semibold mb-1"),
+            Select(Option("Latest 4", value="4", selected=weeks == 4), Option("Latest 8", value="8", selected=weeks == 8), name="weeks", cls="form-select"),
+            cls="program-filter-pair",
+        ),
+        Div(Label(Input(type="checkbox", name="include_pending", value="true", checked=include_pending, disabled=program_key == "house_caring_fellowship"), " Include pending", cls="form-check-label d-flex align-items-center gap-2"), cls="program-filter-pending"),
         Input(type="hidden", name="scope_path", value=scope_path),
-        Button("Apply", variant="primary", type="submit", cls="align-self-end"),
-        method="get", action="/church-data/population-attendance/content", cls="d-flex flex-wrap align-items-end gap-3 mb-3",
+        Button("Apply", variant="primary", type="submit", cls="program-filter-apply"),
+        method="get", action="/church-data/population-attendance/content", cls="program-attendance-filters d-flex flex-wrap align-items-end gap-3 mb-3",
     )
 
     maximum = _current_maximum_path(request, ctx)
@@ -211,12 +276,11 @@ async def _render_content(request: Request, *, program_key: str, weeks: int, inc
     if not crumbs:
         crumbs = [Strong(str(getattr(ctx, "current_scope_label", "Current scope")))]
 
-    table_rows = []
+    child_cards = []
     for child in children:
         child_history = child.get("history") or []
         report = child_history[-1] if child_history else {}
         child_state = _report_label(report)
-        child_coverage = report.get("coverage") or {}
         child_expected = _int(report.get("n_expected"))
         child_received = _int(report.get("n_received"))
         child_avg = [
@@ -225,13 +289,14 @@ async def _render_content(request: Request, *, program_key: str, weeks: int, inc
         ]
         latest_date = str(report.get("occurrence_date") or "")
         href = scope_link(ctx, "/church-data/population-attendance", scope_path=str(child["path"]), program_key=program_key, weeks=str(weeks), include_pending=str(include_pending).lower())
-        table_rows.append(Div(
-            A(str(child.get("name") or "Reporting unit"), href=href, cls="fw-semibold text-decoration-none"),
-            P(f"{child_received} of {child_expected} {unit_label_plural} reported · {latest_date}", cls="small text-muted mb-1"),
-        Div(Span(child_state), Span((f"{_int(child_coverage.get('reported'))} reported" if program_key == "house_caring_fellowship" else f"{_int(child_coverage.get('approved'))} approved · {_int(child_coverage.get('pending'))} pending · {_int(child_coverage.get('returned'))} returned"), cls="small text-muted"), cls="d-flex justify-content-between flex-wrap gap-2"),
-            P(f"Average per reporting {unit_label}: {round(sum(child_avg)/len(child_avg)):,}" if child_avg else "Average: no counted reports", cls="small text-muted mb-0 mt-1"),
-            cls="border rounded-3 p-3 d-grid gap-1",
-        ))
+        child_cards.append(A(Card(
+            Div(Div(Strong(str(child.get("name") or "Reporting unit"), cls="program-child-name"), Span(format_scope_display_id(str(child.get("path") or "")), cls="program-child-id"), cls="d-grid"), Span(child_state, cls="badge text-bg-light"), cls="d-flex align-items-start justify-content-between gap-2"),
+            P(f"{latest_date or 'No occurrence'} · {child_received} of {child_expected} {unit_label_plural} reported", cls="small text-muted mb-0"),
+        Div(Strong("Not reported" if report.get("total") is None else f"{_int(report.get('total')):,}", cls="program-child-count"), Div(Strong(_scope_expected_percent(report)[0] if is_sunday else "—", cls="program-child-count"), Span("of expected" if is_sunday else "attendance", cls="small text-muted"), cls="text-end"), cls="program-child-highlights"),
+            _demographic_list(report, compact=True) if is_sunday else P(f"Average per reporting {unit_label}: {round(sum(child_avg)/len(child_avg)):,}" if child_avg else "Average: no counted reports", cls="small text-muted mb-0"),
+            P(_scope_expected_percent(report)[1], cls="small text-muted mb-0") if is_sunday else Span(),
+            cls="card h-100 program-child-card",
+        ), href=href, cls="program-child-link", aria_label=f"Open {child.get('name') or 'reporting unit'} attendance detail"))
     if depth >= 5:
         # The history rows are deliberately emitted for every week; absent and zero remain distinct.
         table_rows = []
@@ -253,12 +318,12 @@ async def _render_content(request: Request, *, program_key: str, weeks: int, inc
                 table_rows.append(Div(Strong(str(report.get("occurrence_date") or "")), Span(label), cls="d-flex justify-content-between border-bottom py-2"))
         records_body = Div(H3(f"{node_name} · recent occurrences", cls="h6"), *table_rows, cls="d-grid")
     else:
-        records_body = Div(*table_rows, cls="d-grid gap-2") if table_rows else empty_state("diagram-3", "No child scopes", "No reporting units are available within this scope.")
+        records_body = Div(*child_cards, cls="program-child-grid") if child_cards else empty_state("diagram-3", "No child scopes", "No reporting units are available within this scope.")
 
     intro = Div(
         Div(*crumbs, cls="small mb-2"),
-        H1(program.label, cls="h3 fw-bold mb-1"),
-        P(f"{unit_label_plural.title()} report for the latest {weeks} {program.label.lower()} occurrences. {include_note}", cls="text-muted mb-0"),
+        H1("Program Attendance", cls="h3 fw-bold mb-1"),
+        P(f"{program.label} · {current.get('occurrence_date') or 'No report date'} · {include_note}", cls="text-muted mb-0"),
         cls="mb-3",
     )
     definitions = P(
@@ -269,8 +334,8 @@ async def _render_content(request: Request, *, program_key: str, weeks: int, inc
     return Div(
         intro,
         form,
-        Div(*metric_cards, cls="d-grid gap-3", style="grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr))"),
-        section_card("Reports by child scope" if depth < 5 else "Occurrence records", "Select a child name to open its scoped report. Figures are calculated from saved submissions.", records_body),
+        Div(latest_card, Div(*metric_cards, cls="program-secondary-metrics"), cls="program-overview-grid"),
+        section_card(("Regions" if depth == 2 else "Groups" if depth == 3 else "Locations" if depth == 4 else "Fellowships") if depth < 5 else "Occurrence records", "Select a card to drill down. Demographic percentages are shares of counted attendance.", records_body),
         section_card("Weekly trend", f"Average attendance by reporting {unit_label}; this is the mean of weekly unit averages, not a sum across weeks.", _trend(history, unit_label)),
         section_card("How to read this page", "Reporting definitions", definitions),
         id="population-analytics-content",
@@ -288,7 +353,7 @@ def register_population_analytics_routes(app) -> None:
         target = scope_link(ctx, "/church-data/population-attendance/content", program_key=program_key, weeks=str(weeks), include_pending=str(include_pending).lower())
         body = Div(P("Loading population reports…", cls="placeholder-glow text-muted"), id="population-page-load", hx_get=target, hx_trigger="load", hx_swap="outerHTML", cls="min-vh-25")
         report_url = scope_link(ctx, "/dashboard/pastor-report", scope_path=await DashboardService.scope_path(request, ctx), period="4w", include_pending=str(include_pending).lower())
-        return shell_layout(ctx, request_path=request.url.path, active_key="church", title="Population attendance", subtitle="Recurring program attendance and reporting coverage.", primary_action=A("Print / export report", href=report_url, cls="btn btn-outline-primary"), content=page_stack(body), show_shell_intro=False)
+        return shell_layout(ctx, request_path=request.url.path, active_key="church", title="Program Attendance", subtitle="Latest population counts by program and area.", primary_action=A("Print / export report", href=report_url, cls="btn btn-outline-primary"), content=page_stack(body), show_shell_intro=False)
 
     @app.get("/church-data/population-attendance/content")
     async def population_attendance_content(request: Request, program_key: str = "sunday_worship_service", weeks: int = 4, include_pending: bool = False, scope_path: str = ""):

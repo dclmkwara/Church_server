@@ -1146,7 +1146,7 @@ def render_field_role_dashboard(ctx: Any) -> Any:
     visible = getattr(ctx, "visible_modules", [])
     if can_attendance or "church-data" in visible:
         actions.append(
-            A(Icon("clipboard-check", cls="me-2"), "Worker Attendance", href="/church-data/attendance", cls="btn btn-primary")
+            A(Icon("calendar-check", cls="me-2"), "Worker & Leader Meetings", href="/church-data/meetings", cls="btn btn-primary")
         )
     if can_fellowship or "fellowship" in visible:
         actions.append(
@@ -1158,7 +1158,7 @@ def render_field_role_dashboard(ctx: Any) -> Any:
         )
     if not actions:
         actions.append(
-            A(Icon("clipboard-check", cls="me-2"), "Worker Attendance", href="/church-data/attendance", cls="btn btn-primary")
+            A(Icon("calendar-check", cls="me-2"), "Worker & Leader Meetings", href="/church-data/meetings", cls="btn btn-primary")
         )
 
     return Div(

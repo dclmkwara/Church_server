@@ -73,6 +73,28 @@ def test_no_estimate_locations_are_excluded_and_counted():
     assert result["expected_population_counted_locations"] == 2
 
 
+def test_scope_expected_population_includes_locations_without_counted_reports():
+    locations = [
+        SimpleNamespace(location_id="a", path="org.234.KW.R.G.001"),
+        SimpleNamespace(location_id="b", path="org.234.KW.R.G.002"),
+    ]
+    result = _build_overview(
+        scope_path="org.234.KW.R.G",
+        occurrence_date=date(2026, 11, 1),
+        now=datetime(2026, 11, 2, tzinfo=timezone.utc),
+        locations=locations, events=[], count_rows=[_count("a", 80)],
+        include_pending=False,
+        estimates_by_location={
+            "a": [_estimate(100, date(2026, 1, 1))],
+            "b": [_estimate(200, date(2026, 1, 1))],
+        },
+    )
+    assert result["total"] == 80
+    assert result["expected_population_total"] == 100  # Existing counted-location comparison remains intact.
+    assert result["expected_population_scope_total"] == 300
+    assert result["expected_population_scope_locations"] == 2
+
+
 def test_estimate_version_effective_date_is_applied_to_occurrence():
     result = _overview(
         {"a": 80},

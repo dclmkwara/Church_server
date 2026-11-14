@@ -243,7 +243,7 @@ def test_dashboard_does_not_reintroduce_a_stale_analytics_stylesheet():
     dashboard_route = (root / "app/frontend/dclm_admin/routes/analytics_dashboard.py").read_text(encoding="utf-8")
     shell = (root / "app/frontend/dclm_admin/components/shell.py").read_text(encoding="utf-8")
     assert "analytics-dashboard.css" not in dashboard_route
-    assert 'analytics-dashboard.css?v=20261113_01' in shell
+    assert 'analytics-dashboard.css?v=20261114_01' in shell
 
 
 def test_rendered_dashboard_components_fit_phone_and_tablet_widths():

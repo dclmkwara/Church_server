@@ -28,7 +28,6 @@ NAV_GROUPS = [
             {"label": "Pastor Report", "icon": "file-earmark-text", "href": "/dashboard/pastor-report", "key": "pastor-report", "permission": "reports:read"},
             {"label": "Reports", "icon": "clipboard-data", "href": "/reports", "key": "reports", "permission": "reports:read"},
             {"label": "Program Attendance", "icon": "graph-up", "href": "/church-data/population-attendance", "key": "church", "permission": "counts:read"},
-            {"label": "Attendance", "icon": "clipboard-check", "href": "/church-data/attendance", "key": "attendance", "permission": "attendance:read"},
             {"label": "Worker & Leader Meetings", "icon": "calendar-check", "href": "/church-data/meetings", "key": "meetings", "permission": "attendance:read"},
             {"label": "Newcomers", "icon": "person-hearts", "href": "/church-data/newcomers", "key": "newcomers", "permission": "records:read"},
             {"label": "Count Review", "icon": "clipboard-check", "href": "/church-data/count-review", "key": "count-review", "permission": "counts:review"},
@@ -402,7 +401,7 @@ def shell_layout(
         Link(rel="apple-touch-icon", sizes="180x180", href="/assets/apple-touch-icon.png"),
         Link(rel="manifest", href="/manifest.json"),
         Link(rel="stylesheet", href="/assets/css/admin.css?v=20261113_05"),
-        Link(rel="stylesheet", href="/assets/css/analytics-dashboard.css?v=20261113_01"),
+        Link(rel="stylesheet", href="/assets/css/analytics-dashboard.css?v=20261114_01"),
         Script("""
 (function(){
   try {

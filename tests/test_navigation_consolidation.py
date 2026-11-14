@@ -80,12 +80,22 @@ def test_current_page_urls_remain_registered_without_breaking_existing_bookmarks
         "/organization", "/church-data/programs", "/church-data/counts",
         "/church-data/count-review", "/church-data/meetings/workers-saturday",
         "/church-data/meetings/leaders-tuesday", "/church-data/finance",
-        "/church-data/newcomers", "/church-data/attendance",
+        "/church-data/newcomers",
         "/church-data/population-attendance", "/church-data/programs/analytics/retreat",
         "/church-data/programs/analytics/crusade", "/analytics/expected-population",
         "/system/audit-logs", "/system/rbac",
     }
     assert legacy_page_urls <= registered
+
+
+def test_attendance_navigation_is_consolidated_into_meetings():
+    from app.frontend.dclm_admin.app_factory import app
+
+    labels = {item["label"] for group in NAV_GROUPS for item in group["items"]}
+    assert "Attendance" not in labels
+    assert "Program Attendance" in labels
+    assert "Worker & Leader Meetings" in labels
+    assert any(getattr(route, "path", None) == "/church-data/attendance" for route in app.routes)
 
 
 def test_finance_analytics_menu_link_selects_the_existing_financial_report_tab():

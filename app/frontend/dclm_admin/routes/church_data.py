@@ -6,8 +6,9 @@ import datetime
 from fasthtml.common import A, Div, Form, H3, H4, Input, Label, Option, P, Select, Textarea
 from decimal import Decimal, InvalidOperation
 from starlette.requests import Request
+from starlette.responses import RedirectResponse
 
-from faststrap import Badge, Button, PlaceholderCard, Spinner, TabPane, Tabs
+from faststrap import Badge, Button, Card, PlaceholderCard, Spinner, TabPane, Tabs
 
 from ..backend import BackendClientError
 from ..auth_context import build_context
@@ -722,42 +723,6 @@ async def _attendance_stats(request: Request, ctx, *, oob: bool = False) -> Div:
     )
 
 
-async def _sunday_population_expectation_panel(request: Request, ctx) -> Div:
-    today = reporting_today()
-    latest = today - datetime.timedelta(days=(today.weekday() + 1) % 7)
-    result = await DashboardService.sunday_worship_series(
-        request, ctx, weeks=4, latest_date=latest.isoformat(),
-    )
-    if not isinstance(result, dict):
-        result = {"error": "Sunday population data is unavailable."}
-    history = result.get("scope") or [] if isinstance(result, dict) else []
-    current = history[-1] if history else {}
-    if result.get("error") or result.get("unavailable"):
-        explanation = result.get("error") or result.get("message") or "Sunday population data is unavailable."
-        return section_card("Sunday Worship population attendance", "Congregation population is shown separately from the worker roster below.", P(str(explanation), role="alert", cls="text-danger mb-0"))
-    percent = current.get("expected_population_percent")
-    if not current.get("locations_with_estimate"):
-        expected_label, expected_note = "No estimates yet", "The State Overseer has not entered documented population estimates in this scope."
-    else:
-        expected_label = "No eligible report" if percent is None else f"{float(percent):.1f}%"
-        expected_note = (
-            "No counted location report has both an estimate and a population count."
-            if percent is None else
-            f"Pooled over {int(current.get('expected_population_counted_locations') or 0)} counted locations with estimates; "
-            f"{int(current.get('expected_population_no_estimate_locations') or 0)} counted locations have no estimate."
-        )
-    return section_card(
-        "Sunday Worship population attendance",
-        f"Congregation population for {latest.isoformat()}, separate from worker attendance.",
-        Div(
-            stat_card("% of documented population · Sunday Worship", expected_label, expected_note, "graph-up", tone="primary"),
-            stat_card("Counted population", "No counted report" if current.get("total") is None else f"{int(current.get('total') or 0):,}", "Location-level reports counted for this Sunday", "people", tone="success"),
-            stat_card("Documented population", "No estimate" if current.get("expected_population_total") is None else f"{int(current.get('expected_population_total') or 0):,}", "Pooled on-paper estimate for locations with counted Sunday Worship reports", "bullseye", tone="info"),
-            cls="counts-stat-grid",
-        ),
-    )
-
-
 async def _attendance_table(
     request: Request,
     ctx,
@@ -819,7 +784,7 @@ async def _attendance_table(
 
 def register_church_data_routes(app) -> None:
     @app.get("/church-data/meetings")
-    async def meetings_page(request: Request, tab: str = "saturday"):
+    async def meetings_page(request: Request, tab: str = "saturday", status: str = "", location: str = "", unit: str = "", event_title: str = ""):
         ctx = active_scope_context(request, build_context(request))
         if not ctx.has_permission("attendance:read"):
             return shell_layout(
@@ -842,6 +807,17 @@ def register_church_data_routes(app) -> None:
                 program_type_slug="tuesday_leaders_meeting", active_key="meetings-tuesday",
             )
 
+        worker_filter = Select(Option("All workers", value="", selected=unit == ""), *[Option(name.title(), value=name, selected=unit == name) for name in UNITS], name="unit", cls="form-select")
+        status_filter = Select(Option("All statuses", value="", selected=status == ""), *[Option(name.title(), value=name, selected=status == name) for name in ATTENDANCE_STATUSES], name="status", cls="form-select")
+        location_filter = Select(Option("All locations", value="", selected=location == ""), *[Option(row.get("location_name") or row.get("label") or "Location", value=row.get("location_name") or row.get("label") or "", selected=location == (row.get("location_name") or row.get("label"))) for row in await _scope_locations(request, ctx)], name="location", cls="form-select")
+        event_filter = Select(Option("All services", value="", selected=event_title == ""), *[Option(row["label"], value=row["value"], selected=event_title == row["value"]) for row in await _scope_events(request, ctx)], name="event_title", cls="form-select")
+        record_filters = Form(
+            *hidden_context_inputs(ctx), Input(type="hidden", name="tab", value=active_tab), worker_filter, status_filter, location_filter, event_filter,
+            Button("Filter", type="submit", variant="outline-primary"),
+            method="get", action=ctx.url_for("/church-data/meetings"), cls="d-flex flex-wrap gap-2 mb-3",
+        )
+        records_panel = section_card("Worker attendance records", "Individual worker records attached to meetings.", record_filters, await _attendance_stats(request, ctx), await _attendance_table(request, ctx, status=status, location=location, unit=unit, event_title=event_title))
+
         content = page_stack(
             Tabs(
                 ("tab-saturday", "Saturday Workers Meeting", active_tab == "saturday"),
@@ -854,6 +830,7 @@ def register_church_data_routes(app) -> None:
                 TabPane(tuesday_content, tab_id="tab-tuesday", active=(active_tab == "tuesday")),
                 cls="tab-content",
             ),
+            records_panel,
         )
         return shell_layout(
             ctx, request_path=request.url.path, active_key="meetings",
@@ -1508,115 +1485,15 @@ def register_church_data_routes(app) -> None:
             ),
         )
 
-    @app.get("/church-data/attendance")
-    async def attendance_page(
-        request: Request,
-        status: str = "",
-        location: str = "",
-        unit: str = "",
-        event_title: str = "",
-    ):
+    @app.get("/church-data/attendance", include_in_schema=False)
+    async def attendance_page(request: Request):
         ctx = active_scope_context(request, build_context(request))
-        body = await _church_data_loading_shell(
-            request,
-            ctx,
-            title="Worker Attendance",
-            subtitle="Record and review worker attendance.",
-            section_title="Attendance overview",
-            section_note="Attendance totals, filters, and records.",
-            target_url=ctx.url_for("/church-data/attendance/content", status=status, location=location, unit=unit, event_title=event_title),
-        )
-        return shell_layout(
-            ctx,
-            request_path=request.url.path,
-            active_key="attendance",
-            title="Worker Attendance",
-            subtitle="Record and review worker attendance by service and location.",
-            primary_action=None,
-            content=body,
-            show_shell_intro=False,
-        )
+        return RedirectResponse(url=ctx.url_for("/church-data/meetings"), status_code=307)
 
-    @app.get("/church-data/attendance/content")
-    async def attendance_content(
-        request: Request,
-        status: str = "",
-        location: str = "",
-        unit: str = "",
-        event_title: str = "",
-    ):
+    @app.get("/church-data/attendance/content", include_in_schema=False)
+    async def attendance_content(request: Request):
         ctx = active_scope_context(request, build_context(request))
-        events, locations, stats_div, table_div, sunday_population_panel = await asyncio.gather(
-            _scope_events(request, ctx),
-            _scope_locations(request, ctx),
-            _attendance_stats(request, ctx),
-            _attendance_table(request, ctx, status=status, location=location, unit=unit, event_title=event_title),
-            _sunday_population_expectation_panel(request, ctx),
-        )
-        filter_form = Form(
-            *hidden_context_inputs(ctx),
-            filter_field(
-                "Attendance status",
-                Select(
-                    Option("All status", value=""),
-                    *[Option(name.title(), value=name, selected=status == name) for name in ATTENDANCE_STATUSES],
-                    name="status",
-                    cls="form-select",
-                ),
-                field_id="attendance-status",
-            ),
-            filter_field(
-                "Unit",
-                Select(
-                    Option("All units", value=""),
-                    *[Option(name, value=name, selected=unit == name) for name in UNITS],
-                    name="unit",
-                    cls="form-select",
-                ),
-                field_id="attendance-unit",
-            ),
-            filter_field(
-                "Event",
-                Select(
-                    Option("All events", value=""),
-                    *[Option(row["label"], value=row["value"], selected=event_title == row["value"]) for row in events],
-                    name="event_title",
-                    cls="form-select",
-                ),
-                field_id="attendance-event",
-            ),
-            filter_field(
-                "Location",
-                Select(
-                    Option("All locations", value=""),
-                    *[Option(row["label"], value=row["value"], selected=location == row["value"]) for row in locations],
-                    name="location",
-                    cls="form-select",
-                ),
-                field_id="attendance-location",
-            ),
-            hx_get=ctx.url_for("/church-data/attendance/list"),
-            hx_target="#attendance-results",
-            hx_swap="outerHTML",
-            hx_trigger="change from:select",
-            cls="admin-filter-grid",
-        )
-        return Div(
-            section_card(
-                "Population attendance",
-                "Sunday Worship, House Caring Fellowship, Monday Bible Study and Thursday Revival Hour.",
-                A("Open recurring-program attendance", href=ctx.url_for("/church-data/population-attendance", program_key="sunday_worship_service", weeks="4"), cls="btn btn-outline-primary"),
-            ),
-            sunday_population_panel,
-            section_card(
-                "Worker attendance overview",
-                "Worker roster attendance totals, filters, and records.",
-                source_intake_notice("Worker and leader attendance"),
-                stats_div,
-                filter_form,
-                table_div,
-            ),
-        )
+        return RedirectResponse(url=ctx.url_for("/church-data/meetings"), status_code=307)
 
     @app.get("/church-data/attendance/list")
     async def attendance_list(

@@ -1,4 +1,50 @@
 :root { --ad-bg:#f3f6fb; --ad-panel:#ffffff; --ad-panel-2:#edf3fa; --ad-line:#d8e1ec; --ad-ink:#182b42; --ad-muted:#62758a; --ad-blue:#1d4f91; --ad-green:#22a06b; --ad-amber:#d98c12; --ad-red:#c94d4d; }
+
+/* Mobile-first Program Attendance cards. Faststrap Card supplies the base surface. */
+#population-analytics-content .program-overview-grid { display:grid; gap:12px; }
+#population-analytics-content .program-summary-card { padding:16px; }
+#population-analytics-content .program-latest-total { display:block; color:var(--ad-blue); font-size:clamp(28px,8vw,38px); line-height:1.1; font-variant-numeric:tabular-nums; }
+#population-analytics-content .program-demographics { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+#population-analytics-content .program-demographic-item { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:baseline; gap:2px 8px; padding:9px 10px; border:1px solid var(--ad-line); border-radius:8px; background:var(--ad-panel-2); }
+#population-analytics-content .program-demographic-label { color:var(--ad-muted); font-size:12px; }
+#population-analytics-content .program-demographic-value { color:var(--ad-ink); font-size:15px; font-variant-numeric:tabular-nums; }
+#population-analytics-content .program-demographic-percent { grid-column:2; color:var(--ad-muted); font-size:11px; text-align:right; }
+#population-analytics-content .program-expected { display:grid; grid-template-columns:auto 1fr; align-items:baseline; gap:0 8px; margin-top:12px; padding-top:12px; border-top:1px solid var(--ad-line); }
+#population-analytics-content .program-expected-value { color:var(--ad-green); font-size:24px; font-variant-numeric:tabular-nums; }
+#population-analytics-content .program-expected p { grid-column:1/-1; }
+#population-analytics-content .program-secondary-metrics { display:grid; gap:10px; }
+#population-analytics-content .program-child-grid { display:grid; grid-template-columns:minmax(0,1fr); gap:10px; }
+#population-analytics-content .program-child-link { display:block; min-height:44px; color:inherit; text-decoration:none; }
+#population-analytics-content .program-child-card { display:grid; gap:10px; padding:14px; border-color:var(--ad-line)!important; box-shadow:0 2px 8px rgba(24,43,66,.05); }
+#population-analytics-content .program-child-link:focus-visible { outline:3px solid var(--ad-blue); outline-offset:2px; border-radius:10px; }
+#population-analytics-content .program-child-name { color:var(--ad-blue); font-size:16px; }
+#population-analytics-content .program-child-id { color:var(--ad-muted); font-size:11px; }
+#population-analytics-content .program-child-state { max-width:45%; white-space:normal; text-align:right; }
+#population-analytics-content .program-child-highlights { display:grid; grid-template-columns:1fr 1fr; align-items:center; gap:8px; padding:8px 0; border-block:1px solid var(--ad-line); }
+#population-analytics-content .program-child-count { font-size:21px; font-variant-numeric:tabular-nums; }
+#population-analytics-content .program-demographics-compact { grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; }
+#population-analytics-content .program-demographics-compact .program-demographic-item { padding:7px 8px; }
+#population-analytics-content .program-attendance-filters { display:grid!important; grid-template-columns:minmax(0,1fr) minmax(0,1fr); align-items:end!important; gap:10px!important; }
+#population-analytics-content .program-filter-pair { display:grid; gap:4px; min-width:0; }
+#population-analytics-content .program-filter-program,
+#population-analytics-content .program-filter-apply { grid-column:1/-1; }
+#population-analytics-content .program-filter-pending { display:flex; align-items:center; min-height:44px; }
+#population-analytics-content .program-filter-pending .form-check-label { font-size:13px; }
+#population-analytics-content .program-filter-apply { width:100%; min-height:44px; }
+@media (min-width:768px) {
+  #population-analytics-content .program-attendance-filters { display:flex!important; }
+  #population-analytics-content .program-overview-grid { grid-template-columns:minmax(0,1.5fr) minmax(260px,1fr); align-items:start; }
+  #population-analytics-content .program-secondary-metrics { grid-template-columns:1fr; }
+  #population-analytics-content .program-child-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  #population-analytics-content .program-filter-pair { flex:1 1 220px; }
+  #population-analytics-content .program-filter-program,
+  #population-analytics-content .program-filter-apply { grid-column:auto; }
+  #population-analytics-content .program-filter-pending { flex:1 1 auto; }
+  #population-analytics-content .program-filter-apply { width:auto; }
+}
+@media (min-width:1200px) {
+  #population-analytics-content .program-child-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
+}
 .prototype-dashboard { width:100%; min-height:0; margin:0; background:transparent; color:var(--ad-ink); font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif; font-size:14px; }
 .prototype-dashboard * { box-sizing:border-box; }
 .prototype-dashboard .panel { border:1px solid var(--ad-line); border-radius:8px; background:var(--ad-panel); }
