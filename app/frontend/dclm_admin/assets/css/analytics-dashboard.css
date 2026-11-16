@@ -497,8 +497,18 @@ html { scroll-padding-top:76px; }
 }
 
 /* Keep the two headline figures easy to scan before detailed report tables. */
-.prototype-dashboard .analytics-overview-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); }
+.prototype-dashboard .analytics-overview-metrics { grid-template-columns:repeat(4,minmax(0,1fr)); }
+.prototype-dashboard .analytics-overview-metrics--three { grid-template-columns:repeat(3,minmax(0,1fr)); }
 .prototype-dashboard .analytics-overview-metrics--single { grid-template-columns:minmax(0,1fr); max-width:620px; }
+.prototype-dashboard .analytics-hub-links { display:flex; flex-wrap:wrap; gap:8px; }
+.prototype-dashboard .analytics-hub-link { display:inline-flex; min-height:40px; align-items:center; padding:7px 11px; border:1px solid var(--ad-line); border-radius:7px; background:var(--ad-panel); color:var(--ad-blue); font-size:12px; font-weight:650; text-decoration:none; }
+.prototype-dashboard .analytics-hub-link:hover,.prototype-dashboard .analytics-hub-link:focus-visible { background:var(--ad-panel-2); text-decoration:underline; }
 @media(max-width:380px) {
   .prototype-dashboard .analytics-overview-metrics:not(.analytics-overview-metrics--single) { grid-template-columns:minmax(0,1fr); }
+}
+@media(max-width:620px) {
+  .prototype-dashboard .analytics-overview-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .prototype-dashboard .analytics-overview-metrics--three { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .prototype-dashboard .analytics-hub-links { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .prototype-dashboard .analytics-hub-link { justify-content:center; min-height:44px; padding-inline:8px; text-align:center; }
 }

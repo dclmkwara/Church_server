@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 from app.frontend.dclm_admin.communication import church_data_service, communication_service, people_service
 from app.frontend.dclm_admin.communication.church_data_service import ChurchDataService
 from app.frontend.dclm_admin.communication.dashboard_service import DashboardService
+from app.frontend.dclm_admin.communication import dashboard_service
 from app.frontend.dclm_admin.communication.communication_service import CommunicationService
 from app.frontend.dclm_admin.communication.people_service import PeopleService
 from app.frontend.dclm_admin.communication.program_service import ProgramService
@@ -123,6 +124,33 @@ def test_sunday_worship_dashboard_adapter_forwards_selected_occurrence_date():
         "/dashboard/sunday-worship",
         access_token="token",
         params={"include_pending": False, "scope_path": "org.234.KW", "occurrence_date": "2026-10-25"},
+    )
+
+
+def test_program_collection_summary_combines_only_this_programs_approved_funds_and_separates_pending(monkeypatch):
+    rows = [
+        {"date": "2026-11-15", "program": "Sunday Worship", "fund_type": "tithe", "status": "approved", "amount": 1000, "records": 2},
+        {"date": "2026-11-15", "program": "sunday_worship_service", "fund_type": "offering", "status": "approved", "amount": 500, "records": 1},
+        {"date": "2026-11-15", "program": "Sunday Worship Service", "fund_type": "offering", "status": "pending", "amount": 200, "records": 1},
+        {"date": "2026-11-15", "program": "Sunday Worship", "fund_type": "offering", "status": "rejected", "amount": 900, "records": 1},
+        {"date": "2026-11-15", "program": "Monday Bible Study", "fund_type": "offering", "status": "approved", "amount": 300, "records": 1},
+        {"date": "2026-11-15", "program": "Sunday Worship", "fund_type": "other", "status": "approved", "amount": 400, "records": 1},
+    ]
+    client = SimpleNamespace(get_offerings_by_program=AsyncMock(return_value=rows))
+    monkeypatch.setattr(DashboardService, "live_enabled", staticmethod(AsyncMock(return_value=True)))
+    monkeypatch.setattr(dashboard_service, "async_client", lambda _client: client)
+    monkeypatch.setattr(dashboard_service, "get_api_client", lambda: object())
+    monkeypatch.setattr(dashboard_service.AuthService, "get_access_token", lambda _request: "token")
+    result = DashboardService.program_collection_summary(
+        _FakeRequest(), SimpleNamespace(), program_label="Sunday Worship", occurrence_date="2026-11-15",
+        scope_path="org.234.KW",
+    )
+    assert result == {
+        "available": True, "approved_total": 1500.0, "approved_records": 3,
+        "pending_total": 200.0, "pending_records": 1,
+    }
+    client.get_offerings_by_program.assert_awaited_once_with(
+        "token", scope_path="org.234.KW", start_date="2026-11-15", end_date="2026-11-15",
     )
 
 

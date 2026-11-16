@@ -9,6 +9,7 @@ from app.frontend.dclm_admin.app_factory import app
 from app.frontend.dclm_admin.communication.dashboard_service import DashboardService
 from app.frontend.dclm_admin.backend.config import get_backend_config
 from app.frontend.dclm_admin.routes.population_analytics import _report_label
+from app.frontend.dclm_admin.routes.analytics_dashboard import _children_table, _collection_card_values
 
 
 def _request(path: str, query: str) -> Request:
@@ -25,6 +26,48 @@ def test_unapproved_report_is_not_presented_as_missing_or_zero():
     assert _report_label({"total": None, "coverage": {"pending": 1}}) == "Pending review · excluded from totals"
     assert _report_label({"total": None, "coverage": {"missing": 1}}) == "Not reported"
     assert _report_label({"total": 0, "coverage": {"approved": 1}}) == "Reported 0"
+
+
+def test_phase_two_direct_child_overview_distinguishes_missing_pending_and_zero():
+    from types import SimpleNamespace
+    from fasthtml.common import to_xml
+
+    def url_for(path, **params):
+        from urllib.parse import urlencode
+        return f"{path}?{urlencode(params)}" if params else path
+
+    ctx = SimpleNamespace(
+        current_scope_path="dcl.234.kw", current_scope_kind="state", current_scope_label="Kwara State",
+        profile=SimpleNamespace(root_path="dcl.234.kw", key="state_overseer"),
+        query_extras={"home_path": "dcl.234.kw", "weeks": "4", "include_pending": "false"},
+        url_for=url_for, has_permission=lambda _permission: False,
+    )
+    children = [
+        {"name": "Ilorin Region", "path": "dcl.234.kw.ilr"},
+        {"name": "Offa Region", "path": "dcl.234.kw.off"},
+        {"name": "Omu Region", "path": "dcl.234.kw.omu"},
+    ]
+    reports = [
+        {"overview": {"n_expected": 4, "n_received": 3, "n_counted": 2, "total": None, "coverage": {"missing": 1, "pending": 1}}},
+        {"overview": {"n_expected": 4, "n_received": 4, "n_counted": 4, "total": 0, "coverage": {"approved": 4}}},
+        {"overview": {"n_expected": 4, "n_received": 0, "n_counted": 0, "total": None, "coverage": {"missing": 4}}},
+    ]
+    html = to_xml(_children_table(children, reports, "State", ctx))
+    assert "Your regions" in html
+    assert "Awaiting review" in html
+    assert "Reported 0" in html
+    assert "No report received" in html
+    assert "/dashboard?scope_path=dcl.234.kw.ilr" in html
+
+
+def test_dashboard_collection_card_combines_approved_funds_and_keeps_pending_separate():
+    assert _collection_card_values({"approved_total": 12500, "approved_records": 3, "pending_total": 600, "pending_records": 1}) == (
+        "₦12,500.00",
+        "Approved tithes and offerings for this occurrence · 3 records. Pending: ₦600.00 across 1 records; excluded from the approved amount.",
+    )
+    assert _collection_card_values({"approved_total": 0, "approved_records": 1, "pending_records": 0})[0] == "₦0.00"
+    assert _collection_card_values({"approved_records": 0, "pending_records": 1})[0] == "No approved collection"
+    assert _collection_card_values({"unavailable": True, "message": "No live data"})[0] == "Unavailable"
 
 
 def test_population_page_drilldown_keeps_program_period_pending_and_scope(monkeypatch):

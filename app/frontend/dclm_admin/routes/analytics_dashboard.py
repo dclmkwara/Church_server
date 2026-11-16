@@ -69,6 +69,23 @@ _DASHBOARD_PROGRAM_LABELS = {
 }
 
 
+def _collection_card_values(payload: dict[str, Any]) -> tuple[str, str]:
+    if payload.get("error") or payload.get("unavailable"):
+        return "Unavailable", str(payload.get("message") or "Collection data could not be loaded.")
+    approved_records = _integer(payload.get("approved_records"))
+    pending_records = _integer(payload.get("pending_records"))
+    if not approved_records:
+        value = "No approved collection"
+    else:
+        value = f"₦{float(payload.get('approved_total') or 0):,.2f}"
+    note = f"Approved tithes and offerings for this occurrence · {approved_records} records."
+    if pending_records:
+        note += f" Pending: ₦{float(payload.get('pending_total') or 0):,.2f} across {pending_records} records; excluded from the approved amount."
+    elif not approved_records:
+        note += " No approved collection was recorded."
+    return value, note
+
+
 def _latest_standing_program_date(program: str, today: date) -> date:
     weekday = _DASHBOARD_PROGRAM_WEEKDAYS[program]
     return today - timedelta(days=(today.weekday() - weekday) % 7)
@@ -191,6 +208,9 @@ def _line_chart(points: list[dict[str, Any]], selected_weeks: int, program_label
 _METRIC_DEFINITIONS = {
     "Reported attendance": "Counted reports in this scope are added together. Locations with no counted report are not treated as zero; the approval filter is shown above.",
     "Pooled ratio": "This compares the total counted population with the total documented population for locations that have both values.",
+    "Active church workers": "Recognized workers whose current status is Active in this scope. This is not the number of people with app accounts.",
+    "Reporting coverage": "The numerator is locations with a report received; the denominator is locations expected to report. The detailed coverage section separates approved, pending, returned, conflict, and missing reports.",
+    "Combined collection": "Approved tithes and offerings recorded for this one program occurrence are added together. Pending records are shown separately; no approved record is not the same as a reported zero.",
 }
 
 
@@ -266,7 +286,16 @@ def _children_table(
         link = _scope_dashboard_link(ctx, path)
         hx_link = _scope_dashboard_link(ctx, path, fragment=True)
         report_state = f"{received}/{expected} reported"
-        latest = ("No approved count" if not include_pending else "No counted report") if total is None else ("Reported 0" if _integer(total) == 0 else _number(total))
+        if total is not None:
+            latest = "Reported 0" if _integer(total) == 0 else _number(total)
+        elif coverage["pending"]:
+            latest = "Awaiting review"
+        elif coverage["returned"]:
+            latest = "Returned for correction"
+        elif coverage["conflict"]:
+            latest = "Conflicting report"
+        else:
+            latest = "No report received"
         row_cells = [
             Td(A(label, href=link, hx_get=hx_link, hx_push_url=link, hx_target="#analytics-dashboard-body", hx_swap="outerHTML", cls="analytics-child-link"), Span(format_scope_display_id(path), cls="analytics-muted analytics-code")),
             Td(Div(Div(cls="analytics-mini-track", style=f"--coverage:{100 * received / max(expected, 1):.2f}%"), Span(report_state, cls="analytics-muted"), cls="analytics-mini-coverage")),
@@ -298,7 +327,7 @@ def _children_table(
     documented_headers = [Th("Compared with estimate", cls="text-end")] if include_documented_population else []
     report_basis = "approved and pending reports" if include_pending else "approved reports"
     return Div(
-        Div(H2(f"Your {child_label.lower()}s", cls="analytics-panel-title"), P(f"Direct areas under your scope · figures use {report_basis}.", cls="analytics-note"), cls="analytics-panel-head"),
+        Div(H2(f"Your {child_label.lower()}s", cls="analytics-panel-title"), P(f"Direct areas under your scope · figures use {report_basis}. Each row opens that area’s overview.", cls="analytics-note"), cls="analytics-panel-head"),
         Div(Table(Thead(Tr(Th(child_label), Th("Reporting progress"), Th(f"Latest {program_label} attendance", cls="text-end"), *documented_headers, Th("Review", cls="text-end"))), Tbody(*cells), cls="analytics-table"), P("Swipe to see more columns", cls="analytics-scroll-hint"), cls="analytics-table-wrap analytics-child-table-wrap"),
         cls="panel analytics-table-panel",
     )
@@ -448,6 +477,7 @@ def _attention_panel(
     payload: dict[str, Any] | None, queue: list[dict[str, Any]], children: list[dict[str, Any]],
     child_reports: list[dict[str, Any]], series: dict[str, Any], ctx: Any,
     occurrence: date, program_type_id: Any, program_label: str = "Sunday Worship",
+    *, panel_id: str = "analytics-attention",
 ) -> Any:
     scope_path = getattr(ctx, "current_scope_path", "") or (
         ctx.get("scope_path", "") if isinstance(ctx, dict) else ""
@@ -574,7 +604,7 @@ def _attention_panel(
             Div(*visible, cls="analytics-attention-list"),
             *([Details(Summary(f"Show all ({len(items)})"), Div(*remaining, cls="analytics-attention-list"), cls="analytics-show-all")] if hidden_count else []),
         )
-    return Div(H2(f"Needs attention · {program_label}", cls="analytics-panel-title"), P(f"Missing locations, reports awaiting review, returned reports, and declines of {ATTENTION_DECLINE_PCT}% or more.", cls="analytics-note"), rendered, id="analytics-attention", cls="panel analytics-attention-panel")
+    return Div(H2(f"Needs attention · {program_label}", cls="analytics-panel-title"), P(f"Missing locations, reports awaiting review, returned reports, and declines of {ATTENTION_DECLINE_PCT}% or more.", cls="analytics-note"), rendered, id=panel_id, cls="panel analytics-attention-panel")
 
 
 async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
@@ -651,6 +681,9 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
         )
         dashboard_perf.finish_trace(trace, trace_token, render_ms=(time.perf_counter() - render_started) * 1000, request=request)
         return result
+    collection = await DashboardService.program_collection_summary(
+        request, ctx, program_label=program_label, occurrence_date=latest.isoformat(), scope_path=scope_path,
+    )
     history = series.get("scope") if isinstance(series.get("scope"), list) else []
     history = history[-data_weeks:]
     current = history[-1] if history else {}
@@ -687,7 +720,32 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
         _metric(f"Latest {program_label} attendance", population_value, occurrence_note, "Reported attendance"),
     ]
     if program == "sunday_worship_service":
-        overview_metrics.append(_metric("Compared with estimated population", expected_value, expected_note, "Pooled ratio"))
+        active_workers = summary.get("active_workers")
+        overview_metrics.append(
+            _metric(
+                "Active church workers",
+                "Unavailable" if active_workers is None else _number(active_workers),
+                "Recognized workers marked Active in this scope.",
+                "Active church workers",
+            )
+        )
+        overview_metrics.append(
+            _metric(
+                "Reporting coverage",
+                f"{_integer(current.get('n_received'))} of {_integer(current.get('n_expected'))}",
+                f"{_integer((current.get('coverage') or {}).get('approved'))} approved · "
+                f"{_integer((current.get('coverage') or {}).get('pending'))} awaiting review · "
+                f"{_coverage_values(current)['missing']} not reported · {_short_date(latest)}.",
+                "Reporting coverage",
+            )
+        )
+        overview_metrics.append(
+            _metric(
+                "Combined tithes and offerings",
+                *_collection_card_values(collection),
+                "Combined collection",
+            )
+        )
 
     if level == "Location":
         location_nodes = series.get("location_nodes") or []
@@ -697,7 +755,8 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
         children_panel = _children_table(children, child_reports, level, ctx, program_label, include_pending=include_pending)
     if ctx.has_permission("counts:review") or ctx.has_permission("counts:remind"):
         initial_attention = _attention_panel(
-            current, [], children, child_reports, series, ctx, latest, series.get("program_type_id"), program_label
+            current, [], children, child_reports, series, ctx, latest, series.get("program_type_id"), program_label,
+            panel_id="analytics-attention-panel",
         )
     else:
         initial_attention = _review_attention_note(level, panel_id="analytics-attention-panel")
@@ -753,7 +812,7 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
                     P(f"{level.upper()}", cls="analytics-eyebrow"),
                     H1(named_scope, cls="analytics-title"),
                     P(
-                        f"{program_label} · {latest.strftime('%d %b %Y').lstrip('0')} · ",
+                        f"{level} overview · {program_label} · {latest.strftime('%d %b %Y').lstrip('0')} · ",
                         "Including reports awaiting review" if include_pending else "Approved reports only",
                         Span("Demo data", cls="analytics-demo-label") if not get_backend_config().enabled else None,
                         cls="analytics-subtitle",
@@ -761,19 +820,30 @@ async def render_analytics_dashboard(request: Request, ctx: Any) -> Any:
                     A("Documented population", href="/analytics/expected-population", cls="analytics-expected-link") if can_manage_expected else None,
                     cls="analytics-heading",
                 ),
-                filters,
-                Div(Span(cls="spinner-border spinner-border-sm", aria_hidden="true"), Span("Loading report…", cls="ms-2"), id="analytics-filter-loading", role="status", aria_live="polite", hidden=True, cls="analytics-filter-loading"),
                 Div(
                     *overview_metrics,
                     cls="analytics-metrics analytics-overview-metrics"
-                    + (" analytics-overview-metrics--single" if len(overview_metrics) == 1 else ""),
+                    + (" analytics-overview-metrics--single" if len(overview_metrics) == 1 else " analytics-overview-metrics--three" if len(overview_metrics) == 3 else ""),
                 ),
                 _coverage_panel(current, latest, include_pending, program_label),
+                filters,
+                Div(Span(cls="spinner-border spinner-border-sm", aria_hidden="true"), Span("Loading report…", cls="ms-2"), id="analytics-filter-loading", role="status", aria_live="polite", hidden=True, cls="analytics-filter-loading"),
                 Div(
                     Div(children_panel, id="analytics-children-panel"),
                     initial_attention,
                     _waiting_on_decision(summary, weeks),
                     cls="analytics-content-split analytics-priority-panels",
+                ),
+                Div(
+                    A("Weekly services and giving", href=scope_link(ctx, "/church-data/population-attendance"), cls="analytics-hub-link"),
+                    A("Major programs", href=scope_link(ctx, "/church-data/programs"), cls="analytics-hub-link"),
+                    A("People and demographics", href=scope_link(ctx, "/people"), cls="analytics-hub-link"),
+                    A("Workforce", href=scope_link(ctx, "/people/workers"), cls="analytics-hub-link"),
+                    A("App users", href=scope_link(ctx, "/people/users"), cls="analytics-hub-link"),
+                    A("Inbox", href=scope_link(ctx, "/inbox"), cls="analytics-hub-link"),
+                    A("Count Review", href=scope_link(ctx, "/church-data/count-review"), cls="analytics-hub-link"),
+                    cls="analytics-hub-links",
+                    aria_label="Dashboard areas",
                 ),
                 Div(
                     H2(f"{program_label} services reported separately", cls="h6"),

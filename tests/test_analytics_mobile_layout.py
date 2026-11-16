@@ -82,6 +82,15 @@ def test_attention_rolls_pending_and_missing_up_to_the_child_scope():
     assert "loc-a" not in html and "loc-b" not in html
 
 
+def test_initial_attention_panel_can_target_the_lazy_refresh_id():
+    html = to_xml(_attention_panel(
+        {}, [], [], [], {}, _ctx("org.234.kw", "State"),
+        __import__("datetime").date(2026, 11, 8), "sunday-worship",
+        panel_id="analytics-attention-panel",
+    ))
+    assert 'id="analytics-attention-panel"' in html
+
+
 def test_mobile_css_reflows_analytics_and_does_not_clip_at_the_page_root():
     admin_css = (ROOT / "app/frontend/dclm_admin/assets/css/admin.css").read_text(encoding="utf-8")
     analytics_css = (ROOT / "app/frontend/dclm_admin/assets/css/analytics-dashboard.css").read_text(encoding="utf-8")

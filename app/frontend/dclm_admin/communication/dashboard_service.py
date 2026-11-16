@@ -896,6 +896,43 @@ class DashboardService:
             return {"error": str(exc)}
 
     @staticmethod
+    async def program_collection_summary(request, ctx, *, program_label: str, occurrence_date: str, scope_path: str | None = None) -> dict[str, Any]:
+        """Summarize approved tithe and offering rows for one program occurrence."""
+        if not await DashboardService.live_enabled(request):
+            return {"unavailable": True, "message": "Collection reporting requires the live backend."}
+        try:
+            client = async_client(get_api_client())
+            rows = await client.get_offerings_by_program(
+                AuthService.get_access_token(request),
+                scope_path=scope_path or await DashboardService.scope_path(request, ctx),
+                start_date=occurrence_date,
+                end_date=occurrence_date,
+            )
+        except BackendClientError as exc:
+            return {"error": str(exc)}
+
+        target = " ".join(str(program_label or "").casefold().replace("_", " ").split())
+        aliases = {
+            "sunday worship": {"sunday worship", "sunday worship service", "sunday worship service main"},
+            "monday bible study": {"monday bible study", "monday bible study service"},
+            "thursday revival hour": {"thursday revival hour", "thursday revival hour service"},
+        }.get(target, {target})
+        matching = [
+            row for row in rows
+            if " ".join(str(row.get("program") or "").casefold().replace("_", " ").split()) in aliases
+            and str(row.get("fund_type") or "").casefold() in {"tithe", "offering"}
+        ]
+        approved = [row for row in matching if str(row.get("status") or "").casefold() == "approved"]
+        pending = [row for row in matching if str(row.get("status") or "").casefold() in {"pending", "corrected"}]
+        return {
+            "available": True,
+            "approved_total": sum(float(row.get("amount") or 0) for row in approved),
+            "approved_records": sum(_safe_int(row.get("records")) for row in approved),
+            "pending_total": sum(float(row.get("amount") or 0) for row in pending),
+            "pending_records": sum(_safe_int(row.get("records")) for row in pending),
+        }
+
+    @staticmethod
     async def sunday_worship_dashboard_panels(request, ctx, *, weeks: int, scope_path: str, latest_date: str) -> dict[str, Any]:
         if not await DashboardService.live_enabled(request):
             return {"error": "Sunday Worship reporting requires the live backend."}
