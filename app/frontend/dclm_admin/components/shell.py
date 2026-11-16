@@ -22,20 +22,15 @@ NAV_GROUPS = [
         ],
     },
     {
-        "label": "Reports and decisions",
-        "module": "reports",
+        "label": "Weekly Services & Giving",
+        "module": "church-data",
         "items": [
-            {"label": "Pastor Report", "icon": "file-earmark-text", "href": "/dashboard/pastor-report", "key": "pastor-report", "permission": "reports:read"},
-            {"label": "Reports", "icon": "clipboard-data", "href": "/reports", "key": "reports", "permission": "reports:read"},
             {"label": "Program Attendance", "icon": "graph-up", "href": "/church-data/population-attendance", "key": "church", "permission": "counts:read"},
-            {"label": "Worker & Leader Meetings", "icon": "calendar-check", "href": "/church-data/meetings", "key": "meetings", "permission": "attendance:read"},
-            {"label": "Newcomers", "icon": "person-hearts", "href": "/church-data/newcomers", "key": "newcomers", "permission": "records:read"},
-            {"label": "Count Review", "icon": "clipboard-check", "href": "/church-data/count-review", "key": "count-review", "permission": "counts:review"},
-            {"label": "My Requests", "icon": "diagram-3", "href": "/workflows", "key": "workflows", "module": "workflows"},
+            {"label": "Offerings and Tithes", "icon": "cash-stack", "href": "/church-data/finance", "key": "finance", "permission": "offerings:read"},
         ],
     },
     {
-        "label": "Programs and events",
+        "label": "Major Programs",
         "module": "church-data",
         "items": [
             {"label": "Programs", "icon": "calendar-event", "href": "/church-data/programs", "key": "programs", "permission": "programs:read"},
@@ -44,46 +39,42 @@ NAV_GROUPS = [
         ],
     },
     {
-        "label": "People",
+        "label": "People & Demographics",
         "module": "people",
         "items": [
             {"label": "People overview", "icon": "people", "href": "/people", "key": "people"},
-            {"label": "Workers", "icon": "people", "href": "/people/workers", "key": "workers", "permission": "workers:read"},
+            {"label": "Population & Attendance", "icon": "bar-chart", "href": "/church-data/population-attendance", "key": "church", "module": "church-data", "permission": "counts:read"},
             {"label": "Members", "icon": "person-vcard", "href": "/people/members", "key": "members", "permission": "records:read"},
+            {"label": "Newcomers", "icon": "person-hearts", "href": "/church-data/newcomers", "key": "newcomers", "module": "church-data", "permission": "records:read"},
+        ],
+    },
+    {
+        "label": "Workforce & App Access",
+        "module": "people",
+        "items": [
+            {"label": "Workers", "icon": "people", "href": "/people/workers", "key": "workers", "permission": "workers:read"},
+            {"label": "Workers’ Meeting", "icon": "calendar-check", "href": "/church-data/meetings/workers-saturday", "key": "meetings-saturday", "module": "church-data", "permission": "attendance:read"},
+            {"label": "Leaders’ Meeting", "icon": "calendar-check", "href": "/church-data/meetings/leaders-tuesday", "key": "meetings-tuesday", "module": "church-data", "permission": "attendance:read"},
+            {"label": "Worker & Leader Meetings", "icon": "calendar-check", "href": "/church-data/meetings", "key": "meetings", "module": "church-data", "permission": "attendance:read"},
             {"label": "App Users", "icon": "person-badge", "href": "/people/users", "key": "users", "permission": "users:read"},
         ],
     },
     {
-        "label": "Money",
-        "module": "church-data",
+        "label": "More",
+        "module": "dashboard",
         "items": [
-            {"label": "Offerings and Tithes", "icon": "cash-stack", "href": "/church-data/finance", "key": "finance", "permission": "offerings:read"},
+            {"label": "Inbox", "icon": "inbox", "href": "/inbox", "key": "inbox", "module": "inbox"},
+            {"label": "Count Review", "icon": "clipboard-check", "href": "/church-data/count-review", "key": "count-review", "module": "church-data", "permission": "counts:review"},
+            {"label": "My Requests", "icon": "diagram-3", "href": "/workflows", "key": "workflows", "module": "workflows"},
+            {"label": "Pastor Report", "icon": "file-earmark-text", "href": "/dashboard/pastor-report", "key": "pastor-report", "module": "reports", "permission": "reports:read"},
+            {"label": "Reports", "icon": "clipboard-data", "href": "/reports", "key": "reports", "module": "reports", "permission": "reports:read"},
             {"label": "Finance Analytics", "icon": "graph-up-arrow", "href": "/reports?tab=financial", "key": "reports", "module": "reports", "permission": "reports:read"},
-        ],
-    },
-    {
-        "label": "Church life and structure",
-        "module": "fellowship",
-        "items": [
-            {"label": "Fellowship", "icon": "house-heart", "href": "/fellowship", "key": "fellowship", "permission": "fellowship:read"},
+            {"label": "Fellowship", "icon": "house-heart", "href": "/fellowship", "key": "fellowship", "module": "fellowship", "permission": "fellowship:read"},
             {"label": "Organization", "icon": "geo-alt", "href": "/organization", "key": "organization", "module": "organization", "min_level": 3},
-        ],
-    },
-    {
-        "label": "Messages",
-        "module": "inbox",
-        "items": [
-            {"label": "Inbox", "icon": "inbox", "href": "/inbox", "key": "inbox"},
-            {"label": "Communication", "icon": "megaphone", "href": "/communication", "key": "communication", "module": "communication", "min_level": 4, "permission": "announcements:read"},
-        ],
-    },
-    {
-        "label": "Settings and accountability",
-        "module": "system",
-        "items": [
-            {"label": "Documented Population", "icon": "people-fill", "href": "/analytics/expected-population", "key": "expected-population", "min_level": 5, "permission": "population_estimates:manage"},
-            {"label": "Audit Log", "icon": "journal-text", "href": "/system/audit-logs", "key": "system", "permission": "system:read_audit_logs"},
-            {"label": "Roles and Permissions", "icon": "shield-lock", "href": "/system/rbac", "key": "system", "min_level": 5, "permission": "rbac:read"},
+            {"label": "Documented Population", "icon": "people-fill", "href": "/analytics/expected-population", "key": "expected-population", "module": "system", "min_level": 5, "permission": "population_estimates:manage"},
+            {"label": "Audit Log", "icon": "journal-text", "href": "/system/audit-logs", "key": "system", "module": "system", "permission": "system:read_audit_logs"},
+            {"label": "Roles and Permissions", "icon": "shield-lock", "href": "/system/rbac", "key": "system", "module": "system", "min_level": 5, "permission": "rbac:read"},
+            {"label": "Messages", "icon": "megaphone", "href": "/communication", "key": "communication", "module": "communication", "min_level": 4, "permission": "announcements:read"},
         ],
     },
 ]
@@ -237,7 +228,7 @@ def _user_menu(ctx: AdminContext) -> Any:
                 Span(initials, cls="avatar-pill"),
                 Div(
                     P(ctx.profile.user_name, cls="fw-semibold text-body-emphasis mb-1"),
-                    P(f"{ctx.profile.role_label} â€¢ Level {ctx.level}", cls="small text-muted mb-0"),
+                    P(f"{ctx.profile.role_label} • Level {ctx.level}", cls="small text-muted mb-0"),
                     cls="dropdown-user-copy",
                 ),
                 cls="dropdown-user-summary d-flex align-items-center gap-3 px-3 py-2",
@@ -321,7 +312,7 @@ def _sidebar(ctx: AdminContext, active_key: str) -> Any:
             Div(
                 Span(initials, cls="sidebar-profile__avatar"),
                 P(ctx.profile.user_name, cls="text-white fw-semibold mb-1"),
-                P(f"{ctx.profile.role_label} â€¢ Level {ctx.level}", cls="text-white-50 small mb-0"),
+                P(f"{ctx.profile.role_label} • Level {ctx.level}", cls="text-white-50 small mb-0"),
                 P(ctx.current_scope_label, cls="text-white-50 small mb-0"),
                 cls="sidebar-profile",
             ),
@@ -365,7 +356,7 @@ def _mobile_bottom_nav(ctx: AdminContext, active_key: str) -> Any:
         if (module is None or module in ctx.visible_modules)
         and (permission is None or ctx.has_permission(permission))
     ]
-    # Menu button â€” triggers the mobile side-nav offcanvas without anchor navigation or focus underline
+    # Menu button opens the mobile side-nav without anchor navigation or focus underline.
     items.append(
         Button(
             Icon("list", size="1.25em", cls="mb-1"),

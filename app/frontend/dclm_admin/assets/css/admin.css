@@ -1077,7 +1077,7 @@ nav.navbar.admin-bottom-nav {
   transform: translateY(-2px) !important;
 }
 
-/* Active state â€” strongly branded DCLM Navy / Royal Blue */
+/* Active state — strongly branded DCLM Navy / Royal Blue */
 .admin-bottom-nav .nav-link.active,
 .admin-bottom-nav a.nav-link.active,
 .admin-bottom-nav .nav-link[aria-current="page"],
@@ -1127,7 +1127,7 @@ nav.navbar.admin-bottom-nav {
   box-shadow: none !important;
 }
 
-/* Horizontally scrollable branded tabs â€” strictly bounded to 100% width, styled like skuphase */
+/* Horizontally scrollable branded tabs — strictly bounded to 100% width, styled like skuphase */
 .admin-tabs-scroll-container,
 ul.admin-tabs-scroll-container,
 .nav.admin-tabs-scroll-container {
