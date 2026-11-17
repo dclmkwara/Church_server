@@ -94,8 +94,27 @@ def test_attendance_navigation_is_consolidated_into_meetings():
     labels = {item["label"] for group in NAV_GROUPS for item in group["items"]}
     assert "Attendance" not in labels
     assert "Program Attendance" in labels
+    assert "Population & Attendance" not in labels
     assert "Worker & Leader Meetings" in labels
+    assert "Workers’ Meeting" not in labels
+    assert "Leaders’ Meeting" not in labels
     assert any(getattr(route, "path", None) == "/church-data/attendance" for route in app.routes)
+    registered = {getattr(route, "path", "") for route in app.routes}
+    assert {"/church-data/meetings", "/church-data/meetings/workers-saturday", "/church-data/meetings/leaders-tuesday"} <= registered
+
+
+def test_consolidated_attendance_and_meeting_pages_have_one_active_sidebar_entry(monkeypatch):
+    monkeypatch.setattr(shell, "get_backend_config", lambda: SimpleNamespace(enabled=False))
+    monkeypatch.setattr(auth_context, "get_backend_config", lambda: SimpleNamespace(enabled=False))
+    ctx = build_context({"profile": "state_overseer"})
+
+    for active_key, expected_href in (
+        ("church", "/church-data/population-attendance"),
+        ("meetings", "/church-data/meetings"),
+    ):
+        rendered = to_xml(_sidebar(ctx, active_key))
+        assert rendered.count('class="sidebar-link fx active"') == 1
+        assert expected_href in rendered
 
 
 def test_major_program_pages_have_one_distinct_active_sidebar_item(monkeypatch):

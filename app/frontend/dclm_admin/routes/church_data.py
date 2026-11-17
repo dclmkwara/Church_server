@@ -514,10 +514,10 @@ async def _meeting_program_content(request: Request, ctx, *, title: str, program
 
 async def _render_meeting_program_page(request: Request, ctx, *, title: str, subtitle: str, program_type_slug: str, active_key: str) -> Div:
     if not ctx.has_permission("attendance:read"):
-        return shell_layout(ctx, request_path=request.url.path, active_key="attendance", title=title, subtitle=subtitle, primary_action=None, content=empty_state("shield-lock", "Attendance access required", "Your role does not include attendance reporting."), show_shell_intro=False)
+        return shell_layout(ctx, request_path=request.url.path, active_key="meetings", title=title, subtitle=subtitle, primary_action=None, content=empty_state("shield-lock", "Attendance access required", "Your role does not include attendance reporting."), show_shell_intro=False)
     body = await _meeting_program_content(request, ctx, title=title, program_type_slug=program_type_slug, active_key=active_key)
     return shell_layout(
-        ctx, request_path=request.url.path, active_key=active_key, title=title,
+        ctx, request_path=request.url.path, active_key="meetings", title=title,
         subtitle=subtitle, primary_action=None, content=body, show_shell_intro=False,
     )
 

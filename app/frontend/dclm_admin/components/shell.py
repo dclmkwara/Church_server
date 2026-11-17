@@ -43,7 +43,6 @@ NAV_GROUPS = [
         "module": "people",
         "items": [
             {"label": "People overview", "icon": "people", "href": "/people", "key": "people"},
-            {"label": "Population & Attendance", "icon": "bar-chart", "href": "/church-data/population-attendance", "key": "church", "module": "church-data", "permission": "counts:read"},
             {"label": "Members", "icon": "person-vcard", "href": "/people/members", "key": "members", "permission": "records:read"},
             {"label": "Newcomers", "icon": "person-hearts", "href": "/church-data/newcomers", "key": "newcomers", "module": "church-data", "permission": "records:read"},
         ],
@@ -53,8 +52,6 @@ NAV_GROUPS = [
         "module": "people",
         "items": [
             {"label": "Workers", "icon": "people", "href": "/people/workers", "key": "workers", "permission": "workers:read"},
-            {"label": "Workers’ Meeting", "icon": "calendar-check", "href": "/church-data/meetings/workers-saturday", "key": "meetings-saturday", "module": "church-data", "permission": "attendance:read"},
-            {"label": "Leaders’ Meeting", "icon": "calendar-check", "href": "/church-data/meetings/leaders-tuesday", "key": "meetings-tuesday", "module": "church-data", "permission": "attendance:read"},
             {"label": "Worker & Leader Meetings", "icon": "calendar-check", "href": "/church-data/meetings", "key": "meetings", "module": "church-data", "permission": "attendance:read"},
             {"label": "App Users", "icon": "person-badge", "href": "/people/users", "key": "users", "permission": "users:read"},
         ],
