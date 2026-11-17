@@ -564,6 +564,18 @@ h6,
     border-color var(--admin-transition);
 }
 
+/* Event analytics KPI cards have long plain-language labels. Let their text
+   claim the available flex width so narrow screens wrap by word, not letter. */
+.program-occurrence-summary .metric-card__inner > div:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.program-occurrence-summary .metric-label,
+.program-occurrence-summary .metric-note {
+  overflow-wrap: break-word;
+}
+
 .section-card__body > * + * {
   margin-top: 1rem;
 }

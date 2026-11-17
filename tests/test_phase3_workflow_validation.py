@@ -69,6 +69,19 @@ def test_crusade_event_requires_campaign_and_alpha_location():
     assert "campaign" in exc.value.detail.lower()
 
 
+def test_retreat_sessions_are_limited_to_group_or_region_hosts():
+    from app.api.v1.routes.programs import _validate_retreat_host_scope
+
+    campaign = SimpleNamespace(event_mode="retreat")
+    _validate_retreat_host_scope(campaign, "group")
+    _validate_retreat_host_scope(campaign, "region")
+    for scope in ("location", "state"):
+        with pytest.raises(HTTPException) as error:
+            _validate_retreat_host_scope(campaign, scope)
+        assert error.value.status_code == 422
+    _validate_retreat_host_scope(SimpleNamespace(event_mode="crusade"), "state")
+
+
 def test_attendance_status_is_restricted_to_supported_values():
     with pytest.raises(ValidationError):
         WorkerAttendanceCreate(

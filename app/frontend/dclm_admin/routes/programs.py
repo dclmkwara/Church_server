@@ -235,7 +235,7 @@ async def _render_event_matrix_page(request: Request, ctx, *, mode: str, campaig
             crumbs.append(A(name, href=target, hx_get=target, hx_push_url=target, hx_target="#program-analytics-content", hx_swap="outerHTML", cls="link-primary text-decoration-none"))
         if path != crumb_paths[-1]:
             crumbs.append(Span(" › ", cls="text-muted"))
-    for type_slug, type_name in types if not (mode == "retreat" and scope_depth > 4) else []:
+    for type_slug, type_name in types:
         cells = [type_name]
         for day in days:
             matches = [row for row in occurrences if row["program_type_slug"] == type_slug and row["date"] == day]
@@ -285,6 +285,15 @@ async def _render_event_matrix_page(request: Request, ctx, *, mode: str, campaig
                 coverages = [r.get("coverage") or {} for r in matches]
                 coverage = coverages[0] if coverages else {}
                 coverage_label = f"{coverage.get('label', 'Reports')}: {sum(_safe_int(c.get('reported')) for c in coverages)} of {sum(_safe_int(c.get('expected')) for c in coverages)}"
+                pending_total = sum(_safe_int(c.get("pending")) for c in coverages)
+                returned_total = sum(_safe_int(c.get("returned")) for c in coverages)
+                conflict_total = sum(_safe_int(c.get("conflict")) for c in coverages)
+                if pending_total:
+                    coverage_label += f" · {pending_total} pending review"
+                if returned_total:
+                    coverage_label += f" · {returned_total} returned"
+                if conflict_total:
+                    coverage_label += f" · {conflict_total} conflicting"
                 if mode == "crusade" and can_view_alpha and coverage.get("alpha_expected"):
                     coverage_label += f" · Alpha: {coverage.get('alpha_reported', 0)} of 1"
                 target = scope_link(ctx, f"/church-data/programs/analytics/{mode}", campaign_id=campaign_id, compare_campaign_id=compare_campaign_id, program_type=type_slug, event_id=current["event_id"], date_from=day, date_to=day, metric=metric, include_pending=str(include_pending).lower())
@@ -326,8 +335,6 @@ async def _render_event_matrix_page(request: Request, ctx, *, mode: str, campaig
     )
     if detail:
         detail_rows = [row for row in occurrences if row.get("program_type_slug") == detail.get("program_type_slug") and row.get("date") == detail.get("date")]
-        if mode == "retreat" and scope_depth >= 4:
-            detail_rows = []
         child_rows_by_path = {}
         for detail_row in detail_rows:
             for child in detail_row.get("children") or []:
@@ -343,9 +350,9 @@ async def _render_event_matrix_page(request: Request, ctx, *, mode: str, campaig
         report_rows = []
         for child in child_rows:
             path = str(child.get("path") or "")
-            if mode == "retreat" and scope_depth >= 4:
-                continue
-            can_drill = mode == "crusade" and scope_depth < 6 or mode == "retreat" and scope_depth == 3
+            is_host_scope = path == scope_path
+            is_authorized_descendant = bool(path and (path == scope_path or path.startswith(scope_path + ".")))
+            can_drill = mode == "crusade" and scope_depth < 6 or mode == "retreat" and not is_host_scope and is_authorized_descendant
             target = scope_link(ctx, f"/church-data/programs/analytics/{mode}", scope_path=path, campaign_id=campaign_id, compare_campaign_id=compare_campaign_id, program_type=str(request.query_params.get("program_type") or ""), event_id=detail["event_id"], date_from=detail["date"], date_to=detail["date"], metric=metric, include_pending=str(include_pending).lower())
             label = A(str(child.get("name") or "Reporting unit"), href=target, hx_get=target, hx_push_url=target, hx_target="#program-analytics-content", hx_swap="outerHTML") if can_drill else str(child.get("name") or "Reporting unit")
             reported = int(child.get("reported") or 0)
@@ -356,18 +363,48 @@ async def _render_event_matrix_page(request: Request, ctx, *, mode: str, campaig
         if mode == "crusade" and can_view_alpha and detail.get("alpha_location_id"):
             alpha_reports = [r for detail_row in detail_rows for r in detail_row.get("location_reports", []) if r.get("source_role") == "alpha"]
             alpha_report = alpha_reports[0] if alpha_reports else None
-            report_rows.insert(0, ["Alpha location", "1 of 1" if alpha_report else "0 of 1", "Reported 0" if alpha_report and alpha_report.get("approved_population") == 0 else f"{_safe_int(alpha_report.get('approved_population')):,}" if alpha_report else "No report"])
+            alpha_population = _safe_int(alpha_report.get("approved_population")) if alpha_report else 0
+            alpha_pending = _safe_int(alpha_report.get("pending_population")) if alpha_report else 0
+            if include_pending:
+                alpha_population += alpha_pending
+            alpha_result = "No report" if not alpha_report else "Pending review" if alpha_pending and not alpha_report.get("approved_rows") else "Reported 0" if alpha_population == 0 else f"{alpha_population:,}"
+            report_rows.insert(0, ["Alpha location", "1 of 1" if alpha_report else "0 of 1", alpha_result])
+        detail_content = []
+        if mode == "retreat":
+            section_rows = []
+            for detail_row in detail_rows:
+                host_path = str(detail_row.get("scope_path") or "")
+                host_name = (occurrences_result.get("scope_names") or {}).get(host_path, host_path.rsplit(".", 1)[-1])
+                for channel in detail_row.get("sections_by_service") or []:
+                    if channel.get("conflict"):
+                        section_rows.append([host_name, channel.get("service_id") or "Channel", "All sections", "Conflicting count", "Needs review"])
+                        continue
+                    for section in channel.get("sections") or []:
+                        approved = _safe_int(section.get("approved_population"))
+                        pending = _safe_int(section.get("pending_population"))
+                        section_rows.append([
+                            host_name, channel.get("service_id") or "Channel", section.get("label") or "Section",
+                            "Reported 0" if approved == 0 and not pending else f"{approved:,}" if approved else "—",
+                            f"{pending:,}" if pending else "—",
+                        ])
+            if section_rows:
+                detail_content.append(section_card(
+                    "Reported count sections",
+                    "Channels and section names come from the event’s submitted count groups. Pending counts stay separate from approved counts.",
+                    responsive_table(["Host", "Channel", "Section", "Approved", "Pending review"], section_rows, [], results_id="retreat-count-sections"),
+                ))
+        detail_content.append(
+            responsive_table(["Reporting unit", "Coverage", "Counted result"], report_rows, [], results_id="program-event-details")
+            if report_rows else empty_state("clipboard-data", "No report rows", "This scheduled session has no counted submissions in the selected scope.")
+        )
         detail_panel = section_card(
             f"{detail['program_type']} · {detail['date']}",
-            f"{detail.get('campaign_title') or mode.title()} · day {detail.get('day_number') or '—'}. " + ("Retreat is reported at region level." if mode == "retreat" else ("Alpha and satellite reporting remain separate." if can_view_alpha else "Satellite reporting is scoped to participating locations.")),
-            responsive_table(["Reporting unit", "Coverage", "Counted result"], report_rows, [], results_id="program-event-details") if report_rows else empty_state("clipboard-data", "No report rows", "This scheduled session has no counted submissions in the selected scope."),
+            f"{detail.get('campaign_title') or mode.title()} · day {detail.get('day_number') or '—'}. " + ("Retreat counts stop at the event’s host group or region." if mode == "retreat" else ("Alpha and satellite reporting remain separate." if can_view_alpha else "Satellite reporting is scoped to participating locations.")),
+            *detail_content,
         )
     else:
         detail_panel = Div()
-    if mode == "retreat" and scope_depth > 4:
-        table = empty_state("info-circle", "Retreat is reported at region level", "Retreat reporting drills from State to Region and stops there.")
-    else:
-        table = responsive_table(headers, matrix_rows, [], results_id=f"{mode}-occurrence-matrix") if matrix_rows else empty_state("calendar3", f"No {mode} sessions reported", "No dated program events are recorded for this campaign. Missing events are not represented as zero attendance.")
+    table = responsive_table(headers, matrix_rows, [], results_id=f"{mode}-occurrence-matrix") if matrix_rows else empty_state("calendar3", f"No {mode} sessions reported", "No dated program events are recorded for this campaign. Missing events are not represented as zero attendance.")
     no_campaign = P("No campaign is available in this scope yet.", cls="text-muted") if not campaigns else None
     cell_groups = {}
     for row in occurrences:
@@ -383,48 +420,52 @@ async def _render_event_matrix_page(request: Request, ctx, *, mode: str, campaig
     peak_value = max(counted_cells, default=0)
     average_day = (sum(counted_cells) / len(counted_cells)) if counted_cells else None
     convert_total = sum(_safe_int(row.get("converts")) for row in occurrences)
+    peak_value_text = f"{peak_value:,}" if counted_cells else "—"
+    average_value_text = f"{average_day:,.1f}" if average_day is not None else "—"
     def summary_card(title: str, value: str, explanation: str):
         return Div(stat_card(title, value, explanation, "calendar-check", "primary"), cls="col-6 col-xl-3")
     peak_label = "Peak program/day"
     average_label = "Average counted program/day"
     peak_explanation = "Highest pooled program-and-day cell; values are not added across days."
     average_explanation = "Mean of counted program-and-day cells; missing cells are excluded."
+    if mode == "retreat" and metric == "attendance":
+        peak_label, average_label = "Peak session", "Average session"
+        peak_explanation = "Highest counted session total across its configured camp channels. This is participation for that session, not a unique-person count."
+        average_explanation = "Mean of counted session totals. People may be counted again in another session."
     if mode == "crusade" and metric == "attendance":
         if can_view_alpha:
-            peak_label, average_label = "Peak total participation", "Average total participation per session"
+            peak_label, average_label = "Peak session", "Average session"
             peak_explanation = "Highest session total, with Alpha and satellite counts combined and labelled in the session detail."
             average_explanation = "Mean of counted session totals, with Alpha and satellite participation included."
         else:
-            peak_label, average_label = "Peak satellite participation", "Average satellite participation per session"
+            peak_label, average_label = "Peak satellite", "Average satellite"
             peak_explanation = "Highest counted satellite session total within this scope."
             average_explanation = "Mean of counted satellite session totals within this scope."
     summary_cards = Div(
-        summary_card(peak_label, f"{peak_value:,}" if counted_cells else "No counted report", peak_explanation),
-        summary_card(average_label, f"{average_day:,.1f}" if average_day is not None else "No counted report", average_explanation),
-        summary_card("Sessions reported", f"{reported_count} of {scheduled_count} scheduled", "Approved scheduled sessions with a counted report; pending is controlled above."),
+        summary_card(peak_label, peak_value_text, peak_explanation if counted_cells else "No counted session report yet."),
+        summary_card(average_label, average_value_text, average_explanation if average_day is not None else "No counted session report yet."),
+        summary_card("Sessions reported", f"{reported_count} / {scheduled_count}", "Approved sessions with a counted report / scheduled sessions. Pending is controlled above."),
         summary_card("Converts", f"{convert_total:,}" if mode == "crusade" else "—", "Convert records across the selected campaign; records are additive."),
-        cls="row g-3",
+        cls="row g-3 program-occurrence-summary",
     )
-    if mode == "retreat" and scope_depth > 4:
-        summary_cards = empty_state("info-circle", "Retreat is reported at region level", "Retreat reporting drills from State to Region and stops there.")
     content = page_stack(
         page_intro(
             "How this report works",
-            "One cell represents one scheduled program type on one day. Attendance is never added across sessions."
+            "One cell represents one scheduled program type on one day. Counted retreat sections are added within that session and labelled as participation; attendance is never added across sessions."
             if mode == "retreat" else ("One cell represents one scheduled session. Alpha and satellite values stay labelled separately; attendance is never added across sessions." if can_view_alpha else "One cell represents one scheduled satellite session. Attendance is never added across sessions."),
         ),
         Div(*crumbs, cls="d-flex flex-wrap align-items-center gap-1 mb-2", role="navigation", aria_label="Scope breadcrumb"),
         selector,
         summary_cards,
         P("Scheduled sessions are approved ProgramEvent rows in the selected campaign.", cls="small text-muted mb-0"),
-        P("Locations reporting uses every active location in scope for each scheduled Crusade session.", cls="small text-muted mb-0") if mode == "crusade" else P("Retreat expected reporters are the regions holding each scheduled session.", cls="small text-muted mb-0"),
+        P("Locations reporting uses every active location in scope for each scheduled Crusade session.", cls="small text-muted mb-0") if mode == "crusade" else P("Each Retreat session is reported once by its configured host group or region; reports do not expand into home churches.", cls="small text-muted mb-0"),
         section_card(("Population by program and day" if mode == "retreat" else ("Total participation by program and day" if can_view_alpha else "Satellite participation by program and day")) if metric == "attendance" else "Converts by program and day", "Select a scheduled cell to inspect reporting units for that day and program. A reported zero is distinct from a missing report.", table),
         detail_panel,
         no_campaign,
     )
     report_mode = "retreat" if mode == "retreat" else "crusade"
     report_url = scope_link(ctx, "/dashboard/pastor-report", scope_path=await DashboardService.scope_path(request, ctx), period="event", event_mode=report_mode, campaign_id=campaign_id, include_pending=str(include_pending).lower())
-    return shell_layout(ctx, request_path=request.url.path, active_key="programs", title="Retreat" if mode == "retreat" else "Crusade", subtitle="Event reporting", primary_action=A("Print / export report", href=report_url, cls="btn btn-outline-primary"), content=Div(content, id="program-analytics-content"), show_shell_intro=False, show_scope_breadcrumb=False)
+    return shell_layout(ctx, request_path=request.url.path, active_key=mode, title="Retreat" if mode == "retreat" else "Crusade", subtitle="Event reporting", primary_action=A("Print / export report", href=report_url, cls="btn btn-outline-primary"), content=Div(content, id="program-analytics-content"), show_shell_intro=False, show_scope_breadcrumb=False)
 
 
 async def _event_matrix_page(request: Request, ctx, *, mode: str, campaign_id: str = "", event_id: str = "", metric: str = "attendance", include_pending: bool = False):

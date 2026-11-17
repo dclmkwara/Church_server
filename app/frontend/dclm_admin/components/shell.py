@@ -34,8 +34,8 @@ NAV_GROUPS = [
         "module": "church-data",
         "items": [
             {"label": "Programs", "icon": "calendar-event", "href": "/church-data/programs", "key": "programs", "permission": "programs:read"},
-            {"label": "Retreat", "icon": "calendar-heart", "href": "/church-data/programs/analytics/retreat", "key": "programs", "permission": "programs:read"},
-            {"label": "Crusade", "icon": "broadcast", "href": "/church-data/programs/analytics/crusade", "key": "programs", "permission": "programs:read"},
+            {"label": "Retreat", "icon": "calendar-heart", "href": "/church-data/programs/analytics/retreat", "key": "retreat", "permission": "programs:read"},
+            {"label": "Crusade", "icon": "broadcast", "href": "/church-data/programs/analytics/crusade", "key": "crusade", "permission": "programs:read"},
         ],
     },
     {
@@ -391,7 +391,7 @@ def shell_layout(
         Link(rel="shortcut icon", type="image/x-icon", href="/favicon.ico"),
         Link(rel="apple-touch-icon", sizes="180x180", href="/assets/apple-touch-icon.png"),
         Link(rel="manifest", href="/manifest.json"),
-        Link(rel="stylesheet", href="/assets/css/admin.css?v=20261113_05"),
+        Link(rel="stylesheet", href="/assets/css/admin.css?v=20261117_02"),
         Link(rel="stylesheet", href="/assets/css/analytics-dashboard.css?v=20261116_01"),
         Script("""
 (function(){

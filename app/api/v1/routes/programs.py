@@ -18,6 +18,12 @@ from app.crud.workflow_rules import collection_window_is_active, ensure_collecti
 
 router = APIRouter()
 
+
+def _validate_retreat_host_scope(campaign, reporting_scope: str) -> None:
+    """Retreats are hosted by one Group or Region; they do not report by home church."""
+    if campaign and str(getattr(campaign, 'event_mode', '') or '').lower() == 'retreat' and reporting_scope not in {'group', 'region'}:
+        raise HTTPException(status_code=422, detail='Retreat sessions must be hosted and reported at group or region scope')
+
 def _ensure_min_score(current_user: User, min_score: int, detail: str) -> None:
     if max((role.score_value for role in current_user.roles), default=0) < min_score:
         raise HTTPException(status_code=403, detail=detail)
@@ -192,6 +198,7 @@ async def create_program_event(*, db: AsyncSession = Depends(deps.get_db), event
     if event_in.campaign_id:
         campaign = await program_campaign.get(db, id=event_in.campaign_id)
         if not campaign: raise HTTPException(status_code=404, detail='Campaign not found')
+        _validate_retreat_host_scope(campaign, event_in.reporting_scope)
         deps.ensure_path_in_scope(current_user, campaign.path, detail='Campaign outside your scope')
         campaign_check = select(text('CAST(:event_path AS ltree) <@ CAST(:campaign_path AS ltree)')).params(event_path=event_in.path, campaign_path=str(campaign.path))
         if not (await db.execute(campaign_check)).scalar(): raise HTTPException(status_code=400, detail='Event path must sit within the campaign scope')
@@ -410,9 +417,11 @@ async def update_program_event(*, db: AsyncSession = Depends(deps.get_db), event
         own_scope = {2: 'location', 3: 'group', 4: 'region', 5: 'state'}[score]
         if target_scope != own_scope or target_path != deps.effective_scope_path(current_user):
             raise HTTPException(status_code=403, detail=f'Your role may manage only events at its own {own_scope} scope')
-    if event_in.campaign_id:
-        campaign = await program_campaign.get(db, id=event_in.campaign_id)
+    campaign_id = event_in.campaign_id or getattr(db_event, 'campaign_id', None)
+    if campaign_id:
+        campaign = await program_campaign.get(db, id=campaign_id)
         if not campaign: raise HTTPException(status_code=404, detail='Campaign not found')
+        _validate_retreat_host_scope(campaign, target_scope)
         deps.ensure_path_in_scope(current_user, campaign.path, detail='Campaign outside your scope')
         campaign_check = select(text('CAST(:event_path AS ltree) <@ CAST(:campaign_path AS ltree)')).params(event_path=target_path, campaign_path=str(campaign.path))
         if not (await db.execute(campaign_check)).scalar(): raise HTTPException(status_code=400, detail='Event path must sit within the campaign scope')

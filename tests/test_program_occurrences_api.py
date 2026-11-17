@@ -178,6 +178,55 @@ def test_state_retreat_day_two_bible_study_pools_regions_and_pending_switch():
     assert pending_event["report_state"] == "counted"
 
 
+def test_group_hosted_retreat_uses_group_as_terminal_reporting_unit():
+    campaign = SimpleNamespace(title="December Retreat", start_date=date(2026, 12, 2), event_mode="retreat", alpha_location_id=None)
+    event = SimpleNamespace(
+        id="group-retreat", campaign_id="december-2026", event_mode="regular",
+        date=date(2026, 12, 2), campaign=campaign, title="Opening Service",
+        reporting_scope="group", path="org.234.KW.ILR.G01", alpha_location_id=None,
+        is_alpha_event=False, approval_status="approved",
+    )
+    ptype = SimpleNamespace(name="Opening Service", slug="opening-service")
+    domain = SimpleNamespace(name="Retreat", slug="retreat")
+    count = SimpleNamespace(
+        id="group-count", event_id="group-retreat", source_role="regular", status="approved",
+        total=250, count_mode=None, count_group_id=None, program_type_id=1,
+        location_id="camp-location", program_scope_path="org.234.KW.ILR.G01",
+        path="org.234.KW.ILR.G01.CAMP", section_label="Adult East",
+    )
+    child_count = SimpleNamespace(
+        id="child-count", event_id="group-retreat", source_role="regular", status="approved",
+        total=80, count_mode=None, count_group_id=None, program_type_id=1,
+        location_id="camp-location", program_scope_path="org.234.KW.ILR.G01",
+        path="org.234.KW.ILR.G01.CAMP", section_label="Children North",
+    )
+    db = SequencedDb([[(event, ptype, domain)], [
+        (count, "Group Camp", "org.234.KW.ILR.G01.CAMP", None, "adult"),
+        (child_count, "Group Camp", "org.234.KW.ILR.G01.CAMP", None, "children"),
+    ], [], [("Ilorin East Group", "org.234.KW.ILR.G01")]])
+    result = asyncio.run(get_program_occurrences(db, scope_path="org.234.KW.ILR.G01"))
+    row = result["occurrences"][0]
+    assert row["counted_population"] == 330
+    assert row["coverage"]["label"] == "Groups reporting"
+    assert row["sections_by_service"] == [
+        {
+            "service_id": "adult", "approved_population": 250, "pending_population": 0,
+            "conflict": False,
+            "sections": [{"label": "Adult East", "approved_population": 250, "pending_population": 0}],
+        },
+        {
+            "service_id": "children", "approved_population": 80, "pending_population": 0,
+            "conflict": False,
+            "sections": [{"label": "Children North", "approved_population": 80, "pending_population": 0}],
+        },
+    ]
+    assert row["children"] == [{
+        "name": "Ilorin East Group", "path": "org.234.KW.ILR.G01", "state": "reported",
+            "population": 330, "approved_population": 330, "pending_population": 0,
+        "returned_rows": 0, "conflict_rows": 0, "expected": 1, "reported": 1, "pending": 0,
+    }]
+
+
 def test_crusade_alpha_data_is_removed_below_state_scope():
     campaign = SimpleNamespace(title="Crusade", start_date=date(2026, 10, 14), event_mode="crusade", alpha_location_id="alpha")
     event = SimpleNamespace(
@@ -201,6 +250,31 @@ def test_crusade_alpha_data_is_removed_below_state_scope():
     assert row["counted_population"] == 100
     assert "alpha" not in row["sources"]
     assert all(item["source_role"] != "alpha" for item in row["location_reports"])
+
+
+def test_crusade_state_view_keeps_alpha_and_satellite_figures_separate():
+    campaign = SimpleNamespace(title="Crusade", start_date=date(2026, 10, 14), event_mode="crusade", alpha_location_id="alpha")
+    event = SimpleNamespace(
+        id="event-state", campaign_id="campaign-state", event_mode="crusade", date=date(2026, 10, 14),
+        campaign=campaign, title="Crusade Evening", reporting_scope="state", path="org.234.KW",
+        alpha_location_id="alpha", is_alpha_event=False, approval_status="approved",
+    )
+    ptype = SimpleNamespace(name="Crusade Evening", slug="crusade-evening")
+    domain = SimpleNamespace(name="Global Crusade", slug="global_crusade")
+    aggregate = [
+        (SimpleNamespace(id="alpha-count", event_id="event-state", location_id="alpha", program_type_id=1, program_scope_path="org.234.KW", path="org.234.KW.R.G.A", source_role="alpha", status="approved", total=900, count_mode=None, count_group_id=None), "Alpha", "org.234.KW.R.G.A", None),
+        (SimpleNamespace(id="sat-count", event_id="event-state", location_id="satellite", program_type_id=1, program_scope_path="org.234.KW", path="org.234.KW.R.G.S", source_role="satellite", status="approved", total=100, count_mode=None, count_group_id=None), "Satellite", "org.234.KW.R.G.S", None),
+    ]
+    locations = [
+        SimpleNamespace(location_id="alpha", location_name="Alpha", path="org.234.KW.R.G.A", is_active=True, opened_on=None, closed_on=None),
+        SimpleNamespace(location_id="satellite", location_name="Satellite", path="org.234.KW.R.G.S", is_active=True, opened_on=None, closed_on=None),
+    ]
+    db = SequencedDb([[(event, ptype, domain)], aggregate, [], locations, [("Region", "org.234.KW.R"), ("Alpha", "org.234.KW.R.G.A"), ("Satellite", "org.234.KW.R.G.S")]])
+    row = asyncio.run(get_program_occurrences(db, scope_path="org.234.KW"))["occurrences"][0]
+    assert row["counted_population"] == 1000
+    assert row["sources"] == {"alpha": 900, "satellite": 100}
+    assert row["coverage"]["alpha_expected"] == 1
+    assert row["coverage"]["alpha_reported"] == 1
 
 
 def test_retreat_state_matrix_pools_reporters_and_compares_common_regions():

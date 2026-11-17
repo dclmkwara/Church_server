@@ -98,6 +98,20 @@ def test_attendance_navigation_is_consolidated_into_meetings():
     assert any(getattr(route, "path", None) == "/church-data/attendance" for route in app.routes)
 
 
+def test_major_program_pages_have_one_distinct_active_sidebar_item(monkeypatch):
+    monkeypatch.setattr(shell, "get_backend_config", lambda: SimpleNamespace(enabled=False))
+    monkeypatch.setattr(auth_context, "get_backend_config", lambda: SimpleNamespace(enabled=False))
+    ctx = build_context({"profile": "state_overseer"})
+    program_items = next(group["items"] for group in NAV_GROUPS if group["label"] == "Major Programs")
+    assert {item["label"]: item["key"] for item in program_items} == {
+        "Programs": "programs", "Retreat": "retreat", "Crusade": "crusade",
+    }
+    for item in program_items:
+        rendered = to_xml(_sidebar(ctx, item["key"]))
+        assert rendered.count('class="sidebar-link fx active"') == 1
+        assert item["href"] in rendered
+
+
 def test_finance_analytics_menu_link_selects_the_existing_financial_report_tab():
     finance_link = next(
         item["href"]
