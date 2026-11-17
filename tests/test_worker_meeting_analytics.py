@@ -55,7 +55,8 @@ def _attendance(worker_id, status):
     return SimpleNamespace(
         worker_id=worker_id, event_id=UUID(int=50), date=datetime(2026, 11, 7, tzinfo=timezone.utc),
         status=status, type_slug="saturday_workers_meeting", type_name="Saturday Workers Meeting",
-        type_id=1, meeting_scope="org.234.KW.R.G",
+        type_id=1, meeting_scope="org.234.KW.R.G", worker_path="org.234.KW.R.G.L1",
+        location_name="Location One", group_name="Group One", region_name="Ilorin Region",
     )
 
 
@@ -81,6 +82,15 @@ def test_multiple_ushers_count_roster_and_workers_once_per_meeting():
     assert meeting["meetings"] == 1
     assert meeting["attendance_rate"] == 66.7
     assert result["monthly_trend"][0]["expected"] == 3
+    assert result["direct_child_distribution"] == [{
+        "child_id": "R", "label": "Ilorin Region", "present": 1,
+        "late": 1, "absent": 1, "excused": 0, "meetings": 1,
+    }]
+    assert result["latest_meeting"] == {
+        "date": "2026-11-07", "present": 1, "late": 1, "absent": 1,
+        "excused": 0, "expected": 3, "meetings": 1,
+        "attendance_rate": 66.7, "has_reliable_roster": True,
+    }
 
 
 def test_legacy_roster_count_is_used_once_and_marked():
@@ -128,6 +138,10 @@ def test_historical_roster_snapshot_survives_current_worker_path_change():
 
     assert result["ranking"][0]["expected"] == 3
     assert result["ranking"][0]["attendance_rate"] == 33.3
+    assert result["direct_child_distribution"] == [{
+        "child_id": "L1", "label": "Location One", "present": 1,
+        "late": 0, "absent": 0, "excused": 0, "meetings": 1,
+    }]
     assert len(db.statements) == 2
 
 
@@ -146,6 +160,10 @@ def test_each_meeting_uses_its_own_roster_snapshot():
     assert meeting["expected"] == 2
     assert meeting["present"] == 1
     assert meeting["attendance_rate"] == 50.0
+    assert result["latest_meeting"]["date"] == "2026-11-14"
+    assert result["latest_meeting"]["expected"] == 1
+    assert result["latest_meeting"]["absent"] == 1
+    assert result["latest_meeting"]["attendance_rate"] == 0.0
 
 
 def test_legacy_roster_records_make_rate_unavailable():
@@ -156,6 +174,8 @@ def test_legacy_roster_records_make_rate_unavailable():
     assert meeting["expected"] == 20
     assert meeting["attendance_rate"] is None
     assert result["monthly_trend"][0]["attendance_rate"] is None
+    assert result["latest_meeting"]["attendance_rate"] is None
+    assert result["latest_meeting"]["has_reliable_roster"] is False
 
 
 def test_snapshot_meeting_rate_remains_available_when_other_meeting_is_legacy():

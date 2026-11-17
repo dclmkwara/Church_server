@@ -63,16 +63,43 @@ def _category_metrics(report: dict[str, Any]) -> list[tuple[str, int | None, flo
 
 
 def _demographic_list(report: dict[str, Any], *, compact: bool = False) -> Any:
-    metrics = _category_metrics(report)
-    return Div(*[
-        Div(
-            Span(label, cls="program-demographic-label"),
-            Strong("Not available" if amount is None else _fmt_number(amount), cls="program-demographic-value"),
-            Span("" if percentage is None else f"{percentage:g}%", cls="program-demographic-percent"),
-            cls="program-demographic-item",
+    metrics = {label: (amount, percentage) for label, amount, percentage in _category_metrics(report)}
+    groups = (
+        ("Adults", "Adults Male", "Adults Female"),
+        ("Youth", "Youth Male", "Youth Female"),
+        ("Children", "Children Male", "Children Female"),
+    )
+    items = []
+    for label, male_key, female_key in groups:
+        male, male_share = metrics[male_key]
+        female, female_share = metrics[female_key]
+        complete = male is not None and female is not None
+        share = (male_share or 0) + (female_share or 0) if complete else None
+        bar = Div(
+            Span(cls="program-demographic-bar-male", style=f"width:{male_share or 0}%"),
+            Span(cls="program-demographic-bar-female", style=f"width:{female_share or 0}%"),
+            role="img",
+            aria_label=(
+                f"{label}: male {_fmt_number(male)}, female {_fmt_number(female)}, "
+                f"{share:g}% of counted attendance" if complete and share is not None
+                else f"{label}: male or female count not available"
+            ),
+            cls="program-demographic-bar" if complete else "program-demographic-bar is-unavailable",
         )
-        for label, amount, percentage in metrics
-    ], cls="program-demographics" + (" program-demographics-compact" if compact else ""), aria_label="Demographic counts and share of counted attendance")
+        items.append(Div(
+            Div(
+                Span(label, cls="program-demographic-label"),
+                Strong("Not available" if share is None else f"{share:g}%", cls="program-demographic-value"),
+                cls="d-flex justify-content-between align-items-baseline gap-2",
+            ),
+            P(
+                f"Male {_fmt_number(male)} · Female {_fmt_number(female)}" if complete else "Male and female counts not available",
+                cls="program-demographic-detail mb-1",
+            ),
+            bar,
+            cls="program-demographic-item",
+        ))
+    return Div(*items, cls="program-demographics" + (" program-demographics-compact" if compact else ""), aria_label="Male and female attendance counts by age group, with each age group shown as a share of counted attendance")
 
 
 def _scope_expected_percent(report: dict[str, Any]) -> tuple[str, str]:

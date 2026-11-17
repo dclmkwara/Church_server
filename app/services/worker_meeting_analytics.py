@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.filters import scope_filter, scope_or_ancestor_filter
 from app.models.attendance import WorkerAttendance, WorkerAttendanceSubmission
+from app.models.location import Group, Location, Region
 from app.models.programs import ProgramEvent, ProgramType
 
 
@@ -73,16 +74,22 @@ async def worker_meeting_analytics(
         cast(WorkerAttendance.program_scope_path, String),
         cast(WorkerAttendance.path, String),
     )
+    scope_parts = [part for part in str(scope_path or "").split(".") if part]
+    child_name_field = {3: "region_name", 4: "group_name", 5: "location_name"}.get(len(scope_parts), "")
     attendance_query = (
         select(
             WorkerAttendance.worker_id, WorkerAttendance.event_id, WorkerAttendance.date,
             WorkerAttendance.status, attendance_slug.label("type_slug"),
             attendance_type.name.label("type_name"), attendance_type_id.label("type_id"),
-            attendance_scope.label("meeting_scope"),
+            attendance_scope.label("meeting_scope"), cast(WorkerAttendance.path, String).label("worker_path"),
+            Location.location_name.label("location_name"), Group.group_name.label("group_name"), Region.region_name.label("region_name"),
         )
         .outerjoin(attendance_type, WorkerAttendance.program_type_id == attendance_type.id)
         .outerjoin(attendance_event, WorkerAttendance.event_id == attendance_event.id)
         .outerjoin(attendance_event_type, attendance_event.program_type_id == attendance_event_type.id)
+        .outerjoin(Location, WorkerAttendance.location_id == Location.location_id)
+        .outerjoin(Group, Location.group_id == Group.group_id)
+        .outerjoin(Region, Group.region_id == Region.region_id)
         .where(
             scope_filter(WorkerAttendance.path, scope_path),
             WorkerAttendance.is_deleted.is_(False),
@@ -100,7 +107,7 @@ async def worker_meeting_analytics(
         meeting = meetings.setdefault(key, {
             "day": day, "type_slug": slug, "type_name": str(type_name or submission.program_type),
             "scope": str(meeting_scope or ""), "expected_ids": set(), "has_roster_ids": False,
-            "legacy_expected": 0, "has_legacy_roster": False, "workers": defaultdict(set),
+            "legacy_expected": 0, "has_legacy_roster": False, "workers": defaultdict(set), "worker_children": {},
         })
         if submission.expected_worker_ids is not None:
             meeting["has_roster_ids"] = True
@@ -127,9 +134,15 @@ async def worker_meeting_analytics(
         meeting = meetings.setdefault(key, {
             "day": day, "type_slug": slug, "type_name": str(row.type_name or slug.replace("_", " ").title()),
             "scope": str(row.meeting_scope or ""), "expected_ids": set(), "has_roster_ids": False,
-            "legacy_expected": 0, "has_legacy_roster": False, "workers": defaultdict(set),
+            "legacy_expected": 0, "has_legacy_roster": False, "workers": defaultdict(set), "worker_children": {},
         })
-        meeting["workers"][str(row.worker_id)].add(str(row.status or "").lower())
+        worker_id = str(row.worker_id)
+        meeting["workers"][worker_id].add(str(row.status or "").lower())
+        worker_path = [part for part in str(getattr(row, "worker_path", "") or "").split(".") if part]
+        if len(worker_path) > len(scope_parts) and [part.lower() for part in worker_path[:len(scope_parts)]] == [part.lower() for part in scope_parts]:
+            child_id = worker_path[len(scope_parts)]
+            child_name = str(getattr(row, child_name_field, "") or child_id) if child_name_field else child_id
+            meeting["worker_children"][worker_id] = (child_id, child_name)
 
     # Do not allocate a legacy group/region roster count to one Location: its
     # old submission contains no IDs with which to identify the home-location share.
@@ -198,6 +211,65 @@ async def worker_meeting_analytics(
         ranking.append(row)
     ranking.sort(key=lambda row: ((row["present"] + row["late"]), row["meetings"]), reverse=True)
     selected_slug = program_type_slug or (ranking[0]["program_type"] if ranking else "")
+    selected_meetings = [meeting for meeting in meetings.values() if meeting["type_slug"] == selected_slug]
+    latest_day = max((meeting["day"] for meeting in selected_meetings), default="")
+    latest_meetings = [meeting for meeting in selected_meetings if meeting["day"] == latest_day]
+    latest_totals = {"present": 0, "late": 0, "absent": 0, "excused": 0, "expected": 0}
+    for meeting in latest_meetings:
+        present = late = explicit_absent = excused = 0
+        for statuses in meeting["workers"].values():
+            if "present" in statuses:
+                present += 1
+            elif "late" in statuses:
+                late += 1
+            elif "excused" in statuses:
+                excused += 1
+            elif "absent" in statuses:
+                explicit_absent += 1
+        expected = len(meeting["expected_ids"]) if meeting["has_roster_ids"] else meeting["legacy_expected"]
+        latest_totals["present"] += present
+        latest_totals["late"] += late
+        latest_totals["excused"] += excused
+        latest_totals["absent"] += max(explicit_absent, expected - present - late - excused, 0)
+        latest_totals["expected"] += expected
+    latest_has_reliable_roster = bool(latest_meetings) and all(
+        meeting["has_roster_ids"] and not meeting["has_legacy_roster"]
+        for meeting in latest_meetings
+    )
+    latest_rate = (
+        round((latest_totals["present"] + latest_totals["late"]) * 100 / latest_totals["expected"], 1)
+        if latest_has_reliable_roster and latest_totals["expected"] else None
+    )
+    latest_meeting = {
+        "date": latest_day,
+        **latest_totals,
+        "meetings": len(latest_meetings),
+        "attendance_rate": latest_rate,
+        "has_reliable_roster": latest_has_reliable_roster,
+    } if latest_meetings else None
+    child_totals: dict[str, dict[str, Any]] = {}
+    for meeting in meetings.values():
+        if meeting["type_slug"] != selected_slug:
+            continue
+        child_meeting_statuses: dict[str, dict[str, set[str]]] = defaultdict(lambda: {"present": set(), "late": set(), "absent": set(), "excused": set()})
+        for worker_id, statuses in meeting["workers"].items():
+            child = meeting["worker_children"].get(worker_id)
+            if child is None:
+                continue
+            child_id, child_name = child
+            status = next((candidate for candidate in ("present", "late", "excused", "absent") if candidate in statuses), "")
+            if status:
+                child_meeting_statuses[child_id][status].add(worker_id)
+                child_totals.setdefault(child_id, {
+                    "child_id": child_id, "label": child_name, "present": 0, "late": 0,
+                    "absent": 0, "excused": 0, "meetings": 0,
+                })["label"] = child_name
+        for child_id, statuses in child_meeting_statuses.items():
+            child = child_totals[child_id]
+            for status, workers in statuses.items():
+                child[status] += len(workers)
+            child["meetings"] += 1
+    direct_child_distribution = sorted(child_totals.values(), key=lambda row: row["label"].casefold())
     monthly = [
         {"period": month, **values,
          "attendance_rate": round((values["present"] + values["late"]) * 100 / values["expected"], 1)
@@ -205,4 +277,11 @@ async def worker_meeting_analytics(
         for (slug, month), values in sorted(by_month.items()) if slug == selected_slug
     ]
     selected = next((row for row in ranking if row["program_type"] == selected_slug), None)
-    return {"ranking": ranking, "monthly_trend": monthly, "summary": selected, "deduplicated": True}
+    return {
+        "ranking": ranking,
+        "monthly_trend": monthly,
+        "summary": selected,
+        "latest_meeting": latest_meeting,
+        "deduplicated": True,
+        "direct_child_distribution": direct_child_distribution,
+    }

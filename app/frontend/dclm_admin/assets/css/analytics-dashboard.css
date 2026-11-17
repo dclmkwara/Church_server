@@ -4,11 +4,16 @@
 #population-analytics-content .program-overview-grid { display:grid; gap:12px; }
 #population-analytics-content .program-summary-card { padding:16px; }
 #population-analytics-content .program-latest-total { display:block; color:var(--ad-blue); font-size:clamp(28px,8vw,38px); line-height:1.1; font-variant-numeric:tabular-nums; }
-#population-analytics-content .program-demographics { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
-#population-analytics-content .program-demographic-item { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:baseline; gap:2px 8px; padding:9px 10px; border:1px solid var(--ad-line); border-radius:8px; background:var(--ad-panel-2); }
+#population-analytics-content .program-demographics { display:grid; grid-template-columns:minmax(0,1fr); gap:8px; }
+#population-analytics-content .program-demographic-item { display:grid; gap:3px; padding:9px 10px; border:1px solid var(--ad-line); border-radius:8px; background:var(--ad-panel-2); }
 #population-analytics-content .program-demographic-label { color:var(--ad-muted); font-size:12px; }
 #population-analytics-content .program-demographic-value { color:var(--ad-ink); font-size:15px; font-variant-numeric:tabular-nums; }
-#population-analytics-content .program-demographic-percent { grid-column:2; color:var(--ad-muted); font-size:11px; text-align:right; }
+#population-analytics-content .program-demographic-detail { color:var(--ad-muted); font-size:11px; }
+#population-analytics-content .program-demographic-bar { display:flex; width:100%; height:10px; overflow:hidden; border-radius:999px; background:#dbe4ef; }
+#population-analytics-content .program-demographic-bar-male { display:block; min-width:0; background:#1d4f91; }
+#population-analytics-content .program-demographic-bar-female { display:block; min-width:0; background:#8b5fbf; }
+#population-analytics-content .program-demographic-bar.is-unavailable { background:repeating-linear-gradient(135deg,#e3eaf2 0,#e3eaf2 5px,#f4f7fa 5px,#f4f7fa 10px); }
+#population-analytics-content .program-demographic-bar.is-unavailable span { display:none; }
 #population-analytics-content .program-expected { display:grid; grid-template-columns:auto 1fr; align-items:baseline; gap:0 8px; margin-top:12px; padding-top:12px; border-top:1px solid var(--ad-line); }
 #population-analytics-content .program-expected-value { color:var(--ad-green); font-size:24px; font-variant-numeric:tabular-nums; }
 #population-analytics-content .program-expected p { grid-column:1/-1; }
@@ -22,7 +27,7 @@
 #population-analytics-content .program-child-state { max-width:45%; white-space:normal; text-align:right; }
 #population-analytics-content .program-child-highlights { display:grid; grid-template-columns:1fr 1fr; align-items:center; gap:8px; padding:8px 0; border-block:1px solid var(--ad-line); }
 #population-analytics-content .program-child-count { font-size:21px; font-variant-numeric:tabular-nums; }
-#population-analytics-content .program-demographics-compact { grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; }
+#population-analytics-content .program-demographics-compact { gap:6px; }
 #population-analytics-content .program-demographics-compact .program-demographic-item { padding:7px 8px; }
 #population-analytics-content .program-attendance-filters { display:grid!important; grid-template-columns:minmax(0,1fr) minmax(0,1fr); align-items:end!important; gap:10px!important; }
 #population-analytics-content .program-filter-pair { display:grid; gap:4px; min-width:0; }

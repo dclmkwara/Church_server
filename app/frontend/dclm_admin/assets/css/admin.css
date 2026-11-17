@@ -2399,6 +2399,25 @@ html, body {
   min-width: 0;
 }
 
+.people-summary-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+@media (max-width: 767.98px) {
+  .people-summary-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.6rem;
+  }
+}
+
+@media (max-width: 359.98px) {
+  .people-summary-metrics {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 @media (min-width: 576px) {
   .section-card__body .reports-overview-actions {
     flex-wrap: wrap !important;

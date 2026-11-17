@@ -1,17 +1,19 @@
 from __future__ import annotations
 
+from collections import Counter
+
 from fasthtml.common import A, Div, Form, H3, Input, Option, P, Select, Span, Textarea
 from starlette.requests import Request
 from faststrap import Badge, Button, Icon, PlaceholderCard, Spinner
 
-from ..backend import BackendClientError
+from ..backend import BackendClientError, format_scope_display_id
 from ..auth_context import build_context
 from ..communication import PeopleService, WorkflowService
 from ..communication.active_scope import active_scope_context, scope_link
 from ..components.feedback import simple_toast_response
 from ..components.shell import hidden_context_inputs, primary_button, shell_layout
 from ..components.ui import empty_state, filter_field as _filter_field, page_intro, page_stack, responsive_table, section_card, stat_card, status_badge
-from ..mock_data import STORE, TODAY, UNITS
+from ..mock_data import STORE, TODAY
 from ..source_intake import reject_source_submission, source_intake_notice
 
 
@@ -23,6 +25,25 @@ ROLE_OPTIONS = [
     "Region Pastor",
     "State Overseer",
 ]
+
+
+def _direct_child_distribution(rows, ctx) -> list[tuple[str, int]]:
+    """Group returned records by the immediate child path, never past one level."""
+    scope_parts = [part for part in str(getattr(ctx, "current_scope_path", "") or "").split(".") if part]
+    if len(scope_parts) >= 6:
+        return []
+    label_key = {3: "region", 4: "group", 5: "location"}.get(len(scope_parts), "")
+    children: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        path_parts = [part for part in str(row.get("path") or "").split(".") if part]
+        if len(path_parts) <= len(scope_parts) or [part.lower() for part in path_parts[:len(scope_parts)]] != [part.lower() for part in scope_parts]:
+            continue
+        child_id = path_parts[len(scope_parts)]
+        child = children.setdefault(child_id, {"name": "", "count": 0})
+        child["count"] += 1
+        fallback_label = format_scope_display_id(".".join(path_parts[: len(scope_parts) + 1])) or child_id
+        child["name"] = child["name"] or str(row.get(label_key) or fallback_label)
+    return sorted(((child["name"], child["count"]) for child in children.values()), key=lambda item: (-item[1], item[0].casefold()))
 
 MARITAL_STATUS_OPTIONS = ["Single", "Married", "Widowed"]
 MEMBER_STATUS_OPTIONS = ["active", "inactive", "transferred"]
@@ -209,7 +230,48 @@ async def _workers_table(request: Request, ctx, *, search: str = "", status: str
         attrs = {"id": "workers-results"}
         if oob:
             attrs["hx_swap_oob"] = "outerHTML:#workers-results"
-        return Div(empty_state("people", "No workers match this filter", "Try a different status or search term."), **attrs)
+        return Div(empty_state("people", "No workers match this filter", "Change the filters to see matching worker records."), **attrs)
+
+    active_workers = sum(
+        1 for worker in rows
+        if worker.get("approval_status", "").strip().lower() == "approved"
+        and worker.get("status", "").strip().lower() == "active"
+    )
+    inactive_or_other_workers = sum(
+        1 for worker in rows
+        if worker.get("approval_status", "").strip().lower() == "approved"
+        and worker.get("status", "").strip().lower() != "active"
+    )
+    pending_review = sum(1 for worker in rows if worker.get("approval_status", "").strip().lower() in {"pending", "pending_verification"})
+    units = Counter((worker.get("unit") or "").strip() or "Unit not recorded" for worker in rows)
+    unit_list = Div(
+        *[
+            Div(Span(unit, cls="text-body"), Span(str(count), cls="fw-semibold text-body"), cls="d-flex justify-content-between gap-3 py-2 border-bottom")
+            for unit, count in sorted(units.items(), key=lambda item: (-item[1], item[0].casefold()))
+        ],
+        cls="small",
+    )
+    child_distribution = _direct_child_distribution(rows, ctx)
+    child_list = Div(
+        *[
+            Div(Span(name, cls="text-body"), Span(str(count), cls="fw-semibold text-body"), cls="d-flex justify-content-between gap-3 py-2 border-bottom")
+            for name, count in child_distribution
+        ],
+        P("Children without matching worker records are not listed.", cls="small text-muted mb-0 mt-2") if child_distribution else P("This scope has no lower jurisdiction level, or no matching child records.", cls="small text-muted mb-0"),
+        cls="small",
+    )
+    summary = Div(
+        Div(
+            stat_card("Workers shown", str(len(rows)), "Records matching these filters", "people", tone="primary"),
+            stat_card("Active and approved", str(active_workers), "Eligible active workers", "person-check", tone="success"),
+            stat_card("Inactive / other", str(inactive_or_other_workers), "Approved workers not marked active", "person-dash", tone="info"),
+            stat_card("Pending review", str(pending_review), "Workers awaiting verification", "hourglass-split", tone="warning"),
+            cls="people-summary-metrics mb-3",
+        ),
+        section_card("Unit distribution", "Groups are based on unit names recorded on these worker records.", unit_list),
+        section_card("Workers shown by direct child", "Only the next level below this scope is listed; counts follow the current filters.", child_list),
+        cls="mb-3",
+    )
 
     desktop_rows = []
     mobile_cards = []
@@ -236,13 +298,13 @@ async def _workers_table(request: Request, ctx, *, search: str = "", status: str
             ]
         )
         mobile_cards.append(await _worker_mobile_card(ctx, worker))
-    return responsive_table(
+    table = responsive_table(
         ["Worker", "Location", "Unit", "Approval", "Status", "Action"],
         desktop_rows,
         mobile_cards,
         results_id="workers-results",
-        oob="outerHTML:#workers-results" if oob else None,
     )
+    return Div(summary, table.children[0], table.children[1], id="workers-results", role="region", aria_label="Results", **({"hx_swap_oob": "outerHTML:#workers-results"} if oob else {}))
 
 
 async def _worker_detail_panel(request: Request, ctx, worker):
@@ -457,7 +519,27 @@ async def _users_table(request: Request, ctx, *, search: str = "", approval: str
         attrs = {"id": "users-results"}
         if oob:
             attrs["hx_swap_oob"] = "outerHTML:#users-results"
-        return Div(empty_state("person-badge", "No users match this filter", "Try a different status or approval filter."), **attrs)
+        return Div(empty_state("person-badge", "No users match this filter", "Change the filters to see matching app accounts."), **attrs)
+
+    active_accounts = sum(1 for user in rows if user.get("status", "").strip().lower() == "active")
+    inactive_accounts = sum(1 for user in rows if user.get("status", "").strip().lower() == "inactive")
+    pending_accounts = sum(1 for user in rows if user.get("approval_status", "").strip().lower() in {"pending", "pending_verification"})
+    child_distribution = _direct_child_distribution(rows, ctx)
+    child_list = Div(
+        *[
+            Div(Span(name, cls="text-body"), Span(str(count), cls="fw-semibold text-body"), cls="d-flex justify-content-between gap-3 py-2 border-bottom")
+            for name, count in child_distribution
+        ],
+        P("Children without matching app accounts are not listed.", cls="small text-muted mb-0 mt-2") if child_distribution else P("This scope has no lower jurisdiction level, or no matching child accounts.", cls="small text-muted mb-0"),
+        cls="small",
+    )
+    summary = Div(
+        stat_card("Accounts shown", str(len(rows)), "App accounts matching these filters", "person-badge", tone="primary"),
+        stat_card("Active accounts", str(active_accounts), "Accounts currently enabled", "check2-circle", tone="success"),
+        stat_card("Inactive accounts", str(inactive_accounts), "Accounts currently disabled", "person-dash", tone="info"),
+        stat_card("Pending approval", str(pending_accounts), "Accounts awaiting approval", "hourglass-split", tone="warning"),
+        cls="people-summary-metrics mb-3",
+    )
 
     desktop_rows = []
     mobile_cards = []
@@ -484,13 +566,14 @@ async def _users_table(request: Request, ctx, *, search: str = "", approval: str
             ]
         )
         mobile_cards.append(await _user_mobile_card(ctx, user))
-    return responsive_table(
+    table = responsive_table(
         ["User", "Location", "Roles", "Approval", "Status", "Action"],
         desktop_rows,
         mobile_cards,
         results_id="users-results",
-        oob="outerHTML:#users-results" if oob else None,
     )
+    child_summary = section_card("App users shown by direct child", "People with app access, grouped one level below this scope. A scope code is shown when the account source has no child name.", child_list)
+    return Div(summary, child_summary, table.children[0], table.children[1], id="users-results", role="region", aria_label="Results", **({"hx_swap_oob": "outerHTML:#users-results"} if oob else {}))
 
 
 async def _member_mobile_card(ctx, member):
@@ -1754,7 +1837,7 @@ def register_people_routes(app) -> None:
         body = page_stack(
             section_card(
                 "User accounts",
-                "User account directory and access status.",
+                "App accounts belong to registered church workers. Approval and enabled status are shown separately; this is not the total workforce.",
                 filter_form,
                 users_results,
             ),
@@ -1764,7 +1847,7 @@ def register_people_routes(app) -> None:
             request_path=request.url.path,
             active_key="users",
             title="App Users",
-            subtitle="Role-aware access management for approved workers.",
+            subtitle="Accounts for workers who use the app, separate from the full church workforce.",
             primary_action=primary_button(
                 "Create User",
                 href="#",

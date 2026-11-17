@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+from typing import Any
 
-from fasthtml.common import A, Div, Form, H3, H4, Input, Label, Option, P, Select, Textarea
+from fasthtml.common import A, Details, Div, Form, H3, H4, Input, Label, Option, P, Select, Summary, Textarea
 from decimal import Decimal, InvalidOperation
 from starlette.requests import Request
 from starlette.responses import RedirectResponse
@@ -19,7 +20,7 @@ from ..communication.count_aggregation import aggregate_count_submissions
 from ..components.feedback import simple_toast_response
 from ..components.shell import hidden_context_inputs, shell_layout
 from ..components.ui import empty_state, filter_field, format_naira, page_intro, page_stack, responsive_table, section_card, stat_card, status_badge
-from ..mock_data import STORE, UNITS
+from ..mock_data import STORE
 from ..source_intake import reject_source_submission, source_intake_notice
 from app.core.program_page_perf import program_page_trace
 from app.services.analytics.program_config import reporting_today
@@ -44,6 +45,13 @@ def _can_remind_counts(ctx) -> bool:
 
 def _scope_level_number(ctx) -> int:
     return max(0, len([part for part in _scope_path(ctx).split(".") if part]) - 1)
+
+
+def _attendance_unit_options(rows, selected_unit: str = "") -> list[str]:
+    units = {str(row.get("unit") or "").strip() for row in rows if str(row.get("unit") or "").strip()}
+    if selected_unit:
+        units.add(selected_unit)
+    return sorted(units, key=str.casefold)
 
 
 def _finance_rows_in_view(rows, *, date_from: str = "", date_to: str = "", include_pending: bool = False):
@@ -398,22 +406,34 @@ async def _count_review_workspace(request: Request, ctx, occurrence_date: str) -
 
 async def _meeting_program_content(request: Request, ctx, *, title: str, program_type_slug: str, active_key: str) -> Div:
     metrics = await DashboardService.meeting_program_metrics(request, ctx, program_type_slug=program_type_slug)
-    rows = metrics.get("ranking") or []
-    if rows:
-        item = rows[0]
+    latest = metrics.get("latest_meeting")
+    metrics_unavailable = bool(metrics.get("error") or metrics.get("unavailable"))
+    if metrics_unavailable:
+        cards = empty_state("cloud-slash", "Meeting analytics unavailable", "The summary could not be loaded. The attendance records section may still contain submitted records.")
+    elif latest:
+        meeting_date = str(latest.get("date") or "Latest recorded date")
+        expected = int(latest.get("expected") or 0)
+        attended = int(latest.get("present") or 0) + int(latest.get("late") or 0)
+        rate_note = (
+            f"{attended} of {expected} roster workers present or late on {meeting_date}"
+            if latest.get("has_reliable_roster") and expected
+            else f"Roster denominator unavailable for {meeting_date}"
+        )
         cards = await _summary_grid(
             [
-                ("Present workers", str(item.get("present", 0)), "Distinct workers marked present, counted once per meeting", "person-check"),
-                ("Late workers", str(item.get("late", 0)), "Distinct workers marked late, counted once per meeting", "clock"),
-                ("Attendance rate", f"{item.get('attendance_rate')}%" if item.get("attendance_rate") is not None else "Rate unavailable", "Rate is shown only when every meeting in this summary has a captured eligible roster snapshot", "percent"),
-                ("Meetings reported", str(item.get("meetings", 0)), "Distinct meeting occurrences with an attendance submission", "clipboard-data"),
+                ("Present workers", str(latest.get("present", 0)), f"Latest recorded date: {meeting_date}", "person-check"),
+                ("Late workers", str(latest.get("late", 0)), f"Latest recorded date: {meeting_date}", "clock"),
+                ("Attendance rate", f"{latest.get('attendance_rate')}%" if latest.get("attendance_rate") is not None else "Rate unavailable", rate_note, "percent"),
+                ("Meetings reported", str(latest.get("meetings", 0)), f"Distinct submitted occurrences on {meeting_date}", "clipboard-data"),
             ],
             grid_id=f"{active_key}-stats", grid_cls="counts-stat-grid",
         )
     else:
         cards = empty_state("clipboard-check", "No attendance reports", f"No worker attendance rows are recorded for {title} in this scope.")
     monthly = metrics.get("monthly_trend") or []
-    if monthly:
+    if metrics_unavailable:
+        trend_table = empty_state("cloud-slash", "Meeting trend unavailable", "Monthly attendance summaries could not be loaded.")
+    elif monthly:
         trend_rows = [
             [row["period"], row["present"], row["late"], row["absent"], row["excused"], row["expected"], f"{row['attendance_rate']}%" if row.get("attendance_rate") is not None else "Rate unavailable", row["meetings"]]
             for row in monthly
@@ -424,6 +444,30 @@ async def _meeting_program_content(request: Request, ctx, *, title: str, program
         )
     else:
         trend_table = empty_state("calendar3", "No monthly trend yet", "Monthly rows appear after attendance is submitted for this meeting type.")
+    child_rows = metrics.get("direct_child_distribution") or []
+    child_table_rows = [
+        [row["label"], row["present"], row["late"], row["absent"], row["excused"], row["meetings"]]
+        for row in child_rows
+    ]
+    child_distribution = responsive_table(
+        ["Direct child", "Present", "Late", "Marked absent", "Excused", "Meetings with marks"],
+        child_table_rows,
+        [
+            Div(
+                H4(row["label"], cls="h6 fw-semibold mb-2"),
+                P(f"Present {row['present']} · Late {row['late']}", cls="mb-1"),
+                P(f"Marked absent {row['absent']} · Excused {row['excused']} · {row['meetings']} meetings", cls="small text-muted mb-0"),
+                cls="border rounded-3 p-3 bg-white",
+            )
+            for row in child_rows
+        ],
+        results_id=f"{active_key}-child-attendance",
+    ) if child_rows else empty_state("cloud-slash" if metrics_unavailable else "geo-alt", "Child breakdown unavailable" if metrics_unavailable else "No child attendance records", "The child breakdown could not be loaded." if metrics_unavailable else "A child breakdown appears after attendance is recorded for this meeting type.")
+    child_panel = section_card(
+        "Recorded attendance by direct child",
+        "Worker status marks are deduplicated within each meeting and summed across recorded meetings. A worker can appear again on another date. Only stored marks with home-scope paths are assigned to a child; unmarked roster members cannot be allocated there. Child-level rates are unavailable because roster snapshots do not retain each worker’s scope path.",
+        child_distribution,
+    )
     leaders_panel = Div()
     if program_type_slug == "tuesday_leaders_meeting":
         raw_rows = await ChurchDataService.list_attendance(request, ctx, resolve_events=False)
@@ -454,6 +498,7 @@ async def _meeting_program_content(request: Request, ctx, *, title: str, program
         )
     return page_stack(
         cards,
+        child_panel,
         leaders_panel,
         section_card(
             "Attendance trend",
@@ -807,7 +852,8 @@ def register_church_data_routes(app) -> None:
                 program_type_slug="tuesday_leaders_meeting", active_key="meetings-tuesday",
             )
 
-        worker_filter = Select(Option("All workers", value="", selected=unit == ""), *[Option(name.title(), value=name, selected=unit == name) for name in UNITS], name="unit", cls="form-select")
+        attendance_units = _attendance_unit_options(await ChurchDataService.list_attendance(request, ctx), unit)
+        worker_filter = Select(Option("All units", value="", selected=unit == ""), *[Option(name, value=name, selected=unit == name) for name in attendance_units], name="unit", cls="form-select")
         status_filter = Select(Option("All statuses", value="", selected=status == ""), *[Option(name.title(), value=name, selected=status == name) for name in ATTENDANCE_STATUSES], name="status", cls="form-select")
         location_filter = Select(Option("All locations", value="", selected=location == ""), *[Option(row.get("location_name") or row.get("label") or "Location", value=row.get("location_name") or row.get("label") or "", selected=location == (row.get("location_name") or row.get("label"))) for row in await _scope_locations(request, ctx)], name="location", cls="form-select")
         event_filter = Select(Option("All services", value="", selected=event_title == ""), *[Option(row["label"], value=row["value"], selected=event_title == row["value"]) for row in await _scope_events(request, ctx)], name="event_title", cls="form-select")
@@ -816,7 +862,14 @@ def register_church_data_routes(app) -> None:
             Button("Filter", type="submit", variant="outline-primary"),
             method="get", action=ctx.url_for("/church-data/meetings"), cls="d-flex flex-wrap gap-2 mb-3",
         )
-        records_panel = section_card("Worker attendance records", "Individual worker records attached to meetings.", record_filters, await _attendance_stats(request, ctx), await _attendance_table(request, ctx, status=status, location=location, unit=unit, event_title=event_title))
+        records_panel = Details(
+            Summary("View individual attendance records", cls="fw-semibold cursor-pointer"),
+            P("Open this section to filter or review individual worker marks.", cls="text-muted small mt-2"),
+            record_filters,
+            await _attendance_stats(request, ctx),
+            await _attendance_table(request, ctx, status=status, location=location, unit=unit, event_title=event_title),
+            cls="section-card p-3 p-md-4",
+        )
 
         content = page_stack(
             Tabs(

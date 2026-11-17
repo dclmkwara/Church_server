@@ -8,7 +8,7 @@ from starlette.requests import Request
 from app.frontend.dclm_admin.app_factory import app
 from app.frontend.dclm_admin.communication.dashboard_service import DashboardService
 from app.frontend.dclm_admin.backend.config import get_backend_config
-from app.frontend.dclm_admin.routes.population_analytics import _report_label
+from app.frontend.dclm_admin.routes.population_analytics import _demographic_list, _report_label
 from app.frontend.dclm_admin.routes.analytics_dashboard import _children_table, _collection_card_values
 
 
@@ -26,6 +26,33 @@ def test_unapproved_report_is_not_presented_as_missing_or_zero():
     assert _report_label({"total": None, "coverage": {"pending": 1}}) == "Pending review · excluded from totals"
     assert _report_label({"total": None, "coverage": {"missing": 1}}) == "Not reported"
     assert _report_label({"total": 0, "coverage": {"approved": 1}}) == "Reported 0"
+
+
+def test_age_gender_comparison_uses_grouped_shares_and_text_values():
+    from fasthtml.common import to_xml
+
+    html = to_xml(_demographic_list({
+        "total": 100,
+        "categories": {
+            "adult_male": 30, "adult_female": 25,
+            "youth_male": 15, "youth_female": 15,
+            "boys": 8, "girls": 7,
+        },
+    }))
+
+    assert "Adults" in html and "Male 30 · Female 25" in html and "55%" in html
+    assert "Youth" in html and "Male 15 · Female 15" in html and "30%" in html
+    assert "Children" in html and "Male 8 · Female 7" in html and "15%" in html
+    assert html.count('role="img"') == 3
+    assert "Male and female attendance counts by age group" in html
+
+
+def test_age_gender_comparison_preserves_unavailable_instead_of_showing_zero():
+    from fasthtml.common import to_xml
+
+    html = to_xml(_demographic_list({"total": None, "categories": {}}))
+    assert html.count("Not available") == 3
+    assert "Male and female counts not available" in html
 
 
 def test_phase_two_direct_child_overview_distinguishes_missing_pending_and_zero():
