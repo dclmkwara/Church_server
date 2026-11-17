@@ -42,6 +42,15 @@ def _parse_request_token(token: str) -> tuple[str, str]:
     return kind, record_id
 
 
+def _ctx_has_permission(ctx, permission: str) -> bool:
+    checker = getattr(ctx, "has_permission", None)
+    return bool(checker(permission)) if callable(checker) else True
+
+
+def _ctx_level(ctx) -> int:
+    return int(getattr(ctx, "level", getattr(getattr(ctx, "profile", None), "level", 9)) or 0)
+
+
 async def _worker_maps(request, ctx) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
     workers = await PeopleService.list_workers(request, ctx)
     users = await PeopleService.list_users(request, ctx)
@@ -190,6 +199,22 @@ def _normalize_removal(row: dict[str, Any], worker: dict[str, Any] | None, ident
 
 class WorkflowService:
     @staticmethod
+    def inbox_kinds(ctx) -> list[str]:
+        """Return only inbox filters whose source APIs are permitted at this level."""
+        kinds = ["all"]
+        level = _ctx_level(ctx)
+        if _ctx_has_permission(ctx, "workers:approve"):
+            if level >= 3:
+                kinds.append("worker_registration")
+            if level >= 2:
+                kinds.append("transfer_request")
+            if level >= 3:
+                kinds.extend(("status_change", "removal_request"))
+        if _ctx_has_permission(ctx, "users:approve"):
+            kinds.append("user_approval")
+        return kinds
+
+    @staticmethod
     async def live_enabled(request) -> bool:
         return bool(AuthService.get_access_token(request))
 
@@ -303,7 +328,9 @@ class WorkflowService:
     @staticmethod
     async def list_inbox(request, ctx, *, kind: str = "all") -> list[dict[str, Any]]:
         if await WorkflowService.use_mock(request):
-            return STORE.list_inbox(ctx.current_scope_path, kind=kind)
+            allowed = set(WorkflowService.inbox_kinds(ctx)[1:])
+            rows = STORE.list_inbox(ctx.current_scope_path, kind=kind)
+            return [row for row in rows if row.get("kind") in allowed]
         scope_path = await PeopleService.effective_scope_path(request, ctx)
 
         async def load_items() -> list[dict[str, Any]]:
@@ -315,23 +342,20 @@ class WorkflowService:
             pending_user_rows: list[dict[str, Any]] = []
 
             loaders: list[tuple[str, Any]] = []
-            if kind in {"all", "transfer_request", "status_change", "removal_request"}:
-                loaders.append(
-                    (
-                        "workflow",
-                        WorkflowService.list_requests(request, ctx, request_type="all", status="all", review_only=True),
-                    )
-                )
-            if kind in {"all", "worker_registration"}:
+            allowed_kinds = set(WorkflowService.inbox_kinds(ctx)[1:])
+            for request_type in ("transfer_request", "status_change", "removal_request"):
+                if request_type in allowed_kinds and kind in {"all", request_type}:
+                    loaders.append((f"workflow:{request_type}", WorkflowService.list_requests(request, ctx, request_type=request_type, status="all", review_only=True)))
+            if "worker_registration" in allowed_kinds and kind in {"all", "worker_registration"}:
                 loaders.append(("workers", client.list_pending_workers(access_token, scope_path=scope_path)))
-            if kind in {"all", "user_approval"}:
+            if "user_approval" in allowed_kinds and kind in {"all", "user_approval"}:
                 loaders.append(("users", client.list_pending_users(access_token)))
 
             if loaders:
                 loaded = await asyncio.gather(*(maybe_await(loader) for _name, loader in loaders))
                 for (name, _loader), rows in zip(loaders, loaded):
-                    if name == "workflow":
-                        request_rows = rows
+                    if name.startswith("workflow:"):
+                        request_rows.extend(rows)
                     elif name == "workers":
                         pending_worker_rows = rows
                     elif name == "users":
@@ -394,32 +418,45 @@ class WorkflowService:
                 )
             return sorted(items, key=lambda row: row["submitted_at"], reverse=True)
 
-        return await request_cached(request, ("workflow", "inbox", scope_path, kind), load_items)
+        return await request_cached(request, ("workflow", "inbox", scope_path, tuple(WorkflowService.inbox_kinds(ctx)), kind), load_items)
 
     @staticmethod
     async def pending_item_count(request, ctx) -> int:
         if await WorkflowService.use_mock(request):
-            return len(STORE.list_inbox(ctx.current_scope_path, kind="all"))
+            allowed = set(WorkflowService.inbox_kinds(ctx)[1:])
+            return sum(1 for row in STORE.list_inbox(ctx.current_scope_path, kind="all") if row.get("kind") in allowed)
 
         scope_path = await PeopleService.effective_scope_path(request, ctx)
 
         async def load_count() -> int:
             client = async_client(get_api_client())
             access_token = AuthService.get_access_token(request)
-            workflow_requests, pending_worker_rows, pending_user_rows = await asyncio.gather(
-                maybe_await(WorkflowService.list_requests(request, ctx, request_type="all", status="all", review_only=True)),
-                maybe_await(client.list_pending_workers(access_token, scope_path=scope_path)),
-                maybe_await(client.list_pending_users(access_token)),
+            allowed_kinds = set(WorkflowService.inbox_kinds(ctx)[1:])
+            loaders = []
+            for request_type in ("transfer_request", "status_change", "removal_request"):
+                if request_type in allowed_kinds:
+                    loaders.append((request_type, WorkflowService.list_requests(request, ctx, request_type=request_type, status="all", review_only=True)))
+            if "worker_registration" in allowed_kinds:
+                loaders.append(("worker_registration", client.list_pending_workers(access_token, scope_path=scope_path)))
+            if "user_approval" in allowed_kinds:
+                loaders.append(("user_approval", client.list_pending_users(access_token)))
+            loaded = await asyncio.gather(*(maybe_await(loader) for _name, loader in loaders)) if loaders else []
+            pending_workflows = sum(
+                1 for (name, _loader), rows in zip(loaders, loaded)
+                if name in {"transfer_request", "status_change", "removal_request"}
+                for row in rows if row["status"] in {"pending", "escalated"}
             )
-            pending_workflows = sum(1 for row in workflow_requests if row["status"] in {"pending", "escalated"})
-            pending_workers = len(pending_worker_rows)
-            pending_users = len(pending_user_rows)
+            pending_workers = sum(len(rows) for (name, _loader), rows in zip(loaders, loaded) if name == "worker_registration")
+            pending_users = sum(len(rows) for (name, _loader), rows in zip(loaders, loaded) if name == "user_approval")
             return pending_workflows + pending_workers + pending_users
 
-        return await request_cached(request, ("workflow", "pending-item-count", scope_path), load_count)
+        return await request_cached(request, ("workflow", "pending-item-count", scope_path, tuple(WorkflowService.inbox_kinds(ctx))), load_count)
 
     @staticmethod
     async def resolve_inbox_item(request, ctx, item_id: str) -> dict[str, Any] | None:
+        visible_rows = await WorkflowService.list_inbox(request, ctx, kind="all")
+        if not any(row.get("item_id") == item_id for row in visible_rows):
+            return None
         if await WorkflowService.use_mock(request):
             return STORE.resolve_inbox_item(item_id)
         kind, record_id = _parse_request_token(item_id)
@@ -448,6 +485,9 @@ class WorkflowService:
 
     @staticmethod
     async def act_inbox_item(request, ctx, item_id: str, action: str, notes: str) -> dict[str, Any] | None:
+        visible_rows = await WorkflowService.list_inbox(request, ctx, kind="all")
+        if not any(row.get("item_id") == item_id for row in visible_rows):
+            raise BackendClientError("This inbox item is unavailable for your role or scope.")
         if not await WorkflowService.live_enabled(request):
             return STORE.act_inbox_item(item_id, action, notes, actor_name=ctx.profile.user_name)
         kind, record_id = _parse_request_token(item_id)

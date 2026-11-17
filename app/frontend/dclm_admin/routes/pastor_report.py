@@ -691,6 +691,8 @@ def _pdf_table(rows: list[list[Any]]) -> Any:
 def register_pastor_report_routes(app) -> None:
     async def load(request: Request, *, period: str = "4w", include_pending: bool = False, campaign_id: str = "", event_mode: str = ""):
         ctx = build_context(request)
+        if not ctx.has_permission("reports:read"):
+            return None, "Your role does not have report read permission."
         try:
             scoped_ctx = active_scope_context(request, ctx)
             with program_page_trace("pastor_report", str(scoped_ctx.current_scope_path or "")):
@@ -708,8 +710,15 @@ def register_pastor_report_routes(app) -> None:
 
     @app.get("/dashboard/pastor-report")
     async def pastor_report_page(request: Request, period: str = "4w", include_pending: bool = False, campaign_id: str = "", event_mode: str = ""):
-        data, error = await load(request, period=period, include_pending=include_pending, campaign_id=campaign_id, event_mode=event_mode)
         ctx = build_context(request)
+        if not ctx.has_permission("reports:read"):
+            content = section_card(
+                "Pastor’s report",
+                "Report access follows your assigned role and jurisdiction.",
+                empty_state("shield-lock", "Access restricted", "Your role does not have reports:read permission."),
+            )
+            return shell_layout(ctx, request_path=request.url.path, active_key="pastor-report", title="Pastor’s report", subtitle="Scoped report access is required.", primary_action=None, content=page_stack(content), show_scope_breadcrumb=False)
+        data, error = await load(request, period=period, include_pending=include_pending, campaign_id=campaign_id, event_mode=event_mode)
         if error:
             content = section_card("Pastor’s report could not load", "The report did not return data.", P(error, cls="text-danger mb-0"))
         else:
@@ -763,6 +772,8 @@ def register_pastor_report_routes(app) -> None:
 
     @app.get("/dashboard/pastor-report/export.xlsx")
     async def pastor_report_xlsx(request: Request, period: str = "4w", include_pending: bool = False, campaign_id: str = "", event_mode: str = ""):
+        if not build_context(request).has_permission("reports:read"):
+            return Response("Your role does not have report read permission.", status_code=403, media_type="text/plain")
         data, error = await load(request, period=period, include_pending=include_pending, campaign_id=campaign_id, event_mode=event_mode)
         if error:
             return Response(error, status_code=502, media_type="text/plain")
@@ -775,6 +786,8 @@ def register_pastor_report_routes(app) -> None:
 
     @app.get("/dashboard/pastor-report/record-print")
     async def pastor_report_record_print(request: Request, period: str = "4w", include_pending: bool = False, campaign_id: str = "", event_mode: str = ""):
+        if not build_context(request).has_permission("reports:read"):
+            return Response("Your role does not have report read permission.", status_code=403, media_type="text/plain")
         data, error = await load(request, period=period, include_pending=include_pending, campaign_id=campaign_id, event_mode=event_mode)
         if error:
             return Response(error, status_code=502, media_type="text/plain")
@@ -786,6 +799,8 @@ def register_pastor_report_routes(app) -> None:
 
     @app.get("/dashboard/pastor-report/export.csv")
     async def pastor_report_csv(request: Request, period: str = "4w", include_pending: bool = False, campaign_id: str = "", event_mode: str = ""):
+        if not build_context(request).has_permission("reports:read"):
+            return Response("Your role does not have report read permission.", status_code=403, media_type="text/plain")
         data, error = await load(request, period=period, include_pending=include_pending, campaign_id=campaign_id, event_mode=event_mode)
         if error:
             return Response(error, status_code=502, media_type="text/plain")
@@ -798,6 +813,8 @@ def register_pastor_report_routes(app) -> None:
 
     @app.get("/dashboard/pastor-report/export.pdf")
     async def pastor_report_pdf(request: Request, period: str = "4w", include_pending: bool = False, campaign_id: str = "", event_mode: str = ""):
+        if not build_context(request).has_permission("reports:read"):
+            return Response("Your role does not have report read permission.", status_code=403, media_type="text/plain")
         data, error = await load(request, period=period, include_pending=include_pending, campaign_id=campaign_id, event_mode=event_mode)
         if error:
             return Response(error, status_code=502, media_type="text/plain")

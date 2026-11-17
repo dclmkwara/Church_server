@@ -8,6 +8,7 @@ from faststrap import Button, PlaceholderCard, Spinner, ToggleGroup
 from ..auth_context import build_context
 from ..backend import BackendClientError
 from ..communication import PeopleService, WorkflowService
+from ..communication.active_scope import scope_link
 from ..components.feedback import simple_toast_response
 from ..components.shell import hidden_context_inputs, primary_button, shell_layout
 from ..components.ui import approval_card, empty_state, page_intro, page_stack, section_card, status_badge
@@ -109,12 +110,44 @@ async def _inbox_loading_results(ctx, kind: str) -> Div:
     )
 
 
+def _contextual_review_links(ctx):
+    """Link to review routes that remain separate from the workflow inbox."""
+    links = []
+    if ctx.has_permission("counts:review"):
+        links.append(("Count submissions", "Review submitted programme counts.", "/church-data/count-review", "Open Count Review"))
+    if ctx.has_permission("offerings:review"):
+        links.append(("Offerings and tithes", "Open the finance page to review entries you are authorized to approve.", "/church-data/finance", "Open Finance"))
+    if any(ctx.has_permission(permission) for permission in ("programs:approve_events", "programs:assign_workers", "programs:approve_assignments")):
+        links.append(("Program schedules and assignments", "Review event schedules and assigned workers using the existing program workflow.", "/church-data/programs", "Open Programs"))
+    if ctx.has_permission("reports:read"):
+        links.append(("Scoped reports", "View reports using the selected jurisdiction and report period.", "/reports", "Open Reports"))
+    if not links:
+        return None
+    cards = [
+        Div(
+            P(title, cls="fw-semibold mb-1"),
+            P(description, cls="small text-muted mb-3"),
+            Button(action, variant="outline-primary", size="md", href=scope_link(ctx, path, scope_path=ctx.current_scope_path)),
+            cls="border rounded-3 p-3 h-100",
+        )
+        for title, description, path, action in links
+    ]
+    return section_card(
+        "Other reviews in your scope",
+        "These tasks use separate review pages and keep their own permission checks.",
+        Div(*cards, cls="d-grid gap-3", style="grid-template-columns:repeat(auto-fit,minmax(min(100%,16rem),1fr))"),
+    )
+
+
 def register_inbox_routes(app) -> None:
     @app.get("/inbox")
     async def inbox(request: Request, kind: str = "all"):
         ctx = build_context(request)
-        results = await _inbox_loading_results(ctx, kind)
-        active_index = next((index for index, row in enumerate(INBOX_FILTERS) if row[0] == kind), 0)
+        available_kinds = set(WorkflowService.inbox_kinds(ctx))
+        selected_kind = kind if kind in available_kinds else "all"
+        results = await _inbox_loading_results(ctx, selected_kind)
+        visible_filters = [row for row in INBOX_FILTERS if row[0] in available_kinds]
+        active_index = next((index for index, row in enumerate(visible_filters) if row[0] == selected_kind), 0)
         filter_buttons = ToggleGroup(
             *[
                 Button(
@@ -126,13 +159,14 @@ def register_inbox_routes(app) -> None:
                     hx_swap="outerHTML",
                     cls="inbox-filter-chip",
                 )
-                for row_key, row_label in INBOX_FILTERS
+                for row_key, row_label in visible_filters
             ],
             active_index=active_index,
             active_cls="active",
             cls="filter-chip-row admin-toggle-group",
         )
         body = page_stack(
+            _contextual_review_links(ctx),
             section_card(
                 "What needs your attention",
                 "Filter by type to prioritise what needs action first.",
@@ -146,7 +180,7 @@ def register_inbox_routes(app) -> None:
             active_key="inbox",
             title="Inbox",
             subtitle="Action-first review space for approvals and requests.",
-            primary_action=primary_button("Review Workers", href=ctx.url_for("/inbox", kind="worker_registration")),
+            primary_action=primary_button("Review Workers", href=ctx.url_for("/inbox", kind="worker_registration")) if "worker_registration" in available_kinds else None,
             content=body,
             show_shell_intro=False,
         )
