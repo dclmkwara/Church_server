@@ -61,19 +61,6 @@ async def worker_meeting_analytics(
     )
     submission_rows = (await db.execute(sub_query)).all()
 
-    expected_ids: set[UUID] = set()
-    for submission, *_ in submission_rows:
-        if submission.expected_worker_ids:
-            for raw_id in submission.expected_worker_ids:
-                try:
-                    expected_ids.add(UUID(str(raw_id)))
-                except (TypeError, ValueError):
-                    continue
-    # The scoped submission is the roster snapshot for this meeting. Rechecking
-    # today's Worker path/location here changes historical denominators after
-    # transfers or hierarchy repairs, and can drop valid IDs from the snapshot.
-    eligible_workers = {str(worker_id) for worker_id in expected_ids}
-
     attendance_type = aliased(ProgramType)
     attendance_event = aliased(ProgramEvent)
     attendance_event_type = aliased(ProgramType)
@@ -113,15 +100,24 @@ async def worker_meeting_analytics(
         meeting = meetings.setdefault(key, {
             "day": day, "type_slug": slug, "type_name": str(type_name or submission.program_type),
             "scope": str(meeting_scope or ""), "expected_ids": set(), "has_roster_ids": False,
-            "legacy_expected": 0, "workers": defaultdict(set),
+            "legacy_expected": 0, "has_legacy_roster": False, "workers": defaultdict(set),
         })
         if submission.expected_worker_ids is not None:
             meeting["has_roster_ids"] = True
             for raw_id in submission.expected_worker_ids or []:
                 worker_key = str(raw_id)
-                if worker_key in eligible_workers:
+                try:
+                    UUID(worker_key)
+                except (TypeError, ValueError):
+                    continue
+                # Each submission captures the eligible active roster for its
+                # own meeting. Do not filter it through a cross-meeting union:
+                # doing so allows a worker present on a different date to
+                # influence this meeting's denominator.
+                if worker_key:
                     meeting["expected_ids"].add(worker_key)
         else:
+            meeting["has_legacy_roster"] = True
             meeting["legacy_expected"] = max(meeting["legacy_expected"], int(submission.expected_workers_count or 0))
 
     for row in attendance_rows:
@@ -131,7 +127,7 @@ async def worker_meeting_analytics(
         meeting = meetings.setdefault(key, {
             "day": day, "type_slug": slug, "type_name": str(row.type_name or slug.replace("_", " ").title()),
             "scope": str(row.meeting_scope or ""), "expected_ids": set(), "has_roster_ids": False,
-            "legacy_expected": 0, "workers": defaultdict(set),
+            "legacy_expected": 0, "has_legacy_roster": False, "workers": defaultdict(set),
         })
         meeting["workers"][str(row.worker_id)].add(str(row.status or "").lower())
 
@@ -143,8 +139,17 @@ async def worker_meeting_analytics(
         ):
             meeting["legacy_expected"] = 0
 
+    # A legacy row can share an occurrence with another usher's full roster
+    # snapshot. The snapshot is the reliable denominator for that occurrence.
+    for meeting in meetings.values():
+        if meeting["has_roster_ids"]:
+            meeting["has_legacy_roster"] = False
+        elif meeting["legacy_expected"] > 0:
+            meeting["has_legacy_roster"] = True
+
     by_type: dict[str, dict[str, Any]] = {}
     by_month: dict[tuple[str, str], dict[str, int]] = {}
+    by_month_legacy: dict[tuple[str, str], bool] = defaultdict(bool)
     for meeting in meetings.values():
         expected = len(meeting["expected_ids"]) if meeting["has_roster_ids"] else meeting["legacy_expected"]
         statuses = meeting["workers"].values()
@@ -163,27 +168,40 @@ async def worker_meeting_analytics(
             "program_type": meeting["type_slug"], "label": meeting["type_name"],
             "present": 0, "late": 0, "absent": 0, "excused": 0, "expected": 0,
             "meetings": 0, "records": 0, "legacy_roster_meetings": 0,
+            "meetings_with_roster_snapshot": 0, "meetings_with_denominator": 0,
         })
         for name, value in (("present", present), ("late", late), ("absent", absent), ("excused", excused), ("expected", expected)):
             type_row[name] += value
         type_row["meetings"] += 1
         type_row["records"] += len(meeting["workers"])
-        type_row["legacy_roster_meetings"] += int(not meeting["has_roster_ids"])
+        type_row["legacy_roster_meetings"] += int(meeting["has_legacy_roster"])
+        type_row["meetings_with_roster_snapshot"] += int(meeting["has_roster_ids"])
+        type_row["meetings_with_denominator"] += int(expected > 0)
         month = meeting["day"][:7]
-        trend = by_month.setdefault((meeting["type_slug"], month), {"present": 0, "late": 0, "absent": 0, "excused": 0, "expected": 0, "meetings": 0})
+        by_month_legacy[(meeting["type_slug"], month)] = by_month_legacy[(meeting["type_slug"], month)] or meeting["has_legacy_roster"]
+        trend = by_month.setdefault((meeting["type_slug"], month), {
+            "present": 0, "late": 0, "absent": 0, "excused": 0, "expected": 0,
+            "meetings": 0, "meetings_with_roster_snapshot": 0, "meetings_with_denominator": 0,
+        })
         for name, value in (("present", present), ("late", late), ("absent", absent), ("excused", excused), ("expected", expected)):
             trend[name] += value
         trend["meetings"] += 1
+        trend["meetings_with_roster_snapshot"] += int(meeting["has_roster_ids"])
+        trend["meetings_with_denominator"] += int(expected > 0)
 
     ranking = []
     for row in by_type.values():
-        row["attendance_rate"] = round((row["present"] + row["late"]) * 100 / row["expected"], 1) if row["expected"] else None
+        row["attendance_rate"] = (
+            round((row["present"] + row["late"]) * 100 / row["expected"], 1)
+            if row["expected"] and not row["legacy_roster_meetings"] else None
+        )
         ranking.append(row)
     ranking.sort(key=lambda row: ((row["present"] + row["late"]), row["meetings"]), reverse=True)
     selected_slug = program_type_slug or (ranking[0]["program_type"] if ranking else "")
     monthly = [
         {"period": month, **values,
-         "attendance_rate": round((values["present"] + values["late"]) * 100 / values["expected"], 1) if values["expected"] else None}
+         "attendance_rate": round((values["present"] + values["late"]) * 100 / values["expected"], 1)
+         if values["expected"] and values["meetings_with_roster_snapshot"] == values["meetings"] else None}
         for (slug, month), values in sorted(by_month.items()) if slug == selected_slug
     ]
     selected = next((row for row in ranking if row["program_type"] == selected_slug), None)

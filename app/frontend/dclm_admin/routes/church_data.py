@@ -405,7 +405,7 @@ async def _meeting_program_content(request: Request, ctx, *, title: str, program
             [
                 ("Present workers", str(item.get("present", 0)), "Distinct workers marked present, counted once per meeting", "person-check"),
                 ("Late workers", str(item.get("late", 0)), "Distinct workers marked late, counted once per meeting", "clock"),
-                ("Attendance rate", f"{item.get('attendance_rate')}%" if item.get("attendance_rate") is not None else "No roster snapshot", "Present and late workers divided by the expected roster IDs for each meeting", "percent"),
+                ("Attendance rate", f"{item.get('attendance_rate')}%" if item.get("attendance_rate") is not None else "Rate unavailable", "Rate is shown only when every meeting in this summary has a captured eligible roster snapshot", "percent"),
                 ("Meetings reported", str(item.get("meetings", 0)), "Distinct meeting occurrences with an attendance submission", "clipboard-data"),
             ],
             grid_id=f"{active_key}-stats", grid_cls="counts-stat-grid",
@@ -415,7 +415,7 @@ async def _meeting_program_content(request: Request, ctx, *, title: str, program
     monthly = metrics.get("monthly_trend") or []
     if monthly:
         trend_rows = [
-            [row["period"], row["present"], row["late"], row["absent"], row["excused"], row["expected"], f"{row['attendance_rate']}%" if row.get("attendance_rate") is not None else "No roster snapshot", row["meetings"]]
+            [row["period"], row["present"], row["late"], row["absent"], row["excused"], row["expected"], f"{row['attendance_rate']}%" if row.get("attendance_rate") is not None else "Rate unavailable", row["meetings"]]
             for row in monthly
         ]
         trend_table = responsive_table(

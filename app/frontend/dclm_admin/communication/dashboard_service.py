@@ -919,7 +919,8 @@ class DashboardService:
         }.get(target, {target})
         matching = [
             row for row in rows
-            if " ".join(str(row.get("program") or "").casefold().replace("_", " ").split()) in aliases
+            if str(row.get("date") or "") == occurrence_date
+            and " ".join(str(row.get("program") or "").casefold().replace("_", " ").split()) in aliases
             and str(row.get("fund_type") or "").casefold() in {"tithe", "offering"}
         ]
         approved = [row for row in matching if str(row.get("status") or "").casefold() == "approved"]

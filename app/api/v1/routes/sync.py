@@ -496,6 +496,7 @@ async def process_attendance_submissions(
                 roster_scope,
                 Worker.is_deleted.is_(False),
                 Worker.approval_status == "approved",
+                Worker.status == "Active",
             ))
             workers = {worker.worker_id: worker for worker in worker_result.scalars().all()}
             missing_ids = set(worker_ids) - set(workers)
@@ -507,6 +508,7 @@ async def process_attendance_submissions(
                 roster_scope,
                 Worker.is_deleted.is_(False),
                 Worker.approval_status == "approved",
+                Worker.status == "Active",
             ).order_by(Worker.worker_id))
             expected_worker_ids = [str(worker_id) for worker_id in roster_result.scalars().all()]
             actual_roster_count = len(expected_worker_ids)

@@ -96,6 +96,48 @@ def test_population_page_drilldown_keeps_program_period_pending_and_scope(monkey
     assert "include_pending=true" in html
     assert "No counted report" not in html
     assert "% of documented population" not in html
+    assert 'action="/church-data/population-attendance"' in html
+
+
+def test_monday_attendance_shows_separate_giving_and_estimate_comparison(monkeypatch):
+    monkeypatch.setenv("DCLM_ADMIN_DATA_MODE", "mock")
+    get_backend_config.cache_clear()
+    monkeypatch.setattr(DashboardService, "scope_path", staticmethod(AsyncMock(return_value="dcl.234.kw")))
+    current = {
+        "occurrence_date": "2026-11-09", "total": 120, "n_counted": 2, "n_expected": 2,
+        "n_received": 2, "expected_population_scope_total": 100,
+        "expected_population_scope_locations": 2,
+        "coverage": {"approved": 2, "pending": 0, "returned": 0, "missing": 0},
+    }
+    monkeypatch.setattr(DashboardService, "standing_program_series", staticmethod(AsyncMock(return_value={
+        "scope": [current] * 4, "children": [],
+        "ancestors": [{"path": "dcl.234.kw", "name": "Kwara State"}], "location_nodes": [],
+    })))
+    monkeypatch.setattr(DashboardService, "program_collection_summary", staticmethod(AsyncMock(return_value={
+        "available": True, "approved_total": 9000, "approved_records": 2,
+        "pending_total": 500, "pending_records": 1,
+    })))
+    route = next(row for row in app.routes if getattr(row, "path", None) == "/church-data/population-attendance/content")
+    response = asyncio.run(route.endpoint(_request(
+        "/church-data/population-attendance/content",
+        "profile=state_overseer&program_key=monday_bible_study&weeks=4&scope_path=dcl.234.kw",
+    )))
+    html = response.body.decode()
+    assert "Compared with estimated population" in html
+    assert "120%" in html
+    assert "guests can make attendance exceed 100%" in html
+    assert "Monday Bible Study giving" in html
+    assert "₦9,000.00" in html
+    assert "Pending ₦500.00" in html
+    assert "/church-data/meetings/workers-saturday?" in html
+    assert "/church-data/meetings/leaders-tuesday?" in html
+
+
+def test_tuesday_leaders_meeting_has_no_offering_field():
+    from app.services.analytics.program_config import STANDING_PROGRAMS
+
+    assert STANDING_PROGRAMS["tuesday_leaders_meeting"].label == "Tuesday Leaders Meeting"
+    assert STANDING_PROGRAMS["tuesday_leaders_meeting"].program_type_slug == "tuesday_leaders_meeting"
 
 
 def test_house_fellowship_page_discloses_unit_and_no_review_status(monkeypatch):

@@ -129,3 +129,46 @@ def test_historical_roster_snapshot_survives_current_worker_path_change():
     assert result["ranking"][0]["expected"] == 3
     assert result["ranking"][0]["attendance_rate"] == 33.3
     assert len(db.statements) == 2
+
+
+def test_each_meeting_uses_its_own_roster_snapshot():
+    first = _submission([str(WORKERS[0])], count=1)
+    second = _submission([str(WORKERS[1])], count=1)
+    second.date = datetime(2026, 11, 14, tzinfo=timezone.utc)
+    submissions = [
+        (first, "saturday_workers_meeting", "Saturday Workers Meeting", 1, first.path),
+        (second, "saturday_workers_meeting", "Saturday Workers Meeting", 1, second.path),
+    ]
+    present = [_attendance(WORKERS[0], "present")]
+    present[0].date = first.date
+    result = asyncio.run(worker_meeting_analytics(_Db([_Result(rows=submissions), _Result(rows=present)]), "org.234.KW"))
+    meeting = result["ranking"][0]
+    assert meeting["expected"] == 2
+    assert meeting["present"] == 1
+    assert meeting["attendance_rate"] == 50.0
+
+
+def test_legacy_roster_records_make_rate_unavailable():
+    legacy = _submission(None, count=20)
+    db = _Db([_Result(rows=[(legacy, "saturday_workers_meeting", "Saturday Workers Meeting", 1, legacy.path)]), _Result(rows=[_attendance(WORKERS[0], "present")])])
+    result = asyncio.run(worker_meeting_analytics(db, "org.234.KW"))
+    meeting = result["ranking"][0]
+    assert meeting["expected"] == 20
+    assert meeting["attendance_rate"] is None
+    assert result["monthly_trend"][0]["attendance_rate"] is None
+
+
+def test_snapshot_meeting_rate_remains_available_when_other_meeting_is_legacy():
+    snapshot = _submission([str(worker) for worker in WORKERS])
+    legacy = _submission(None, count=20)
+    legacy.date = datetime(2026, 11, 14, tzinfo=timezone.utc)
+    submissions = [
+        (snapshot, "saturday_workers_meeting", "Saturday Workers Meeting", 1, snapshot.path),
+        (legacy, "saturday_workers_meeting", "Saturday Workers Meeting", 1, legacy.path),
+    ]
+    attendance = [_attendance(WORKERS[0], "present")]
+    attendance[0].date = snapshot.date
+    result = asyncio.run(worker_meeting_analytics(_Db([_Result(rows=submissions), _Result(rows=attendance)]), "org.234.KW"))
+    assert result["ranking"][0]["attendance_rate"] is None
+    monthly = {row["period"]: row for row in result["monthly_trend"]}
+    assert monthly["2026-11"]["attendance_rate"] is None
