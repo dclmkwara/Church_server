@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import literal_column
 from app.api import deps
 from app.core import analytics_cache
 from app.db.filters import ltree_subpath as _ltree_subpath
@@ -63,7 +64,7 @@ async def get_offerings_by_program(
     end_at = datetime.combine(end_date + timedelta(days=1), time.min, ZoneInfo("Africa/Lagos"))
     program_label = func.coalesce(Offering.program_type, ProgramType.name, ProgramEvent.title, "Unclassified")
     stmt = select(
-        func.date(Offering.date).label("date"), program_label.label("program"),
+        func.date(func.timezone(literal_column("'Africa/Lagos'"), Offering.date)).label("date"), program_label.label("program"),
         Offering.fund_type, Offering.status, func.sum(Offering.amount).label("amount"),
         func.count(Offering.id).label("records"),
     ).select_from(Offering).outerjoin(ProgramEvent, ProgramEvent.id == Offering.event_id).outerjoin(
@@ -71,8 +72,8 @@ async def get_offerings_by_program(
     ).where(
         _scope_filter(Offering.path, scope), Offering.is_deleted.is_(False),
         Offering.date >= start_at, Offering.date < end_at,
-    ).group_by(func.date(Offering.date), program_label, Offering.fund_type, Offering.status).order_by(
-        func.date(Offering.date), program_label, Offering.fund_type, Offering.status,
+    ).group_by(func.date(func.timezone(literal_column("'Africa/Lagos'"), Offering.date)), program_label, Offering.fund_type, Offering.status).order_by(
+        func.date(func.timezone(literal_column("'Africa/Lagos'"), Offering.date)), program_label, Offering.fund_type, Offering.status,
     )
     result = await db.execute(stmt)
     return [

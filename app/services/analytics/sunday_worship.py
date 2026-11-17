@@ -99,13 +99,24 @@ def _report_review_state(rows: Iterable[Any]) -> str | None:
 def _count_values(rows: Iterable[Any]) -> dict[str, int]:
     """Sum the existing count fields without converting an absent report to zero."""
     rows = list(rows)
-    modes = {str(getattr(row, "count_mode", "") or "").lower() for row in rows if getattr(row, "count_mode", None)}
-    single_count = sum(1 for row in rows if str(getattr(row, "count_mode", "") or "").lower() == "single")
-    if modes and (len(modes) > 1 or ("single" in modes and single_count != 1)):
-        rows = []
-    elif modes and len({str(getattr(row, "status", "pending") or "pending").lower() for row in rows}) > 1:
-        rows = []
-    rows = [row for row in rows if not is_rejected_status(getattr(row, "status", "pending") or "pending")]
+    # Validate one submission group at a time. A jurisdiction rollup contains
+    # many independent ``single`` reports; treating them as one group makes a
+    # valid state or region total look like a duplicate single-count conflict.
+    grouped: dict[str, list[Any]] = defaultdict(list)
+    for row in rows:
+        group_id = getattr(row, "count_group_id", None)
+        grouped[str(group_id) if group_id else "legacy"].append(row)
+    valid_rows: list[Any] = []
+    for group_rows in grouped.values():
+        modes = {str(getattr(row, "count_mode", "") or "").lower() for row in group_rows if getattr(row, "count_mode", None)}
+        single_count = sum(1 for row in group_rows if str(getattr(row, "count_mode", "") or "").lower() == "single")
+        states = {str(getattr(row, "status", "pending") or "pending").lower() for row in group_rows}
+        if modes and (len(modes) > 1 or ("single" in modes and single_count != 1)):
+            continue
+        if modes and len(states) > 1:
+            continue
+        valid_rows.extend(row for row in group_rows if not is_rejected_status(getattr(row, "status", "pending") or "pending"))
+    rows = valid_rows
     return {key: sum(int(getattr(row, key, 0) or 0) for row in rows) for key in (*_CATEGORIES, "total")}
 
 

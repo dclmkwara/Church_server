@@ -506,7 +506,9 @@ async def create_event_assignment(event_id: UUID, assignment_in: EventAssignment
     deps.ensure_path_in_scope(current_user, worker.path, detail='Worker outside your scope')
     if not deps.path_in_scope(event.path, worker.path):
         raise HTTPException(status_code=403, detail='Worker is outside the event reporting scope')
-    if event.reporting_scope in {'group', 'region', 'state'} and assignment_in.source_role == 'alpha':
+    if event.event_mode != 'crusade':
+        # Retreats can be hosted at a Group or Region; assignments still use
+        # the worker's regular home-location reporting source.
         assignment_in = assignment_in.model_copy(update={'source_role': 'regular'})
     return await event_assignment.create_for_event(db, event=event, obj_in=assignment_in, assigned_by_id=current_user.user_id)
 

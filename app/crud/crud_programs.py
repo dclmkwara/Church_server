@@ -179,19 +179,20 @@ class CRUDEventAssignment(CRUDBase[EventAssignment, EventAssignmentCreate, Event
             raise HTTPException(status_code=400, detail="Invalid assignment status")
     async def create_for_event(self, db: AsyncSession, *, event: ProgramEvent, obj_in: EventAssignmentCreate, assigned_by_id: UUID) -> EventAssignment:
         self._validate(assignment_type=obj_in.assignment_type, source_role=obj_in.source_role, status=None)
-        if event.reporting_scope in {"group", "region", "state"} and obj_in.source_role != "regular":
-            raise HTTPException(status_code=400, detail="Combined-meeting assignments must use the regular reporting source")
+        if event.event_mode == "crusade":
+            if obj_in.source_role not in {"alpha", "satellite"}:
+                raise HTTPException(status_code=400, detail="Crusade assignments must identify the Alpha or satellite source")
+        elif obj_in.source_role != "regular":
+            raise HTTPException(status_code=400, detail="Non-crusade assignments must use the regular reporting source")
         worker = await get_worker_by_public_id(db, obj_in.worker_id)
         if not worker or worker.is_deleted:
             raise HTTPException(status_code=404, detail="Worker not found")
         if worker.approval_status != "approved":
             raise HTTPException(status_code=400, detail="Only an approved worker may receive an event assignment")
-        if obj_in.source_role == "alpha" and not event.alpha_location_id:
+        if obj_in.source_role == "alpha" and (event.event_mode != "crusade" or not event.alpha_location_id):
             raise HTTPException(status_code=400, detail="Alpha assignment requires an event host location")
         if obj_in.source_role == "satellite" and event.event_mode != "crusade":
             raise HTTPException(status_code=400, detail="Satellite assignments are only valid for crusade events")
-        if obj_in.source_role == "regular" and event.event_mode in {"crusade", "retreat"}:
-            raise HTTPException(status_code=400, detail="Crusade and retreat assignments must identify alpha or satellite source")
         existing = await db.execute(select(EventAssignment).where(EventAssignment.event_id == event.id, EventAssignment.worker_id == obj_in.worker_id))
         if existing.scalars().first():
             raise HTTPException(status_code=400, detail="Worker already assigned to this event")

@@ -131,11 +131,16 @@ class CRUDApprovals:
         now = datetime.now(timezone.utc)
         reviews = list(req.reviews or [])
         stage = req.workflow_stage or ("region" if req.status == "pending_region" else "origin_group")
-        destination = (await db.execute(select(Location).where(Location.location_id == req.to_location_id))).scalars().first()
-        origin = (await db.execute(select(Location).where(Location.location_id == req.from_location_id))).scalars().first()
-        if not destination or not origin:
+        # Resolve only the location required for this review stage. A receiving
+        # location pastor is intentionally scoped to the destination hierarchy
+        # and must not need read access to the source location to accept a move.
+        target_location_id = req.from_location_id if stage == "origin_group" else req.to_location_id
+        target_location = (await db.execute(
+            select(Location).where(Location.location_id == target_location_id)
+        )).scalars().first()
+        if not target_location:
             raise HTTPException(status_code=409, detail="Transfer locations are no longer available")
-        target_path = origin.path if stage == "origin_group" else destination.path
+        target_path = target_location.path
         if approver_path and not (str(target_path) == str(approver_path) or str(target_path).startswith(str(approver_path).rstrip(".") + ".")):
             raise HTTPException(status_code=403, detail="Reviewer is outside the location hierarchy required for this stage")
         if stage == "origin_group":
@@ -197,7 +202,7 @@ class CRUDApprovals:
             .join(Group, Group.group_id == Location.group_id)
             .join(Region, Region.region_id == Group.region_id)
             .join(State, State.state_id == Region.state_id)
-            .where(Location.location_id == req.to_location_id, Location.is_deleted.is_(False))
+            .where(Location.location_id == req.to_location_id)
         )).first()
         if not row:
             raise HTTPException(status_code=404, detail="Destination location not found")

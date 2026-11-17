@@ -95,12 +95,14 @@ class ProgramEvent(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
         return f"<ProgramEvent(date='{self.date}', type_id={self.program_type_id}, mode='{self.event_mode}')>"
 
 
-class EventAssignment(Base, TimestampMixin, SoftDeleteMixin, LTreePathMixin):
+class EventAssignment(Base, TimestampMixin, SoftDeleteMixin):
     __tablename__ = "event_assignments"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     event_id = Column(UUID(as_uuid=True), ForeignKey("program_events.id"), nullable=False, index=True)
     worker_id = Column(UUID(as_uuid=True), ForeignKey("workers.worker_id"), nullable=False, index=True)
-    path = Column(LtreeType, nullable=False, index=True)
+    # The existing event_assignments.path column is varchar (not ltree). Scope
+    # filtering explicitly casts it to ltree through app.db.filters.
+    path = Column(String, nullable=False, index=True)
     assignment_label = Column(String, nullable=True, index=True)
     assignment_type = Column(String, nullable=False, default="both", server_default="both", index=True)
     source_role = Column(String, nullable=False, default="alpha", server_default="alpha", index=True)
