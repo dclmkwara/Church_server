@@ -469,6 +469,14 @@ async def _render_event_matrix_page(request: Request, ctx, *, mode: str, campaig
 
 
 async def _event_matrix_page(request: Request, ctx, *, mode: str, campaign_id: str = "", event_id: str = "", metric: str = "attendance", include_pending: bool = False):
+    if not ctx.has_permission("statistics:read"):
+        title = "Retreat" if mode == "retreat" else "Crusade"
+        return shell_layout(
+            ctx, request_path=request.url.path, active_key=mode, title=title,
+            subtitle="Analytics access is restricted.", primary_action=None,
+            content=empty_state("shield-lock", "Analytics access required", "Your role does not have statistics:read permission."),
+            show_shell_intro=False, show_scope_breadcrumb=False,
+        )
     with program_page_trace(mode, str(getattr(ctx, "current_scope_path", "") or "")):
         return await _render_event_matrix_page(
             request, ctx, mode=mode, campaign_id=campaign_id, event_id=event_id,

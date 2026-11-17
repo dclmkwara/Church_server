@@ -435,6 +435,8 @@ def register_population_analytics_routes(app) -> None:
     @app.get("/church-data/population-attendance")
     async def population_attendance_page(request: Request, program_key: str = "sunday_worship_service", weeks: int = 4, include_pending: bool = False):
         ctx = active_scope_context(request, build_context(request))
+        if not ctx.has_permission("statistics:read"):
+            return shell_layout(ctx, request_path=request.url.path, active_key="church", title="Program Attendance", subtitle="Analytics access is restricted.", primary_action=None, content=empty_state("shield-lock", "Analytics access required", "Your role does not have statistics:read permission."), show_shell_intro=False)
         if program_key not in PROGRAM_KEYS:
             program_key = "sunday_worship_service"
         weeks = 8 if weeks == 8 else 4
@@ -446,6 +448,8 @@ def register_population_analytics_routes(app) -> None:
     @app.get("/church-data/population-attendance/content")
     async def population_attendance_content(request: Request, program_key: str = "sunday_worship_service", weeks: int = 4, include_pending: bool = False, scope_path: str = ""):
         ctx = active_scope_context(request, build_context(request))
+        if not ctx.has_permission("statistics:read"):
+            return Div(empty_state("shield-lock", "Analytics access required", "Your role does not have statistics:read permission."), id="population-analytics-content")
         if program_key not in PROGRAM_KEYS:
             return Div(P("Choose a supported standing program.", cls="text-danger"), id="population-analytics-content")
         weeks = 8 if weeks == 8 else 4
